@@ -4,7 +4,7 @@ name: song_metadata_and_extra_config
 title: Song name, artist, and free-form extra_config validation
 status: pending
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T04:19:17.000Z
+updated_at: 2026-09-21T08:33:47.000Z
 ---
 
 ## Description

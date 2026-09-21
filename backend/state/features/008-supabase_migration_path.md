@@ -4,7 +4,7 @@ name: supabase_migration_path
 title: Swap local Postgres + LocalFsStorageAdapter for Supabase
 status: pending
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T04:19:18.000Z
+updated_at: 2026-09-21T08:33:47.000Z
 ---
 
 ## Description
