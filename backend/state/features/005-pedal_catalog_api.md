@@ -2,9 +2,9 @@
 feature_number: 5
 name: pedal_catalog_api
 title: GET/POST /pedals — shared reference catalog
-status: pending
+status: done
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T08:33:47.000Z
+updated_at: 2026-09-21T17:51:36.000Z
 ---
 
 ## Description

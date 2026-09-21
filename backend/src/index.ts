@@ -5,6 +5,8 @@ import { protectedRouter } from "./middleware/protected-router";
 import { register, login, getMe, AuthError } from "./auth/user-service";
 import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
 import { parseCreateSongMultipart } from "./songs/parse-multipart";
+import { createPedal, listPedals, PedalError } from "./pedals/pedal-service";
+import { parseCreatePedalMultipart } from "./pedals/parse-multipart";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -110,6 +112,24 @@ protectedRouter.get("/songs/:id/files/:kind", async (c) => {
     if (err instanceof SongError) return c.json({ error: err.message }, err.status);
     throw err;
   }
+});
+
+protectedRouter.post("/pedals", async (c) => {
+  const body = await c.req.parseBody({ all: true });
+  const input = await parseCreatePedalMultipart(
+    body as Record<string, string | File | (string | File)[] | undefined>,
+  );
+  try {
+    const pedal = await createPedal(c.get("userId"), input);
+    return c.json(pedal, 201);
+  } catch (err) {
+    if (err instanceof PedalError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.get("/pedals", async (c) => {
+  return c.json(await listPedals());
 });
 
 app.route("/", protectedRouter);

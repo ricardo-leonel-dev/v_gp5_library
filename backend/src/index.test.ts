@@ -73,3 +73,95 @@ describe("GET /songs/:id/files/:kind auth (R10)", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("/pedals auth (R5)", () => {
+  test("POST /pedals without bearer -> 401", async () => {
+    const fd = new FormData();
+    fd.append("name", "x");
+    fd.append("image", new File([new Uint8Array([1])], "p.png"));
+    const res = await app.request("/pedals", { method: "POST", body: fd });
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /pedals without bearer -> 401", async () => {
+    const res = await app.request("/pedals");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /pedals end-to-end via app.request (R1)", () => {
+  test("multipart FormData with name + image returns 201 with pedal shape (no reference_image_key)", async () => {
+    const db = getDb();
+    const email = `pedal-e2e-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const fd = new FormData();
+    fd.append("name", "Boss DS-1");
+    fd.append(
+      "image",
+      new File([new Uint8Array([10, 20, 30, 40])], "ds1.png", { type: "image/png" }),
+    );
+
+    const res = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      id: string;
+      name: string;
+      createdBy: string;
+      createdAt: string;
+      updatedAt: string;
+    };
+    expect(body.name).toBe("Boss DS-1");
+    expect(body.createdBy).toBe(user.id);
+    expect(body.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(typeof body.createdAt).toBe("string");
+    expect(typeof body.updatedAt).toBe("string");
+    expect(body).not.toHaveProperty("reference_image_key");
+  });
+});
+
+describe("GET /pedals shared catalog across users (R6)", () => {
+  test("POST as user A, then GET as user B returns A's pedal in the list", async () => {
+    const db = getDb();
+    const emailA = `pedal-shared-A-${crypto.randomUUID()}@example.com`;
+    const emailB = `pedal-shared-B-${crypto.randomUUID()}@example.com`;
+    const [userA] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${emailA}, 'x') RETURNING id
+    `;
+    const [userB] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${emailB}, 'x') RETURNING id
+    `;
+    const tokenA = await issueToken(userA.id, "free");
+    const tokenB = await issueToken(userB.id, "free");
+
+    const fd = new FormData();
+    fd.append("name", "Shared Pedal");
+    fd.append("image", new File([new Uint8Array([5, 5, 5])], "shared.png", { type: "image/png" }));
+    const createRes = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenA}` },
+      body: fd,
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string; createdBy: string };
+    expect(created.createdBy).toBe(userA.id);
+
+    const listRes = await app.request("/pedals", {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as Array<{ id: string; createdBy: string }>;
+    expect(listed.map((p) => p.id)).toContain(created.id);
+    const found = listed.find((p) => p.id === created.id);
+    expect(found).toBeDefined();
+    expect(found!.createdBy).toBe(userA.id);
+  });
+});
