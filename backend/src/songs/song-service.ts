@@ -57,6 +57,19 @@ export function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
 
+const SONG_FILE_KINDS = ["preset", "ir", "nam", "cover"] as const;
+type SongFileKind = (typeof SONG_FILE_KINDS)[number];
+
+function isSongFileKind(value: string): value is SongFileKind {
+  return (SONG_FILE_KINDS as readonly string[]).includes(value);
+}
+
+export interface SongFileContentDto {
+  bytes: Uint8Array;
+  mimeType: string;
+  originalFilename: string;
+}
+
 function parseExtraConfig(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     return raw as Record<string, unknown>;
@@ -296,4 +309,44 @@ export async function deleteSong(userId: string, songId: string): Promise<void> 
     await tx`UPDATE song_files SET deleted_at = NOW() WHERE song_id = ${songId} AND deleted_at IS NULL`;
     await tx`UPDATE songs SET deleted_at = NOW() WHERE id = ${songId}`;
   });
+}
+
+export async function getSongFile(
+  userId: string,
+  songId: string,
+  kind: string,
+  sortOrderParam: string | undefined,
+  storage: StorageAdapter = getStorage(),
+): Promise<SongFileContentDto> {
+  if (!isUuid(songId)) throw new SongError("song not found", 404);
+  if (!isSongFileKind(kind)) throw new SongError("song file not found", 404);
+
+  let sortOrder = 0;
+  if (sortOrderParam !== undefined) {
+    if (!/^\d+$/.test(sortOrderParam)) throw new SongError("song file not found", 404);
+    sortOrder = Number(sortOrderParam);
+  }
+
+  const db: SQL = getDb();
+  const [row] = await db<
+    { storage_key: string; mime_type: string; original_filename: string }[]
+  >`
+    SELECT sf.storage_key, sf.mime_type, sf.original_filename
+    FROM song_files sf
+    JOIN songs s ON s.id = sf.song_id
+    WHERE s.id = ${songId}
+      AND s.user_id = ${userId}
+      AND s.deleted_at IS NULL
+      AND sf.kind = ${kind}
+      AND sf.sort_order = ${sortOrder}
+      AND sf.deleted_at IS NULL
+  `;
+  if (!row) throw new SongError("song file not found", 404);
+
+  const bytes = await storage.get(row.storage_key);
+  if (bytes === null) {
+    throw new Error(`song_files row ${row.storage_key} has no bytes in storage`);
+  }
+
+  return { bytes, mimeType: row.mime_type, originalFilename: row.original_filename };
 }

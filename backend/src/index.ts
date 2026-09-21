@@ -3,7 +3,7 @@ import { getDb } from "./db/client";
 import { type AuthVariables } from "./middleware/require-auth";
 import { protectedRouter } from "./middleware/protected-router";
 import { register, login, getMe, AuthError } from "./auth/user-service";
-import { createSong, listSongs, getSongById, deleteSong, SongError } from "./songs/song-service";
+import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
 import { parseCreateSongMultipart } from "./songs/parse-multipart";
 
 const app = new Hono<{ Variables: AuthVariables }>();
@@ -88,6 +88,24 @@ protectedRouter.delete("/songs/:id", async (c) => {
   try {
     await deleteSong(c.get("userId"), c.req.param("id"));
     return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.get("/songs/:id/files/:kind", async (c) => {
+  try {
+    const file = await getSongFile(
+      c.get("userId"),
+      c.req.param("id"),
+      c.req.param("kind"),
+      c.req.query("sort_order"),
+    );
+    return c.body(new Uint8Array(file.bytes), 200, {
+      "Content-Type": file.mimeType,
+      "Content-Disposition": `attachment; filename="${file.originalFilename}"`,
+    });
   } catch (err) {
     if (err instanceof SongError) return c.json({ error: err.message }, err.status);
     throw err;
