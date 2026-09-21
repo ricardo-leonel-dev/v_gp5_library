@@ -1,0 +1,24 @@
+{
+  "auth": {
+    "login_title": "Iniciar sesión",
+    "register_title": "Crear cuenta",
+    "email": "Correo",
+    "password": "Contraseña",
+    "login_submit": "Entrar",
+    "register_submit": "Crear cuenta",
+    "no_account": "¿No tienes cuenta?",
+    "have_account": "¿Ya tienes cuenta?",
+    "register_link": "Regístrate",
+    "login_link": "Inicia sesión",
+    "login_error": "Correo o contraseña incorrectos",
+    "register_error": "No se pudo crear la cuenta"
+  },
+  "songs": {
+    "title": "Mis canciones",
+    "placeholder": "Aquí vivirá tu librería de presets guardados."
+  },
+  "shared": {
+    "dark_mode": "Oscuro",
+    "light_mode": "Claro"
+  }
+}

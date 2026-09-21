@@ -1,0 +1,8 @@
+<button
+  *transloco="let t"
+  type="button"
+  (click)="darkMode.toggle()"
+  class="rounded-md border border-slate-300 px-2 py-1 text-sm dark:border-slate-600 dark:text-slate-100"
+>
+  {{ darkMode.isDark() ? t('shared.light_mode') : t('shared.dark_mode') }}
+</button>

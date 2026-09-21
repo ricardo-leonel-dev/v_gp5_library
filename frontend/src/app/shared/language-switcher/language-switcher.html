@@ -1,0 +1,8 @@
+<select
+  [value]="transloco.getActiveLang()"
+  (change)="setLang($any($event.target).value)"
+  class="rounded-md border border-slate-300 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+>
+  <option value="es">ES</option>
+  <option value="en">EN</option>
+</select>

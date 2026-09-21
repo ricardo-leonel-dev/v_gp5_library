@@ -1,0 +1,24 @@
+{
+  "auth": {
+    "login_title": "Log in",
+    "register_title": "Create account",
+    "email": "Email",
+    "password": "Password",
+    "login_submit": "Log in",
+    "register_submit": "Create account",
+    "no_account": "No account yet?",
+    "have_account": "Already have an account?",
+    "register_link": "Sign up",
+    "login_link": "Log in",
+    "login_error": "Invalid email or password",
+    "register_error": "Could not create the account"
+  },
+  "songs": {
+    "title": "My songs",
+    "placeholder": "Your saved preset library will live here."
+  },
+  "shared": {
+    "dark_mode": "Dark",
+    "light_mode": "Light"
+  }
+}

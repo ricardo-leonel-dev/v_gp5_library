@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* Tailwind v4 dark mode via an explicit .dark class on <html>, toggled by
+   the dark-mode-toggle component — see src/app/shared/dark-mode.service.ts */
+@custom-variant dark (&:where(.dark, .dark *));

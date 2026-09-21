@@ -1,0 +1,48 @@
+<div *transloco="let t" class="flex min-h-screen items-center justify-center bg-slate-50 px-4 dark:bg-slate-900">
+  <form
+    (ngSubmit)="submit()"
+    class="w-full max-w-sm space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800"
+  >
+    <h1 class="text-xl font-semibold text-slate-900 dark:text-slate-100">{{ t('auth.register_title') }}</h1>
+
+    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+      {{ t('auth.email') }}
+      <input
+        type="email"
+        required
+        [ngModel]="email()"
+        (ngModelChange)="email.set($event)"
+        name="email"
+        class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+      />
+    </label>
+
+    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+      {{ t('auth.password') }}
+      <input
+        type="password"
+        required
+        [ngModel]="password()"
+        (ngModelChange)="password.set($event)"
+        name="password"
+        class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+      />
+    </label>
+
+    @if (error()) {
+      <p class="text-sm text-red-600 dark:text-red-400">{{ t('auth.' + error()) }}</p>
+    }
+
+    <button
+      type="submit"
+      [disabled]="submitting()"
+      class="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+    >
+      {{ t('auth.register_submit') }}
+    </button>
+
+    <p class="text-center text-sm text-slate-600 dark:text-slate-400">
+      {{ t('auth.have_account') }} <a routerLink="/login" class="text-indigo-600 dark:text-indigo-400">{{ t('auth.login_link') }}</a>
+    </p>
+  </form>
+</div>
