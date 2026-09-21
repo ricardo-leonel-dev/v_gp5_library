@@ -2,9 +2,9 @@
 feature_number: 6
 name: song_pedal_configs_api
 title: POST/GET/DELETE /songs/:id/pedals — private per user+song
-status: pending
+status: done
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T08:33:47.000Z
+updated_at: 2026-09-21T20:51:24.000Z
 ---
 
 ## Description

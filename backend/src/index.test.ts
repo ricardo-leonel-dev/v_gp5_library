@@ -165,3 +165,194 @@ describe("GET /pedals shared catalog across users (R6)", () => {
     expect(found!.createdBy).toBe(userA.id);
   });
 });
+
+describe("/songs/:id/pedals auth (R9)", () => {
+  test("POST without bearer -> 401", async () => {
+    const res = await app.request(`/songs/${crypto.randomUUID()}/pedals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pedal_catalog_id: crypto.randomUUID(), label: "x" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("GET without bearer -> 401", async () => {
+    const res = await app.request(`/songs/${crypto.randomUUID()}/pedals`);
+    expect(res.status).toBe(401);
+  });
+
+  test("DELETE without bearer -> 401", async () => {
+    const res = await app.request(
+      `/songs/${crypto.randomUUID()}/pedals/${crypto.randomUUID()}`,
+      { method: "DELETE" },
+    );
+    expect(res.status).toBe(401);
+  });
+});
+
+async function seedSongAndPedal(userId: string): Promise<{ songId: string; pedalId: string }> {
+  const db = getDb();
+  const [song] = await db<{ id: string }[]>`
+    INSERT INTO songs (user_id, name) VALUES (${userId}, 'E2E Song') RETURNING id
+  `;
+  const [pedal] = await db<{ id: string }[]>`
+    INSERT INTO pedal_catalog (name, reference_image_key) VALUES ('E2E Pedal', NULL) RETURNING id
+  `;
+  return { songId: song.id, pedalId: pedal.id };
+}
+
+describe("POST /songs/:id/pedals end-to-end via app.request (R1)", () => {
+  test("JSON body with label + pedal_catalog_id + config returns 201 with expected shape", async () => {
+    const db = getDb();
+    const email = `spc-e2e-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+    const { songId, pedalId } = await seedSongAndPedal(user.id);
+
+    const res = await app.request(`/songs/${songId}/pedals`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        pedal_catalog_id: pedalId,
+        label: "Lead Crunch",
+        config: { gain: 6, tone: "warm" },
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      id: string;
+      songId: string;
+      pedalCatalogId: string;
+      label: string;
+      config: Record<string, unknown>;
+      createdAt: string;
+      updatedAt: string;
+    };
+    expect(body.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(body.songId).toBe(songId);
+    expect(body.pedalCatalogId).toBe(pedalId);
+    expect(body.label).toBe("Lead Crunch");
+    expect(body.config).toEqual({ gain: 6, tone: "warm" });
+    expect(typeof body.createdAt).toBe("string");
+    expect(typeof body.updatedAt).toBe("string");
+  });
+});
+
+describe("POST /songs/:id/pedals as foreign user -> 404 (R3)", () => {
+  test("user B posting to user A's song returns 404", async () => {
+    const db = getDb();
+    const emailA = `spc-iso-A-${crypto.randomUUID()}@example.com`;
+    const emailB = `spc-iso-B-${crypto.randomUUID()}@example.com`;
+    const [userA] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${emailA}, 'x') RETURNING id
+    `;
+    const [userB] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${emailB}, 'x') RETURNING id
+    `;
+    const tokenB = await issueToken(userB.id, "free");
+    const { songId: songA, pedalId } = await seedSongAndPedal(userA.id);
+
+    const res = await app.request(`/songs/${songA}/pedals`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pedal_catalog_id: pedalId, label: "sneak" }),
+    });
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /songs/:id/pedals per-user isolation (R10)", () => {
+  test("user A and user B each creating a row on their own song referencing the same pedal_catalog_id: A's GET only contains A's row", async () => {
+    const db = getDb();
+    const emailA = `spc-cross-A-${crypto.randomUUID()}@example.com`;
+    const emailB = `spc-cross-B-${crypto.randomUUID()}@example.com`;
+    const [userA] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${emailA}, 'x') RETURNING id
+    `;
+    const [userB] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${emailB}, 'x') RETURNING id
+    `;
+    const tokenA = await issueToken(userA.id, "free");
+
+    const { songId: songA, pedalId } = await seedSongAndPedal(userA.id);
+    const { songId: songB } = await seedSongAndPedal(userB.id);
+
+    const createA = await app.request(`/songs/${songA}/pedals`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pedal_catalog_id: pedalId, label: "A's config" }),
+    });
+    expect(createA.status).toBe(201);
+    const aConfigId = ((await createA.json()) as { id: string }).id;
+
+    const [bConfig] = await db<{ id: string }[]>`
+      INSERT INTO song_pedal_configs (song_id, user_id, pedal_catalog_id, label)
+      VALUES (${songB}, ${userB.id}, ${pedalId}, 'B config (same shared pedal)')
+      RETURNING id
+    `;
+
+    const listRes = await app.request(`/songs/${songA}/pedals`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as Array<{ id: string; label: string }>;
+    const ids = listed.map((c) => c.id);
+    expect(ids).toContain(aConfigId);
+    expect(ids).not.toContain(bConfig.id);
+    expect(listed.every((c) => c.label.startsWith("A"))).toBe(true);
+  });
+});
+
+describe("POST then DELETE then GET round trip (R12)", () => {
+  test("after DELETE the config no longer appears in GET /songs/:id/pedals", async () => {
+    const db = getDb();
+    const email = `spc-del-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+    const { songId, pedalId } = await seedSongAndPedal(user.id);
+
+    const createRes = await app.request(`/songs/${songId}/pedals`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pedal_catalog_id: pedalId, label: "Delete me" }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string };
+
+    const listBefore = await app.request(`/songs/${songId}/pedals`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const idsBefore = ((await listBefore.json()) as Array<{ id: string }>).map((c) => c.id);
+    expect(idsBefore).toContain(created.id);
+
+    const delRes = await app.request(`/songs/${songId}/pedals/${created.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(delRes.status).toBe(204);
+
+    const listAfter = await app.request(`/songs/${songId}/pedals`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const idsAfter = ((await listAfter.json()) as Array<{ id: string }>).map((c) => c.id);
+    expect(idsAfter).not.toContain(created.id);
+  });
+});

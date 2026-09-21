@@ -7,6 +7,12 @@ import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError 
 import { parseCreateSongMultipart } from "./songs/parse-multipart";
 import { createPedal, listPedals, PedalError } from "./pedals/pedal-service";
 import { parseCreatePedalMultipart } from "./pedals/parse-multipart";
+import {
+  createSongPedalConfig,
+  listSongPedalConfigs,
+  deleteSongPedalConfig,
+  SongPedalConfigError,
+} from "./song-pedal-configs/song-pedal-config-service";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -130,6 +136,40 @@ protectedRouter.post("/pedals", async (c) => {
 
 protectedRouter.get("/pedals", async (c) => {
   return c.json(await listPedals());
+});
+
+protectedRouter.post("/songs/:id/pedals", async (c) => {
+  const body = await c.req.json<{ pedal_catalog_id?: string; label?: string; config?: unknown }>();
+  try {
+    const config = await createSongPedalConfig(c.get("userId"), c.req.param("id"), {
+      pedalCatalogId: body.pedal_catalog_id,
+      label: body.label,
+      config: body.config,
+    });
+    return c.json(config, 201);
+  } catch (err) {
+    if (err instanceof SongPedalConfigError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.get("/songs/:id/pedals", async (c) => {
+  try {
+    return c.json(await listSongPedalConfigs(c.get("userId"), c.req.param("id")));
+  } catch (err) {
+    if (err instanceof SongPedalConfigError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.delete("/songs/:id/pedals/:configId", async (c) => {
+  try {
+    await deleteSongPedalConfig(c.get("userId"), c.req.param("id"), c.req.param("configId"));
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof SongPedalConfigError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
 });
 
 app.route("/", protectedRouter);
