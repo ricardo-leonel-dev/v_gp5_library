@@ -9,6 +9,7 @@ import {
   createSong,
   deleteSong,
   getSongById,
+  getSongFile,
   isUuid,
   listSongs,
   SongError,
@@ -393,6 +394,119 @@ describe("song-service", () => {
     test("invalid UUID -> SongError(404) (R18)", async () => {
       const { userId } = await makeUser();
       await expect(getSongById(userId, "not-a-uuid")).rejects.toThrow(SongError);
+    });
+  });
+
+  describe("getSongFile", () => {
+    test("preset, no sort_order -> bytes + mimeType + originalFilename round-tripped (R1, R3, R4)", async () => {
+      const { userId } = await makeUser();
+      const preset = presetFile();
+      const { songId, storage: s2 } = await seedSong(userId, {
+        name: "Round trip preset",
+        preset: [preset],
+      });
+
+      const result = await getSongFile(userId, songId, "preset", undefined, s2);
+      expect(result.bytes).toEqual(preset.bytes);
+      expect(result.mimeType).toBe("application/octet-stream");
+      expect(result.originalFilename).toBe("preset.syx");
+    });
+
+    test("multiple ir files: sort_order=0 and sort_order=1 each return the correct file's bytes (R2)", async () => {
+      const { userId } = await makeUser();
+      const irA = file("a.wav", [10, 11, 12]);
+      const irB = file("b.wav", [20, 21]);
+      const irC = file("c.wav", [30, 31, 32, 33]);
+      const { songId, storage: s2 } = await seedSong(userId, {
+        name: "Many ir files",
+        ir: [irA, irB, irC],
+      });
+
+      const zero = await getSongFile(userId, songId, "ir", "0", s2);
+      expect(zero.bytes).toEqual(irA.bytes);
+      expect(zero.originalFilename).toBe("a.wav");
+
+      const one = await getSongFile(userId, songId, "ir", "1", s2);
+      expect(one.bytes).toEqual(irB.bytes);
+      expect(one.originalFilename).toBe("b.wav");
+
+      const two = await getSongFile(userId, songId, "ir", "2", s2);
+      expect(two.bytes).toEqual(irC.bytes);
+    });
+
+    test("invalid UUID songId -> SongError(404) (R5)", async () => {
+      const { userId } = await makeUser();
+      await expect(getSongFile(userId, "not-a-uuid", "preset", undefined, storage)).rejects.toThrow(SongError);
+    });
+
+    test("nonexistent song UUID -> SongError(404) (R6)", async () => {
+      const { userId } = await makeUser();
+      await expect(getSongFile(userId, crypto.randomUUID(), "preset", undefined, storage)).rejects.toThrow(SongError);
+    });
+
+    test("soft-deleted song -> SongError(404) (R6)", async () => {
+      const { userId } = await makeUser();
+      const { songId } = await seedSong(userId);
+      await deleteSong(userId, songId);
+      await expect(getSongFile(userId, songId, "preset", undefined, storage)).rejects.toThrow(SongError);
+    });
+
+    test("foreign-owned song -> SongError(404) (R6)", async () => {
+      const { userId: owner } = await makeUser("getfile-owner");
+      const { userId: other } = await makeUser("getfile-other");
+      const { songId } = await seedSong(owner);
+      await expect(getSongFile(other, songId, "preset", undefined, storage)).rejects.toThrow(SongError);
+    });
+
+    test("unknown :kind -> SongError(404) (R7)", async () => {
+      const { userId } = await makeUser();
+      const { songId } = await seedSong(userId);
+      await expect(getSongFile(userId, songId, "midi", undefined, storage)).rejects.toThrow(SongError);
+    });
+
+    test("valid :kind with no matching song_files row -> SongError(404) (R8)", async () => {
+      const { userId } = await makeUser();
+      const { songId } = await seedSong(userId, {
+        name: "Preset only",
+        ir: [],
+        nam: [],
+        cover: [],
+      });
+      await expect(getSongFile(userId, songId, "cover", undefined, storage)).rejects.toThrow(SongError);
+    });
+
+    test("valid kind but sort_order beyond what exists -> SongError(404) (R8)", async () => {
+      const { userId } = await makeUser();
+      const { songId, storage: s2 } = await seedSong(userId, {
+        name: "Two ir",
+        ir: [file("a.wav", [1]), file("b.wav", [2])],
+      });
+      await expect(getSongFile(userId, songId, "ir", "5", s2)).rejects.toThrow(SongError);
+    });
+
+    test("malformed sort_order ('abc', '-1') -> SongError(404), default 0 not used (R9)", async () => {
+      const { userId } = await makeUser();
+      const { songId, storage: s2 } = await seedSong(userId);
+      await expect(getSongFile(userId, songId, "preset", "abc", s2)).rejects.toThrow(SongError);
+      await expect(getSongFile(userId, songId, "preset", "-1", s2)).rejects.toThrow(SongError);
+    });
+
+    test("song_files row whose bytes were removed from storage -> non-SongError propagates (R11)", async () => {
+      const { userId } = await makeUser();
+      const preset = presetFile();
+      const { songId, storage: s2 } = await seedSong(userId, {
+        name: "Bytes vanish",
+        preset: [preset],
+      });
+
+      const db = getDb();
+      const [fileRow] = await db<{ storage_key: string }[]>`
+        SELECT storage_key FROM song_files WHERE song_id = ${songId} AND kind = 'preset'
+      `;
+      await s2.delete(fileRow.storage_key);
+
+      await expect(getSongFile(userId, songId, "preset", undefined, s2)).rejects.toThrow(Error);
+      await expect(getSongFile(userId, songId, "preset", undefined, s2)).rejects.not.toBeInstanceOf(SongError);
     });
   });
 
