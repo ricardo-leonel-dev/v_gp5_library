@@ -3,6 +3,8 @@ import { getDb } from "./db/client";
 import { type AuthVariables } from "./middleware/require-auth";
 import { protectedRouter } from "./middleware/protected-router";
 import { register, login, getMe, AuthError } from "./auth/user-service";
+import { createSong, listSongs, getSongById, deleteSong, SongError } from "./songs/song-service";
+import { parseCreateSongMultipart } from "./songs/parse-multipart";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -53,6 +55,41 @@ protectedRouter.get("/auth/me", async (c) => {
     return c.json(user);
   } catch (err) {
     if (err instanceof AuthError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.post("/songs", async (c) => {
+  const body = await c.req.parseBody({ all: true });
+  const input = await parseCreateSongMultipart(body as Record<string, string | File | (string | File)[] | undefined>);
+  try {
+    const song = await createSong(c.get("userId"), input);
+    return c.json(song, 201);
+  } catch (err) {
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.get("/songs", async (c) => {
+  return c.json(await listSongs(c.get("userId")));
+});
+
+protectedRouter.get("/songs/:id", async (c) => {
+  try {
+    return c.json(await getSongById(c.get("userId"), c.req.param("id")));
+  } catch (err) {
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.delete("/songs/:id", async (c) => {
+  try {
+    await deleteSong(c.get("userId"), c.req.param("id"));
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
     throw err;
   }
 });

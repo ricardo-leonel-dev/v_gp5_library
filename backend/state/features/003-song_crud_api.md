@@ -2,9 +2,9 @@
 feature_number: 3
 name: song_crud_api
 title: POST/GET/GET:id/DELETE /songs scoped to the authenticated user
-status: pending
+status: done
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T08:33:46.000Z
+updated_at: 2026-09-21T16:26:29.000Z
 ---
 
 ## Description
