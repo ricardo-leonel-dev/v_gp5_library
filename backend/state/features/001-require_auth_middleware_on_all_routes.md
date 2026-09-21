@@ -4,7 +4,7 @@ name: require_auth_middleware_on_all_routes
 title: Protect every song/pedal route with require-auth
 status: done
 created_at: 2026-09-21T04:17:31.000Z
-updated_at: 2026-09-21T05:44:20.000Z
+updated_at: 2026-09-21T08:33:46.000Z
 ---
 
 ## Description

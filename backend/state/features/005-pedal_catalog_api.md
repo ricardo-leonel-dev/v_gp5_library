@@ -4,7 +4,7 @@ name: pedal_catalog_api
 title: GET/POST /pedals — shared reference catalog
 status: pending
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T04:19:14.000Z
+updated_at: 2026-09-21T08:33:47.000Z
 ---
 
 ## Description

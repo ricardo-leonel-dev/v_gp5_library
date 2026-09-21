@@ -2,9 +2,9 @@
 feature_number: 2
 name: songs_schema_migrations
 title: Finalize the songs/song_files schema against real GP-5 dumps
-status: pending
+status: done
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T04:19:11.000Z
+updated_at: 2026-09-21T09:15:45.000Z
 ---
 
 ## Description

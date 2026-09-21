@@ -4,7 +4,7 @@ name: song_pedal_configs_api
 title: POST/GET/DELETE /songs/:id/pedals — private per user+song
 status: pending
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T04:19:15.000Z
+updated_at: 2026-09-21T08:33:47.000Z
 ---
 
 ## Description
