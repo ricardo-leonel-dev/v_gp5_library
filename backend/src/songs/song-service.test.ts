@@ -12,6 +12,7 @@ import {
   getSongFile,
   isUuid,
   listSongs,
+  MAX_EXTRA_CONFIG_BYTES,
   SongError,
   type CreateSongInput,
   type UploadedFile,
@@ -333,6 +334,89 @@ describe("song-service", () => {
       const covers = result.files.filter((f) => f.kind === "cover");
       expect(covers).toHaveLength(1);
       expect(covers[0].originalFilename).toBe("cover.jpg");
+    });
+
+    test("nontrivial extra_config (nested object, array, string, number, boolean, null) round-trips unchanged (R2)", async () => {
+      const { userId } = await makeUser();
+      const original = {
+        nested: { keep: "this", count: 7, on: true, nothing: null },
+        list: [1, "two", false, null, { five: 5 }],
+        flag: false,
+        missing: null,
+      };
+
+      const result = await createSong(
+        userId,
+        {
+          name: "Round trip",
+          preset: [presetFile()],
+          ir: [],
+          nam: [],
+          cover: [],
+          extraConfig: JSON.stringify(original),
+        },
+        storage,
+      );
+
+      expect(result.extraConfig).toEqual(original);
+
+      const fetched = await getSongById(userId, result.id);
+      expect(fetched.extraConfig).toEqual(original);
+    });
+
+    test("oversized extra_config (UTF-8 byte length > MAX_EXTRA_CONFIG_BYTES) -> SongError(400) and no rows inserted (R4)", async () => {
+      const { userId } = await makeUser();
+      const db = getDb();
+      const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs`;
+
+      const oversized = `{"note":"${"x".repeat(MAX_EXTRA_CONFIG_BYTES)}"}`;
+      expect(new TextEncoder().encode(oversized).length).toBeGreaterThan(MAX_EXTRA_CONFIG_BYTES);
+
+      let caught: unknown;
+      try {
+        await createSong(
+          userId,
+          {
+            name: "Too big",
+            preset: [presetFile()],
+            ir: [],
+            nam: [],
+            cover: [],
+            extraConfig: oversized,
+          },
+          storage,
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(SongError);
+      expect((caught as SongError).status).toBe(400);
+      expect((caught as SongError).message).toContain(String(MAX_EXTRA_CONFIG_BYTES));
+
+      const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs`;
+      expect(after[0].c).toBe(before[0].c);
+    });
+
+    test("extra_config at exactly MAX_EXTRA_CONFIG_BYTES bytes (valid JSON object) is accepted (R5)", async () => {
+      const { userId } = await makeUser();
+      const padding = "x".repeat(MAX_EXTRA_CONFIG_BYTES - '{"note":""}'.length);
+      const payload = `{"note":"${padding}"}`;
+      expect(new TextEncoder().encode(payload).length).toBe(MAX_EXTRA_CONFIG_BYTES);
+
+      const result = await createSong(
+        userId,
+        {
+          name: "At cap",
+          preset: [presetFile()],
+          ir: [],
+          nam: [],
+          cover: [],
+          extraConfig: payload,
+        },
+        storage,
+      );
+
+      expect(result.extraConfig).toEqual({ note: padding });
     });
   });
 

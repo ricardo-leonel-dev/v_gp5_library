@@ -2,9 +2,9 @@
 feature_number: 7
 name: song_metadata_and_extra_config
 title: Song name, artist, and free-form extra_config validation
-status: pending
+status: done
 created_at: 2026-09-21T04:17:32.000Z
-updated_at: 2026-09-21T08:33:47.000Z
+updated_at: 2026-09-22T05:25:09.000Z
 ---
 
 ## Description

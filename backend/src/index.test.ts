@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { getDb } from "./db/client";
 import { issueToken } from "./auth/jwt";
+import { MAX_EXTRA_CONFIG_BYTES } from "./songs/song-service";
 import app from "./index";
 
 describe("GET /health", () => {
@@ -354,5 +355,81 @@ describe("POST then DELETE then GET round trip (R12)", () => {
     });
     const idsAfter = ((await listAfter.json()) as Array<{ id: string }>).map((c) => c.id);
     expect(idsAfter).not.toContain(created.id);
+  });
+});
+
+describe("POST /songs oversized extra_config -> 400 (R4)", () => {
+  test("end-to-end multipart request with extra_config byte length > MAX_EXTRA_CONFIG_BYTES returns 400", async () => {
+    const db = getDb();
+    const email = `oversize-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const oversized = `{"note":"${"x".repeat(MAX_EXTRA_CONFIG_BYTES)}"}`;
+    expect(new TextEncoder().encode(oversized).length).toBeGreaterThan(MAX_EXTRA_CONFIG_BYTES);
+
+    const fd = new FormData();
+    fd.append("name", "Too big");
+    fd.append("extra_config", oversized);
+    fd.append(
+      "preset",
+      new File([new Uint8Array([1, 2, 3])], "p.syx", { type: "application/octet-stream" }),
+    );
+
+    const res = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain(String(MAX_EXTRA_CONFIG_BYTES));
+  });
+});
+
+describe("POST /songs then GET /songs/:id extra_config round-trip (R2)", () => {
+  test("nontrivial extra_config JSON object round-trips through the full HTTP stack unchanged", async () => {
+    const db = getDb();
+    const email = `rt-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const original = {
+      tuning: "Drop D",
+      capo: 2,
+      notes: ["verse 1: clean", "chorus: lead"],
+      mix: { reverb: 0.3, delay: null },
+      active: true,
+    };
+
+    const fd = new FormData();
+    fd.append("name", "Round trip E2E");
+    fd.append("extra_config", JSON.stringify(original));
+    fd.append(
+      "preset",
+      new File([new Uint8Array([4, 5, 6])], "p.syx", { type: "application/octet-stream" }),
+    );
+
+    const createRes = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string; extraConfig: Record<string, unknown> };
+    expect(created.extraConfig).toEqual(original);
+
+    const getRes = await app.request(`/songs/${created.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(getRes.status).toBe(200);
+    const fetched = (await getRes.json()) as { id: string; extraConfig: Record<string, unknown> };
+    expect(fetched.id).toBe(created.id);
+    expect(fetched.extraConfig).toEqual(original);
   });
 });
