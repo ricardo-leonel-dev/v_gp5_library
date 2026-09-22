@@ -433,3 +433,88 @@ describe("POST /songs then GET /songs/:id extra_config round-trip (R2)", () => {
     expect(fetched.extraConfig).toEqual(original);
   });
 });
+
+describe("POST /songs free-plan over-limit -> 402 (R2, R3)", () => {
+  test("free-plan user's 11th POST /songs (after 10 successes) returns 402 with error naming the limit", async () => {
+    const db = getDb();
+    const email = `plan-cap-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    for (let i = 0; i < 10; i++) {
+      const fd = new FormData();
+      fd.append("name", `Cap Song ${i}`);
+      fd.append(
+        "preset",
+        new File([new Uint8Array([1, 2, 3])], `p${i}.syx`, { type: "application/octet-stream" }),
+      );
+      const res = await app.request("/songs", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const overFd = new FormData();
+    overFd.append("name", "Over the cap");
+    overFd.append(
+      "preset",
+      new File([new Uint8Array([4, 5, 6])], "over.syx", { type: "application/octet-stream" }),
+    );
+    const overRes = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: overFd,
+    });
+    expect(overRes.status).toBe(402);
+    const body = (await overRes.json()) as { error: string };
+    expect(body.error).toContain("free");
+    expect(body.error).toContain("10");
+  });
+});
+
+describe("POST /songs plan from token claim is ignored — DB governs (R6)", () => {
+  test("token issued as 'paid' for a user whose users.plan is 'free' is still capped at 10 songs", async () => {
+    const db = getDb();
+    const email = `plan-stale-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    // Stale token claim: token says paid, but users.plan is free (default).
+    const token = await issueToken(user.id, "paid");
+
+    for (let i = 0; i < 10; i++) {
+      const fd = new FormData();
+      fd.append("name", `Stale Song ${i}`);
+      fd.append(
+        "preset",
+        new File([new Uint8Array([1])], `s${i}.syx`, { type: "application/octet-stream" }),
+      );
+      const res = await app.request("/songs", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const overFd = new FormData();
+    overFd.append("name", "Over the stale cap");
+    overFd.append(
+      "preset",
+      new File([new Uint8Array([9])], "over.syx", { type: "application/octet-stream" }),
+    );
+    const overRes = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: overFd,
+    });
+    expect(overRes.status).toBe(402);
+    const body = (await overRes.json()) as { error: string };
+    expect(body.error).toContain("free");
+    expect(body.error).toContain("10");
+  });
+});

@@ -4,7 +4,7 @@ import { getStorage } from "../storage";
 import type { StorageAdapter } from "../storage/adapter";
 
 export class SongError extends Error {
-  constructor(message: string, public readonly status: 400 | 404) {
+  constructor(message: string, public readonly status: 400 | 402 | 404) {
     super(message);
   }
 }
@@ -54,6 +54,11 @@ export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const MAX_EXTRA_CONFIG_BYTES = 32768; // 32 KiB — R3
+
+// Any plan value not listed here has no song-count limit (R4).
+export const PLAN_SONG_LIMITS: Record<string, number> = {
+  free: 10, // R1, R2
+};
 
 export function isUuid(value: string): boolean {
   return UUID_RE.test(value);
@@ -168,6 +173,23 @@ export async function createSong(
     extraConfig = parsed as Record<string, unknown>;
   }
 
+  const db: SQL = getDb();
+
+  const [userRow] = await db<{ plan: string }[]>`SELECT plan FROM users WHERE id = ${userId}`;
+  if (!userRow) {
+    throw new SongError("user not found", 404); // R7
+  }
+
+  const limit = PLAN_SONG_LIMITS[userRow.plan];
+  if (limit !== undefined) {
+    const [{ count }] = await db<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM songs WHERE user_id = ${userId} AND deleted_at IS NULL
+    `; // R5 — deleted_at IS NULL excludes soft-deleted songs from the count
+    if (count >= limit) {
+      throw new SongError(`plan '${userRow.plan}' is limited to ${limit} songs`, 402); // R2, R3
+    }
+  }
+
   const songId = crypto.randomUUID();
 
   const filesToCreate: {
@@ -212,8 +234,6 @@ export async function createSong(
   ];
 
   await Promise.all(filesToCreate.map((f) => storage.put(f.storageKey, f.source.bytes)));
-
-  const db = getDb();
 
   const result = await db.begin(async (tx) => {
     const [songRow] = await tx`
