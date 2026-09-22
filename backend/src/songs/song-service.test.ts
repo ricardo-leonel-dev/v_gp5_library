@@ -418,6 +418,146 @@ describe("song-service", () => {
 
       expect(result.extraConfig).toEqual({ note: padding });
     });
+
+    test("free-plan user with 9 existing songs successfully creates a 10th (R1)", async () => {
+      const { userId } = await makeUser();
+      for (let i = 0; i < 9; i++) {
+        await seedSong(userId, { name: `Song ${i}` });
+      }
+
+      const result = await createSong(
+        userId,
+        {
+          name: "The Tenth",
+          preset: [presetFile()],
+          ir: [],
+          nam: [],
+          cover: [],
+        },
+        storage,
+      );
+
+      expect(result.name).toBe("The Tenth");
+    });
+
+    test("free-plan user with 10 existing songs: 11th createSong throws SongError(402) with 'free' and '10' in message, no new rows (R2, R3)", async () => {
+      const { userId } = await makeUser();
+      for (let i = 0; i < 10; i++) {
+        await seedSong(userId, { name: `Song ${i}` });
+      }
+      const db = getDb();
+      const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}`;
+      const beforeFiles = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_files sf
+        JOIN songs s ON s.id = sf.song_id
+        WHERE s.user_id = ${userId}`;
+
+      let caught: unknown;
+      try {
+        await createSong(
+          userId,
+          {
+            name: "Over limit",
+            preset: [presetFile()],
+            ir: [],
+            nam: [],
+            cover: [],
+          },
+          storage,
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(SongError);
+      expect((caught as SongError).status).toBe(402);
+      expect((caught as SongError).message).toContain("free");
+      expect((caught as SongError).message).toContain("10");
+
+      const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}`;
+      const afterFiles = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_files sf
+        JOIN songs s ON s.id = sf.song_id
+        WHERE s.user_id = ${userId}`;
+      expect(after[0].c).toBe(before[0].c);
+      expect(afterFiles[0].c).toBe(beforeFiles[0].c);
+    });
+
+    test("paid-plan user can create 11+ songs without rejection (R4)", async () => {
+      const { userId } = await makeUser();
+      const db = getDb();
+      await db`UPDATE users SET plan = 'paid' WHERE id = ${userId}`;
+
+      for (let i = 0; i < 11; i++) {
+        const result = await createSong(
+          userId,
+          {
+            name: `Paid Song ${i}`,
+            preset: [presetFile()],
+            ir: [],
+            nam: [],
+            cover: [],
+          },
+          storage,
+        );
+        expect(result.name).toBe(`Paid Song ${i}`);
+      }
+
+      const [{ c }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}`;
+      expect(c).toBe(11);
+    });
+
+    test("free-plan user with 10 songs, one soft-deleted, can create an 11th successfully (R5)", async () => {
+      const { userId } = await makeUser();
+      const db = getDb();
+      const seeded: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        const { songId } = await seedSong(userId, { name: `Song ${i}` });
+        seeded.push(songId);
+      }
+
+      // Soft-delete the first song, mirroring deleteSong's UPDATE.
+      await db`UPDATE songs SET deleted_at = NOW() WHERE id = ${seeded[0]}`;
+
+      const result = await createSong(
+        userId,
+        {
+          name: "Eleventh (live count was 9)",
+          preset: [presetFile()],
+          ir: [],
+          nam: [],
+          cover: [],
+        },
+        storage,
+      );
+
+      expect(result.name).toBe("Eleventh (live count was 9)");
+
+      const [{ live }] = await db<{ live: number }[]>`
+        SELECT COUNT(*)::int AS live FROM songs WHERE user_id = ${userId} AND deleted_at IS NULL
+      `;
+      expect(live).toBe(10);
+    });
+
+    test("createSong with userId that has no matching users row -> SongError(404) (R7)", async () => {
+      const ghostUserId = crypto.randomUUID();
+
+      let caught: unknown;
+      try {
+        await createSong(
+          ghostUserId,
+          {
+            name: "Ghost user",
+            preset: [presetFile()],
+            ir: [],
+            nam: [],
+            cover: [],
+          },
+          storage,
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(SongError);
+      expect((caught as SongError).status).toBe(404);
+    });
   });
 
   describe("listSongs", () => {
