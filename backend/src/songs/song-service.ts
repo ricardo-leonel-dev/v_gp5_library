@@ -53,6 +53,8 @@ export interface SongWithFilesDto extends SongDto {
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export const MAX_EXTRA_CONFIG_BYTES = 32768; // 32 KiB — R3
+
 export function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
@@ -140,6 +142,16 @@ export async function createSong(
   }
   if (input.cover.length > 1) {
     throw new SongError("at most one cover file is allowed", 400);
+  }
+
+  if (input.extraConfig !== undefined) {
+    const byteLength = new TextEncoder().encode(input.extraConfig).length;
+    if (byteLength > MAX_EXTRA_CONFIG_BYTES) {
+      throw new SongError(
+        `extra_config exceeds maximum size of ${MAX_EXTRA_CONFIG_BYTES} bytes`,
+        400,
+      );
+    }
   }
 
   let extraConfig: Record<string, unknown> = {};
