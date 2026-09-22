@@ -4,7 +4,7 @@ name: save_preset_dialog
 title: Save a preset as a song (name, artist, cover, extra config)
 status: pending
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-21T04:19:29.000Z
+updated_at: 2026-09-22T08:01:26.000Z
 ---
 
 ## Description

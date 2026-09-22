@@ -20,5 +20,17 @@
   "shared": {
     "dark_mode": "Oscuro",
     "light_mode": "Claro"
+  },
+  "pedal": {
+    "title": "Conexión del pedal",
+    "connect": "Conectar al GP-5",
+    "state_not_connected": "No conectado",
+    "state_connecting": "Conectando...",
+    "state_connected": "Conectado",
+    "state_error": "Error de conexión",
+    "unsupported": "Tu navegador no soporta la Web MIDI API. Por favor usa Chrome, Edge, Opera, Samsung Internet o Firefox 108+.",
+    "midi_access_denied": "Se denegó el acceso MIDI. Por favor permite el acceso MIDI e inténtalo de nuevo.",
+    "gp5_not_found": "No se detectó el pedal GP-5. Por favor conéctalo por USB e inténtalo de nuevo.",
+    "unknown": "No se pudo conectar con el pedal."
   }
 }

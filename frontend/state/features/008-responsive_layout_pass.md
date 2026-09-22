@@ -4,7 +4,7 @@ name: responsive_layout_pass
 title: Audit every screen for mobile + desktop
 status: pending
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-21T04:19:33.000Z
+updated_at: 2026-09-22T08:01:26.000Z
 ---
 
 ## Description

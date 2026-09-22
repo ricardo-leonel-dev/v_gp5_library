@@ -1,3 +1,9 @@
+export type PedalConnectionState =
+  | 'not-connected'
+  | 'connecting'
+  | 'connected'
+  | 'error';
+
 /**
  * Abstraction over talking to the pedal, mirroring the backend's
  * StorageAdapter swap pattern. WebMidiPedalConnection is the only
