@@ -204,6 +204,11 @@ describe("resolveAllowedOrigins", () => {
     ]);
   });
 
+  test("a non-empty env value of only commas/whitespace yields [] and does not fall back to defaultOrigins (R2 edge case)", () => {
+    const config = makeFixture();
+    expect(resolveAllowedOrigins("dev", config, { CORS_ALLOWED_ORIGINS: " , " })).toEqual([]);
+  });
+
   test("the real src/config/stages.json declares dev.cors.defaultOrigins as [http://localhost:4200] (R3)", () => {
     expect(stagesConfig.dev.cors.defaultOrigins).toEqual(["http://localhost:4200"]);
   });
