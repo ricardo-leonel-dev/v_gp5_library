@@ -3,7 +3,7 @@
     "db": {
       "provider": "postgres",
       "connectionEnv": "DATABASE_URL",
-      "defaultUrl": "postgres://postgres:postgres@localhost:5432/gp5_library"
+      "defaultUrl": "postgres://postgres:postgres@localhost:5480/gp5_library"
     },
     "storage": {
       "provider": "local-fs",
