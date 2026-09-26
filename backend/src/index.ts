@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { getDb } from "./db/client";
 import { type AuthVariables } from "./middleware/require-auth";
 import { protectedRouter } from "./middleware/protected-router";
+import { createCorsMiddleware } from "./middleware/cors";
+import { resolveAllowedOrigins } from "./config/stage";
 import { register, login, getMe, AuthError } from "./auth/user-service";
 import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
 import { parseCreateSongMultipart } from "./songs/parse-multipart";
@@ -15,6 +17,7 @@ import {
 } from "./song-pedal-configs/song-pedal-config-service";
 
 const app = new Hono<{ Variables: AuthVariables }>();
+app.use("*", createCorsMiddleware(resolveAllowedOrigins()));
 
 app.get("/health", async (c) => {
   try {

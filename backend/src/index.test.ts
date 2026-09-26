@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { getDb } from "./db/client";
 import { issueToken } from "./auth/jwt";
 import { MAX_EXTRA_CONFIG_BYTES } from "./songs/song-service";
+import { resolveAllowedOrigins } from "./config/stage";
 import app from "./index";
+
+const allowedOrigin = resolveAllowedOrigins()[0];
 
 describe("GET /health", () => {
   test("reports ok when the DB is reachable", async () => {
@@ -516,5 +519,51 @@ describe("POST /songs plan from token claim is ignored — DB governs (R6)", () 
     const body = (await overRes.json()) as { error: string };
     expect(body.error).toContain("free");
     expect(body.error).toContain("10");
+  });
+});
+
+describe("CORS middleware end-to-end against real app (R6, R7, R10, R11, R12)", () => {
+  test("preflight OPTIONS /auth/register from allowed origin -> 204 with Allow-Origin", async () => {
+    const res = await app.request("/auth/register", {
+      method: "OPTIONS",
+      headers: {
+        Origin: allowedOrigin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(allowedOrigin);
+  });
+
+  test("preflight OPTIONS /songs from allowed origin -> 204 (not 401) with Allow-Origin", async () => {
+    const res = await app.request("/songs", {
+      method: "OPTIONS",
+      headers: {
+        Origin: allowedOrigin,
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(allowedOrigin);
+  });
+
+  test("POST /auth/login with an empty JSON body -> handler's 400 with Allow-Origin", async () => {
+    const res = await app.request("/auth/login", {
+      method: "POST",
+      headers: { Origin: allowedOrigin, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(allowedOrigin);
+  });
+
+  test("GET /songs without a token -> 401 with Allow-Origin", async () => {
+    const res = await app.request("/songs", {
+      headers: { Origin: allowedOrigin },
+    });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(allowedOrigin);
   });
 });
