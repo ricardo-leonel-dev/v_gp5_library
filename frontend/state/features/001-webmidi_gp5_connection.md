@@ -2,9 +2,9 @@
 feature_number: 1
 name: webmidi_gp5_connection
 title: Implement PedalConnection.connect() over Web MIDI
-status: pending
+status: done
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-21T04:19:25.000Z
+updated_at: 2026-09-22T08:41:24.000Z
 ---
 
 ## Description

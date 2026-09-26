@@ -20,5 +20,17 @@
   "shared": {
     "dark_mode": "Dark",
     "light_mode": "Light"
+  },
+  "pedal": {
+    "title": "Pedal connection",
+    "connect": "Connect to GP-5",
+    "state_not_connected": "Not connected",
+    "state_connecting": "Connecting...",
+    "state_connected": "Connected",
+    "state_error": "Connection error",
+    "unsupported": "Your browser does not support the Web MIDI API. Please use Chrome, Edge, Opera, Samsung Internet, or Firefox 108+.",
+    "midi_access_denied": "MIDI access was denied. Please allow MIDI access and try again.",
+    "gp5_not_found": "GP-5 pedal not detected. Please connect it via USB and try again.",
+    "unknown": "Could not connect to the pedal."
   }
 }

@@ -4,7 +4,7 @@ name: preset_browser_ui
 title: List presets currently on the connected pedal
 status: pending
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-21T04:19:28.000Z
+updated_at: 2026-09-22T08:01:26.000Z
 ---
 
 ## Description

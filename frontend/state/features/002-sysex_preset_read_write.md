@@ -4,7 +4,7 @@ name: sysex_preset_read_write
 title: Port the reverse-engineered SysEx read/write protocol
 status: pending
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-21T04:19:26.000Z
+updated_at: 2026-09-22T08:01:26.000Z
 ---
 
 ## Description

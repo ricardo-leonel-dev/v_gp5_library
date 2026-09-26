@@ -16,4 +16,10 @@ export const routes: Routes = [
     canActivate: [authGuard],
     loadComponent: () => import('./songs/songs-page/songs-page').then((m) => m.SongsPage),
   },
+  {
+    path: 'pedal',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pedals/pedal-connection-page/pedal-connection-page').then((m) => m.PedalConnectionPage),
+  },
 ];
