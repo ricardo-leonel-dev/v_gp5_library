@@ -7,8 +7,10 @@ import {
   StageConfigError,
   createStorageAdapter,
   getActiveStage,
+  resolveAllowedOrigins,
   resolveDatabaseUrl,
 } from "./stage";
+import stagesConfig from "./stages.json";
 import { LocalFsStorageAdapter } from "../storage/local-fs-adapter";
 
 function makeFixture(): StagesFile {
@@ -20,14 +22,20 @@ function makeFixture(): StagesFile {
         defaultUrl: "postgres://fixture:fixture@localhost:5432/fixture_dev",
       },
       storage: { provider: "local-fs", dirEnv: "STORAGE_DIR", defaultDir: "./storage" },
+      cors: {
+        allowedOriginsEnv: "CORS_ALLOWED_ORIGINS",
+        defaultOrigins: ["http://fixture.test:4200"],
+      },
     },
     staging: {
       db: { provider: "postgres", connectionEnv: "DATABASE_URL" },
       storage: { provider: "local-fs", dirEnv: "STORAGE_DIR", defaultDir: "./storage" },
+      cors: { allowedOriginsEnv: "CORS_ALLOWED_ORIGINS" },
     },
     main: {
       db: { provider: "postgres", connectionEnv: "DATABASE_URL" },
       storage: { provider: "local-fs", dirEnv: "STORAGE_DIR", defaultDir: "./storage" },
+      cors: { allowedOriginsEnv: "CORS_ALLOWED_ORIGINS" },
     },
   };
 }
@@ -165,5 +173,62 @@ describe("createStorageAdapter", () => {
     };
     expect(() => createStorageAdapter("dev", config, {})).toThrow(StageConfigError);
     expect(() => createStorageAdapter("dev", config, {})).toThrow(/s3/);
+  });
+});
+
+describe("resolveAllowedOrigins", () => {
+  test("trims whitespace and drops empty entries from a comma-separated env value (R2)", () => {
+    const config = makeFixture();
+    expect(resolveAllowedOrigins("dev", config, { CORS_ALLOWED_ORIGINS: " http://a.test , ,http://b.test " })).toEqual([
+      "http://a.test",
+      "http://b.test",
+    ]);
+  });
+
+  test("a non-empty env value overrides dev.cors.defaultOrigins (R2)", () => {
+    const config = makeFixture();
+    expect(resolveAllowedOrigins("dev", config, { CORS_ALLOWED_ORIGINS: "https://prod.test" })).toEqual([
+      "https://prod.test",
+    ]);
+  });
+
+  test("returns dev.cors.defaultOrigins when CORS_ALLOWED_ORIGINS is unset (R3)", () => {
+    const config = makeFixture();
+    expect(resolveAllowedOrigins("dev", config, {})).toEqual(["http://fixture.test:4200"]);
+  });
+
+  test("returns dev.cors.defaultOrigins when CORS_ALLOWED_ORIGINS is the empty string (R3)", () => {
+    const config = makeFixture();
+    expect(resolveAllowedOrigins("dev", config, { CORS_ALLOWED_ORIGINS: "" })).toEqual([
+      "http://fixture.test:4200",
+    ]);
+  });
+
+  test("the real src/config/stages.json declares dev.cors.defaultOrigins as [http://localhost:4200] (R3)", () => {
+    expect(stagesConfig.dev.cors.defaultOrigins).toEqual(["http://localhost:4200"]);
+  });
+
+  test("throws StageConfigError naming the stage and CORS_ALLOWED_ORIGINS when staging has no env value and no defaultOrigins (R4)", () => {
+    const config = makeFixture();
+    expect(() => resolveAllowedOrigins("staging", config, {})).toThrow(StageConfigError);
+    expect(() => resolveAllowedOrigins("staging", config, {})).toThrow(/staging/);
+    expect(() => resolveAllowedOrigins("staging", config, {})).toThrow(/CORS_ALLOWED_ORIGINS/);
+  });
+
+  test("throws StageConfigError naming the stage and CORS_ALLOWED_ORIGINS when main has no env value and no defaultOrigins (R4)", () => {
+    const config = makeFixture();
+    expect(() => resolveAllowedOrigins("main", config, {})).toThrow(StageConfigError);
+    expect(() => resolveAllowedOrigins("main", config, {})).toThrow(/main/);
+    expect(() => resolveAllowedOrigins("main", config, {})).toThrow(/CORS_ALLOWED_ORIGINS/);
+  });
+
+  test("throws StageConfigError naming '*' when the resolved list includes the wildcard (R5)", () => {
+    const config = makeFixture();
+    expect(() =>
+      resolveAllowedOrigins("dev", config, { CORS_ALLOWED_ORIGINS: "http://a.test,*" }),
+    ).toThrow(StageConfigError);
+    expect(() =>
+      resolveAllowedOrigins("dev", config, { CORS_ALLOWED_ORIGINS: "http://a.test,*" }),
+    ).toThrow(/\*/);
   });
 });

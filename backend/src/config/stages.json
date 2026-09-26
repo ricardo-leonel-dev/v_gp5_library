@@ -9,14 +9,20 @@
       "provider": "local-fs",
       "dirEnv": "STORAGE_DIR",
       "defaultDir": "./storage"
+    },
+    "cors": {
+      "allowedOriginsEnv": "CORS_ALLOWED_ORIGINS",
+      "defaultOrigins": ["http://localhost:4200"]
     }
   },
   "staging": {
     "db": { "provider": "postgres", "connectionEnv": "DATABASE_URL" },
-    "storage": { "provider": "local-fs", "dirEnv": "STORAGE_DIR", "defaultDir": "./storage" }
+    "storage": { "provider": "local-fs", "dirEnv": "STORAGE_DIR", "defaultDir": "./storage" },
+    "cors": { "allowedOriginsEnv": "CORS_ALLOWED_ORIGINS" }
   },
   "main": {
     "db": { "provider": "postgres", "connectionEnv": "DATABASE_URL" },
-    "storage": { "provider": "local-fs", "dirEnv": "STORAGE_DIR", "defaultDir": "./storage" }
+    "storage": { "provider": "local-fs", "dirEnv": "STORAGE_DIR", "defaultDir": "./storage" },
+    "cors": { "allowedOriginsEnv": "CORS_ALLOWED_ORIGINS" }
   }
 }

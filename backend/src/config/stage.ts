@@ -15,9 +15,14 @@ export interface StorageProviderConfig {
   dirEnv: string;
   defaultDir?: string;
 }
+export interface CorsProviderConfig {
+  allowedOriginsEnv: string;
+  defaultOrigins?: string[];
+}
 export interface StageConfig {
   db: DbProviderConfig;
   storage: StorageProviderConfig;
+  cors: CorsProviderConfig;
 }
 export type StagesFile = Record<Stage, StageConfig>;
 
@@ -72,4 +77,32 @@ export function createStorageAdapter(
     default:
       throw new StageConfigError(`unrecognized storage provider "${provider}" for stage "${stage}"`);
   }
+}
+
+export function resolveAllowedOrigins(
+  stage: Stage = getActiveStage(),
+  config: StagesFile = stagesConfig as StagesFile,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const { allowedOriginsEnv, defaultOrigins } = config[stage].cors;
+  const raw = env[allowedOriginsEnv];
+  let resolved: string[];
+  if (raw !== undefined && raw !== "") {
+    resolved = raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  } else if (defaultOrigins !== undefined) {
+    resolved = [...defaultOrigins];
+  } else {
+    throw new StageConfigError(
+      `stage "${stage}" requires "${allowedOriginsEnv}" to be set (no default configured)`,
+    );
+  }
+  if (resolved.includes("*")) {
+    throw new StageConfigError(
+      `wildcard origin "*" is not allowed in "${allowedOriginsEnv}" for stage "${stage}" (requests carry Authorization)`,
+    );
+  }
+  return resolved;
 }
