@@ -1,3 +1,5 @@
+import type { Preset } from './preset';
+
 export type PedalConnectionState =
   | 'not-connected'
   | 'connecting'
@@ -13,6 +15,6 @@ export type PedalConnectionState =
 export interface PedalConnection {
   isSupported(): boolean;
   connect(): Promise<void>;
-  readPresets(): Promise<unknown[]>;
-  writePreset(preset: unknown): Promise<void>;
+  readPresets(): Promise<Preset[]>;
+  writePreset(preset: Preset): Promise<void>;
 }
