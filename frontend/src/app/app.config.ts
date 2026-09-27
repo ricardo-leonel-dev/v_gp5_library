@@ -5,6 +5,8 @@ import { provideTransloco } from '@jsverse/transloco';
 import { TranslocoHttpLoader } from './transloco-loader';
 import { authInterceptor } from './auth/auth.interceptor';
 import { routes } from './app.routes';
+import { SYSEX_PRESET_CODEC } from './midi/sysex-preset-codec';
+import { Gp5SysexPresetCodec } from './midi/gp5-sysex-preset-codec';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -20,5 +22,6 @@ export const appConfig: ApplicationConfig = {
       },
       loader: TranslocoHttpLoader,
     }),
+    { provide: SYSEX_PRESET_CODEC, useClass: Gp5SysexPresetCodec },
   ],
 };
