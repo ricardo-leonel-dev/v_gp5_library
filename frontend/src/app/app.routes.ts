@@ -22,4 +22,10 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pedals/pedal-connection-page/pedal-connection-page').then((m) => m.PedalConnectionPage),
   },
+  {
+    path: 'pedal/presets',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pedals/preset-browser-page/preset-browser-page').then((m) => m.PresetBrowserPage),
+  },
 ];

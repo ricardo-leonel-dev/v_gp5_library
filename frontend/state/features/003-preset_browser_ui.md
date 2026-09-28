@@ -2,9 +2,9 @@
 feature_number: 3
 name: preset_browser_ui
 title: List presets currently on the connected pedal
-status: pending
+status: done
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-22T08:01:26.000Z
+updated_at: 2026-09-28T04:58:54.000Z
 ---
 
 ## Description
