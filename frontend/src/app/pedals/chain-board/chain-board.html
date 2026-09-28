@@ -1,0 +1,30 @@
+<section *transloco="let t" class="relative">
+  <div
+    class="absolute inset-x-0 top-1/2 h-0.5 bg-slate-300 dark:bg-slate-600 hidden sm:block"
+    aria-hidden="true"
+  ></div>
+  <div class="grid grid-cols-5 sm:grid-cols-10 gap-2" data-testid="chain-board">
+    @for (block of blocks(); track block.view.position) {
+      <button
+        type="button"
+        class="{{ block.blockCls }}"
+        [attr.data-testid]="'board-block-' + block.view.position"
+        [attr.data-enabled]="block.view.enabled ? 'true' : 'false'"
+        [attr.aria-pressed]="block.isSelected ? 'true' : 'false'"
+        (click)="onBlockClick(block.view.position)"
+      >
+        <span
+          class="absolute right-1.5 top-1.5 size-1.5 rounded-full {{ block.ledCls }}"
+          aria-hidden="true"
+        ></span>
+        @if (block.view.kind === 'resolved') {
+          <p class="text-sm font-bold tracking-tight">{{ displayCategoryCode(block.view.categoryCode) }}</p>
+          <p class="text-[11px] leading-tight line-clamp-2">{{ block.view.fxTitle }}</p>
+        } @else {
+          <p class="text-sm font-bold tracking-tight">?</p>
+          <p class="text-[11px] leading-tight line-clamp-2">{{ t('chainBoard.unknown') }}</p>
+        }
+      </button>
+    }
+  </div>
+</section>

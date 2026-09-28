@@ -26,19 +26,46 @@
           {{ t('presetBrowser.no_presets') }}
         </p>
       } @else {
+        @if (selectedPreset(); as preset) {
+          <section #boardSection class="mt-6" data-testid="board-section">
+            <p class="text-xs text-slate-500">{{ t('chainBoard.title') }}</p>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">{{ preset.name }}</h2>
+            <app-chain-board
+              [chain]="preset.chain"
+              [selectedIndex]="selectedBlockIndex()"
+              (blockSelected)="onBlockSelected($event)"
+            ></app-chain-board>
+            @if (selectedBlockIndex() !== null) {
+              @let blockIndex = $any(selectedBlockIndex());
+              @if (blockIndex !== null && blockIndex >= 0 && blockIndex < preset.chain.length) {
+                <app-block-detail [slot]="preset.chain[blockIndex]"></app-block-detail>
+              }
+            }
+          </section>
+        }
+
         <ul class="mt-4 divide-y divide-slate-200 dark:divide-slate-700">
           @for (preset of presets(); track preset.slot) {
-            <li class="flex items-center justify-between py-3" [attr.data-testid]="'preset-row-' + preset.slot">
-              <div>
+            <li
+              class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between {{ selectedPreset()?.slot === preset.slot ? 'rounded-md bg-slate-100 dark:bg-slate-800/60' : '' }}"
+              [attr.data-testid]="'preset-row-' + preset.slot"
+            >
+              <div class="min-w-0 flex-1">
                 <p class="text-sm font-medium text-slate-900 dark:text-slate-100">
                   {{ preset.slot }} — {{ preset.name }}
                 </p>
-                <p
-                  class="text-xs text-slate-500 dark:text-slate-400"
-                  [attr.data-testid]="'preset-chain-' + preset.slot"
-                >
-                  {{ chainSummary(preset) || t('presetBrowser.empty_chain') }}
-                </p>
+                @if (preset.chain.length === 0) {
+                  <p
+                    class="mt-1 text-xs text-slate-500 dark:text-slate-400"
+                    [attr.data-testid]="'preset-chain-' + preset.slot"
+                  >
+                    {{ t('presetBrowser.empty_chain') }}
+                  </p>
+                } @else {
+                  <div class="mt-1" [attr.data-testid]="'preset-chain-' + preset.slot">
+                    <app-chain-strip [chain]="preset.chain"></app-chain-strip>
+                  </div>
+                }
               </div>
               <button
                 type="button"

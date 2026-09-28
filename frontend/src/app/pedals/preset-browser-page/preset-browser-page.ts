@@ -1,17 +1,29 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import {
+  AfterViewInit,
+  Component,
+  ElementRef,
+  OnInit,
+  effect,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { TranslocoDirective } from '@jsverse/transloco';
 import type { Preset } from '../../midi/preset';
 import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
 import { SelectedPresetStore } from '../selected-preset.service';
+import { ChainStrip } from '../chain-strip/chain-strip';
+import { ChainBoard } from '../chain-board/chain-board';
+import { BlockDetail } from '../block-detail/block-detail';
 
 type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
 
 @Component({
   selector: 'app-preset-browser-page',
-  imports: [TranslocoDirective],
+  imports: [TranslocoDirective, ChainStrip, ChainBoard, BlockDetail],
   templateUrl: './preset-browser-page.html',
 })
-export class PresetBrowserPage implements OnInit {
+export class PresetBrowserPage implements OnInit, AfterViewInit {
   private readonly pedal = inject(WebMidiPedalConnection);
   private readonly selectedPresetStore = inject(SelectedPresetStore);
 
@@ -20,6 +32,40 @@ export class PresetBrowserPage implements OnInit {
   readonly loadState = signal<LoadState>('idle');
   readonly presets = signal<Preset[]>([]);
   readonly error = signal<string | null>(null);
+  readonly selectedPreset = this.selectedPresetStore.selectedPreset;
+  readonly selectedBlockIndex = signal<number | null>(null);
+
+  private readonly boardSection = viewChild<ElementRef<HTMLElement>>('boardSection');
+
+  private readonly scrollBehavior = signal<'smooth' | 'auto'>('auto');
+
+  constructor() {
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      this.scrollBehavior.set(
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      );
+    }
+
+    // Reset the block detail selection whenever the parent preset changes
+    // (R25). Uses an effect so it stays reactive without forcing the parent
+    // row click to call a separate method.
+    effect(() => {
+      this.selectedPreset();
+      this.selectedBlockIndex.set(null);
+    });
+
+    // Scroll the board into view after the user picks a preset, so the
+    // chain stays visible even when the list is long. UX only; makes no
+    // MIDI call (R37).
+    effect(() => {
+      const preset = this.selectedPreset();
+      if (!preset) return;
+      queueMicrotask(() => {
+        const el = this.boardSection()?.nativeElement;
+        el?.scrollIntoView?.({ block: 'start', behavior: this.scrollBehavior() });
+      });
+    });
+  }
 
   ngOnInit(): void {
     if (!this.supported) return;
@@ -27,15 +73,16 @@ export class PresetBrowserPage implements OnInit {
     void this.loadPresets();
   }
 
-  chainSummary(preset: Preset): string {
-    return preset.chain
-      .filter((entry) => entry.enabled)
-      .map((entry) => entry.moduleType)
-      .join(', ');
+  ngAfterViewInit(): void {
+    // No-op; kept for the lifecycle hook to exist if it becomes useful.
   }
 
   selectPreset(preset: Preset): void {
     this.selectedPresetStore.select(preset);
+  }
+
+  onBlockSelected(position: number): void {
+    this.selectedBlockIndex.set(position);
   }
 
   private async loadPresets(): Promise<void> {
