@@ -10,41 +10,6 @@ import type { PedalConnectionState } from '../../midi/pedal-connection';
 import type { Preset } from '../../midi/preset';
 
 const esTranslations = {
-  auth: {
-    login_title: 'Iniciar sesión',
-    register_title: 'Crear cuenta',
-    email: 'Correo',
-    password: 'Contraseña',
-    login_submit: 'Entrar',
-    register_submit: 'Crear cuenta',
-    no_account: '¿No tienes cuenta?',
-    have_account: '¿Ya tienes cuenta?',
-    register_link: 'Regístrate',
-    login_link: 'Inicia sesión',
-    login_error: 'Correo o contraseña incorrectos',
-    register_error: 'No se pudo crear la cuenta',
-  },
-  songs: {
-    title: 'Mis canciones',
-    placeholder: 'Aquí vivirá tu librería de presets guardados.',
-  },
-  shared: {
-    dark_mode: 'Oscuro',
-    light_mode: 'Claro',
-  },
-  pedal: {
-    title: 'Conexión del pedal',
-    connect: 'Conectar al GP-5',
-    state_not_connected: 'No conectado',
-    state_connecting: 'Conectando...',
-    state_connected: 'Conectado',
-    state_error: 'Error de conexión',
-    unsupported: 'Tu navegador no soporta la Web MIDI API. Por favor usa Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
-    midi_access_denied: 'Se denegó el acceso MIDI. Por favor permite el acceso MIDI e inténtalo de nuevo.',
-    gp5_not_found: 'No se detectó el pedal GP-5. Por favor conéctalo por USB e inténtalo de nuevo.',
-    unknown: 'No se pudo conectar con el pedal.',
-    view_presets: 'Ver presets',
-  },
   presetBrowser: {
     title: 'Presets del pedal',
     not_connected: 'Conecta el pedal para ver sus presets.',
@@ -57,6 +22,39 @@ const esTranslations = {
     read_timeout: 'La lectura de presets ha expirado.',
     invalid_response: 'Respuesta MIDI no válida.',
     unknown: 'No se pudieron leer los presets.',
+  },
+  chainBoard: {
+    title: 'Cadena de señal',
+    close: 'Cerrar',
+    browse: 'Ver todos los efectos de {{category}}',
+    active: 'En este preset',
+    state_on: 'Activo',
+    state_off: 'Bypass',
+    unknown: 'No reconocido',
+    unknown_short: '?',
+    unknown_module: 'No se pudo identificar este módulo. Abajo están sus valores sin procesar.',
+    mapping_hypothesis: 'Hipótesis de mapeo de parámetros.',
+    manual_page: 'Manual p. {{page}}',
+    parameters: 'Parámetros',
+    block_aria: '{{category}}: {{fx}}, {{state}}',
+    no_parameters: 'Este bloque no tiene parámetros guardados.',
+    categories: {
+      c0: 'Reducción de ruido',
+      c1: 'Pre-efectos',
+      c2: 'Distorsión',
+      c3: 'SnapTone',
+      c4: 'Amplificador',
+      c5: 'Gabinete',
+      c6: 'Ecualizador',
+      c7: 'Modulación',
+      c8: 'Delay',
+      c9: 'Reverb',
+    },
+  },
+  gp5Fx: {
+    c0: { f0: 'Compuerta' },
+    c1: { f0: 'Compresor clásico' },
+    c4: { f0: 'Amplificador tweed clásico' },
   },
 };
 
@@ -90,10 +88,18 @@ class FakePedal {
     }
     return Promise.resolve(this.resolveWith);
   }
+
+  async writePreset(_preset: Preset): Promise<void> {
+    throw new Error('writePreset should not be called from the preset browser page');
+  }
 }
 
 class FakeSelectedPresetStore {
-  select = vi.fn();
+  private readonly signal = signal<Preset | null>(null);
+  readonly selectedPreset = this.signal.asReadonly();
+  select = vi.fn((preset: Preset): void => {
+    this.signal.set(preset);
+  });
 }
 
 function setup(
@@ -131,7 +137,6 @@ describe('PresetBrowserPage', () => {
   it('renders the unsupported message and never calls readPresets() when isSupported() is false (R3)', () => {
     const fake = new FakePedal();
     fake.isSupportedResult = false;
-    // If unsupported branch were ever taken by mistake, this would resolve — guard it.
     fake.resolveWith = 'pending';
     const httpMock = setup(fake);
 
@@ -224,16 +229,16 @@ describe('PresetBrowserPage', () => {
     expect(rows[2].textContent).toContain('Lead');
   });
 
-  it('renders only enabled moduleTypes, comma-separated, in chain order (R9)', async () => {
+  it('renders one strip block per chain entry on the row (R15, R33)', async () => {
     const fixture: Preset[] = [
       {
         slot: 1,
         name: 'Mixed',
         chain: [
-          { moduleType: 'comp', enabled: true, parameters: {} },
-          { moduleType: 'drive', enabled: false, parameters: {} },
-          { moduleType: 'amp', enabled: true, parameters: {} },
-          { moduleType: 'cab', enabled: true, parameters: {} },
+          { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat4_fx0', enabled: false, parameters: {} },
+          { moduleType: 'cat8_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat5_fx0', enabled: true, parameters: {} },
         ],
       },
     ];
@@ -249,21 +254,50 @@ describe('PresetBrowserPage', () => {
     await Promise.resolve();
     component.detectChanges();
 
-    const chain = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="preset-chain-1"]',
-    ) as HTMLElement | null;
-    expect(chain).not.toBeNull();
-    expect(chain?.textContent?.trim()).toBe('comp, amp, cab');
+    const row = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="preset-row-1"]',
+    ) as HTMLElement;
+    const stripBlocks = row.querySelectorAll('[data-testid^="strip-block-"]');
+    expect(stripBlocks).toHaveLength(4);
+    expect(stripBlocks[0].getAttribute('data-testid')).toBe('strip-block-0');
+    expect(stripBlocks[3].getAttribute('data-testid')).toBe('strip-block-3');
   });
 
-  it('renders the empty-chain placeholder when no chain entry is enabled (R10)', async () => {
+  it('renders the empty-chain placeholder when the chain array is empty (R21)', async () => {
     const fixture: Preset[] = [
       {
         slot: 2,
         name: 'Empty',
+        chain: [],
+      },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const chainCell = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="preset-chain-2"]',
+    ) as HTMLElement | null;
+    expect(chainCell?.textContent?.trim()).toBe('(cadena vacía)');
+  });
+
+  it('does not render any cat*/fx* text after selecting a preset and opening every block (R20)', async () => {
+    const fixture: Preset[] = [
+      {
+        slot: 1,
+        name: 'Mixed',
         chain: [
-          { moduleType: 'comp', enabled: false, parameters: {} },
-          { moduleType: 'amp', enabled: false, parameters: {} },
+          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'empty', enabled: false, parameters: { p0: 1 } },
+          { moduleType: 'cat99_fx0', enabled: true, parameters: { p0: 1 } },
         ],
       },
     ];
@@ -279,10 +313,203 @@ describe('PresetBrowserPage', () => {
     await Promise.resolve();
     component.detectChanges();
 
-    const chain = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="preset-chain-2"]',
-    ) as HTMLElement | null;
-    expect(chain?.textContent?.trim()).toBe('(cadena vacía)');
+    // Select the preset
+    const selectBtn = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-1"]',
+    ) as HTMLButtonElement;
+    selectBtn.click();
+    component.detectChanges();
+
+    // Open each block in turn and verify the page text never matches the
+    // raw codec pattern.
+    const board = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="chain-board"]',
+    ) as HTMLElement;
+    const blocks = board.querySelectorAll('[data-testid^="board-block-"]');
+    for (const block of Array.from(blocks)) {
+      (block as HTMLButtonElement).click();
+      component.detectChanges();
+    }
+
+    const rawPattern = /cat[0-9a-f]+_fx[0-9a-f]+/i;
+    const all = (component.nativeElement as HTMLElement).textContent ?? '';
+    expect(all).not.toMatch(rawPattern);
+
+    // The 'empty' entry's strip block shows ? (unknown_short) not the word
+    // "empty".
+    const stripBlocks = (component.nativeElement as HTMLElement).querySelectorAll(
+      '[data-testid^="strip-block-"]',
+    );
+    expect(stripBlocks[1].textContent?.trim()).toBe('?');
+  });
+
+  it('does not render a chain board before a preset is selected (R23)', async () => {
+    const fixture: Preset[] = [
+      { slot: 1, name: 'A', chain: [{ moduleType: 'cat1_fx0', enabled: true, parameters: {} }] },
+      { slot: 2, name: 'B', chain: [{ moduleType: 'cat1_fx0', enabled: true, parameters: {} }] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="board-section"]')).toBeNull();
+  });
+
+  it('renders the board with the selected preset\'s blocks after clicking Select (R22)', async () => {
+    const fixture: Preset[] = [
+      {
+        slot: 1,
+        name: 'Alpha',
+        chain: [
+          { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
+        ],
+      },
+      {
+        slot: 2,
+        name: 'Beta',
+        chain: [{ moduleType: 'cat8_fx0', enabled: true, parameters: {} }],
+      },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeStore = new FakeSelectedPresetStore();
+    const httpMock = setup(fake, fakeStore);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    // Click Select on slot 2 (Beta, one block).
+    const selectBtn = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-2"]',
+    ) as HTMLButtonElement;
+    selectBtn.click();
+    component.detectChanges();
+
+    const board = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="chain-board"]',
+    ) as HTMLElement;
+    expect(board).not.toBeNull();
+    const boardBlocks = board.querySelectorAll('[data-testid^="board-block-"]');
+    expect(boardBlocks).toHaveLength(1);
+    expect(boardBlocks[0].getAttribute('data-testid')).toBe('board-block-0');
+  });
+
+  it('clicking a board block opens the detail panel; selecting another preset closes it (R24, R25)', async () => {
+    const fixture: Preset[] = [
+      {
+        slot: 1,
+        name: 'A',
+        chain: [
+          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+        ],
+      },
+      {
+        slot: 2,
+        name: 'B',
+        chain: [{ moduleType: 'cat8_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } }],
+      },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    // Select A.
+    (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-1"]',
+    )?.dispatchEvent(new Event('click'));
+    component.detectChanges();
+
+    // Open block 1 of A.
+    const boardA = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="chain-board"]',
+    ) as HTMLElement;
+    (boardA.querySelector('[data-testid="board-block-1"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).not.toBeNull();
+
+    // Select B — detail panel should close (R25).
+    (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-2"]',
+    )?.dispatchEvent(new Event('click'));
+    component.detectChanges();
+    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
+  });
+
+  it('does not call writePreset and calls readPresets exactly once across all interactions (R36, R37)', async () => {
+    const fixture: Preset[] = [
+      {
+        slot: 1,
+        name: 'A',
+        chain: [
+          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+          { moduleType: 'cat8_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
+        ],
+      },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const readSpy = vi.spyOn(fake, 'readPresets');
+    const writeSpy = vi.spyOn(fake, 'writePreset');
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    // Select the preset.
+    (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-1"]',
+    )?.dispatchEvent(new Event('click'));
+    component.detectChanges();
+
+    const board = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="chain-board"]',
+    ) as HTMLElement;
+    // Click every board block.
+    for (const block of Array.from(board.querySelectorAll('[data-testid^="board-block-"]'))) {
+      (block as HTMLButtonElement).click();
+      component.detectChanges();
+    }
+
+    // Toggle the FX browser open and closed.
+    const browseToggle = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="browse-toggle"]',
+    ) as HTMLButtonElement;
+    browseToggle.click();
+    component.detectChanges();
+    browseToggle.click();
+    component.detectChanges();
+
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(readSpy).toHaveBeenCalledTimes(1);
   });
 
   it('renders the mapped error message and no preset rows when readPresets() rejects with a known key (R11)', async () => {
@@ -295,8 +522,6 @@ describe('PresetBrowserPage', () => {
     component.detectChanges();
     flushI18n(httpMock);
     component.detectChanges();
-    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
-    // and another to flush the .catch handler in loadPresets().
     await Promise.resolve();
     await Promise.resolve();
     component.detectChanges();
@@ -319,8 +544,6 @@ describe('PresetBrowserPage', () => {
     component.detectChanges();
     flushI18n(httpMock);
     component.detectChanges();
-    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
-    // and another to flush the .catch handler in loadPresets().
     await Promise.resolve();
     await Promise.resolve();
     component.detectChanges();

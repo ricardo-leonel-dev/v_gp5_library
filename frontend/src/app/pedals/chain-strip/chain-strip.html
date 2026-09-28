@@ -1,0 +1,16 @@
+<div *transloco="let t" class="flex w-full gap-0.5" data-testid="chain-strip">
+  @for (block of blocks(); track block.view.position) {
+    <span
+      class="{{ block.cls }}"
+      [attr.data-testid]="'strip-block-' + block.view.position"
+      [attr.data-enabled]="block.view.enabled ? 'true' : 'false'"
+      [attr.aria-label]="t('chainBoard.block_aria', block.aria)"
+    >
+      @if (block.view.kind === 'resolved') {
+        {{ displayCategoryCode(block.view.categoryCode) }}
+      } @else {
+        {{ t('chainBoard.unknown_short') }}
+      }
+    </span>
+  }
+</div>
