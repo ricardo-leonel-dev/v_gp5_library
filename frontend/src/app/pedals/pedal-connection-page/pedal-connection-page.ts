@@ -1,4 +1,5 @@
 import { Component, computed, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { TranslocoDirective } from '@jsverse/transloco';
 import type { PedalConnectionState } from '../../midi/pedal-connection';
 import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
@@ -12,7 +13,7 @@ const STATE_LABEL_KEYS: Record<PedalConnectionState, string> = {
 
 @Component({
   selector: 'app-pedal-connection-page',
-  imports: [TranslocoDirective],
+  imports: [RouterLink, TranslocoDirective],
   templateUrl: './pedal-connection-page.html',
 })
 export class PedalConnectionPage {
