@@ -6,6 +6,7 @@ import {
   READ_STEP_TIMEOUT_MS,
 } from './web-midi-pedal-connection';
 import { SYSEX_PRESET_CODEC, type SysexPresetCodec, type SysexDecodeResult } from './sysex-preset-codec';
+import { Gp5SysexPresetCodec } from './gp5-sysex-preset-codec';
 import type { Preset } from './preset';
 
 interface FakePort {
@@ -773,4 +774,151 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
     const presets = await pending;
     expect(presets).toEqual([preset]);
   });
+});
+
+// Full read-flow regression guard (feature 13): wires the REAL
+// Gp5SysexPresetCodec (not FakeCodec/RoundTripCodec above) into
+// WebMidiPedalConnection and drives it with wire-level SysEx bytes shaped
+// like the real hardware capture that found the decodeIncomingMessage bug —
+// chunked into 19-byte frames, a real per-transfer chunk count at the
+// decoded[1] position (106 for the names blob, 25 for each body), and real
+// echo bytes. FakeCodec-based tests above stub decodeIncomingMessage
+// entirely, so they could not have caught this bug; this test exercises the
+// actual byte-level decode logic through the full names + 100-slot
+// Program-Change-and-settle-sequenced (feature 12) read orchestration.
+describe('WebMidiPedalConnection + real Gp5SysexPresetCodec — full read flow (feature 13)', () => {
+  function crc8(bytes: number[]): number {
+    let c = 0;
+    for (const b of bytes) {
+      c ^= b;
+      for (let i = 0; i < 8; i++) {
+        c = c & 0x80 ? ((c << 1) ^ 0x07) & 0xff : (c << 1) & 0xff;
+      }
+    }
+    return c;
+  }
+
+  function nibEncode(buf: number[]): number[] {
+    const out: number[] = [];
+    for (const b of buf) out.push((b >> 4) & 0x0f, b & 0x0f);
+    return out;
+  }
+
+  function toWire(buf: number[]): Uint8Array {
+    return new Uint8Array([0xf0, ...nibEncode(buf), 0xf7]);
+  }
+
+  const CATSEL = 0x12;
+  const NAME_SEL = 0x40;
+  const BODY_SEL = 0x41;
+  const SLOT_COUNT = 100;
+  const NAME_LEN = 16;
+  const GP5_BODY_LEN = 466;
+  const ECHO_LEN = 2;
+  const NAMES_BLOB_LEN = ECHO_LEN + SLOT_COUNT * 20;
+  const BODY_BLOB_LEN = ECHO_LEN + GP5_BODY_LEN;
+
+  const REC_MODELS_MAGIC = [0x03, 0x30, 0x28, 0x00];
+  const REC_BYPASS_MAGIC = [0x01, 0x30, 0x04, 0x00];
+  const REC_ORDER_MAGIC = [0x02, 0x30, 0x0a, 0x00];
+  const REC_PARAMS_MAGIC = [0x04, 0x30, 0x40, 0x01];
+
+  function buildBody(): Uint8Array {
+    const body = new Uint8Array(GP5_BODY_LEN);
+    body.set(REC_MODELS_MAGIC, 0);
+    body.set(REC_BYPASS_MAGIC, 44);
+    body.set(REC_ORDER_MAGIC, 52);
+    for (let k = 0; k < 10; k++) body[56 + k] = k;
+    body.set(REC_PARAMS_MAGIC, 66);
+    const dv = new DataView(body.buffer, 70, 320);
+    for (let k = 0; k < 80; k++) dv.setFloat32(k * 4, k / 10, true);
+    return body;
+  }
+
+  function buildNamesBlob(names: Map<number, string>): Uint8Array {
+    const blob = new Uint8Array(NAMES_BLOB_LEN);
+    blob[0] = CATSEL;
+    blob[1] = NAME_SEL;
+    let i = 2;
+    for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      const dv = new DataView(blob.buffer, i, 4);
+      dv.setUint32(0, slot, true);
+      const nameBytes = new TextEncoder().encode(names.get(slot) ?? '');
+      for (let j = 0; j < NAME_LEN; j++) {
+        blob[i + 4 + j] = j < nameBytes.length ? nameBytes[j] : 0;
+      }
+      i += 20;
+    }
+    return blob;
+  }
+
+  function buildBodyBlob(body: Uint8Array): Uint8Array {
+    const blob = new Uint8Array(BODY_BLOB_LEN);
+    blob[0] = CATSEL;
+    blob[1] = BODY_SEL;
+    blob.set(body, ECHO_LEN);
+    return blob;
+  }
+
+  // Every frame in a transfer carries the SAME chunkCount at decoded[1] — the
+  // total number of chunks for that transfer — matching real hardware. Never
+  // CATSEL: this is exactly the field feature 13 fixed the decoder to ignore
+  // as a gate.
+  function chunkForReassembly(blob: Uint8Array): Uint8Array[] {
+    const totalChunks = Math.ceil(blob.length / 19);
+    const frames: Uint8Array[] = [];
+    let i = 0;
+    let index = 0;
+    while (i < blob.length) {
+      const end = Math.min(i + 19, blob.length);
+      const payload = Array.from(blob.subarray(i, end));
+      const body = [0, totalChunks, index, payload.length, ...payload];
+      body[0] = crc8(body.slice(1));
+      frames.push(toWire(body));
+      i = end;
+      index++;
+    }
+    return frames;
+  }
+
+  test('names phase + 100 Program-Change-and-settle-sequenced body reads decode correctly end-to-end', async () => {
+    vi.useFakeTimers();
+
+    const codec = new Gp5SysexPresetCodec();
+    const { connection, access } = await connectAndSetup(codec as unknown as FakeCodec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const names = new Map<number, string>();
+    for (let s = 0; s < SLOT_COUNT; s++) names.set(s, `preset${s}`);
+    const namesFrames = chunkForReassembly(buildNamesBlob(names));
+    // Matches the real hardware capture's names-phase chunk count exactly.
+    expect(namesFrames.length).toBe(106);
+
+    const bodyFrames = chunkForReassembly(buildBodyBlob(buildBody()));
+    // Matches the real hardware capture's per-slot body chunk count exactly.
+    expect(bodyFrames.length).toBe(25);
+
+    const pending = connection.readPresets();
+
+    await fireMessages(inputPort, namesFrames);
+
+    for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+      await fireMessages(inputPort, bodyFrames);
+    }
+
+    const presets = await pending;
+
+    expect(presets).toHaveLength(SLOT_COUNT);
+    expect(presets[0].slot).toBe(0);
+    expect(presets[0].name).toBe('preset0');
+    expect(presets[SLOT_COUNT - 1].slot).toBe(SLOT_COUNT - 1);
+    expect(presets[SLOT_COUNT - 1].name).toBe(`preset${SLOT_COUNT - 1}`);
+    // Every slot's body decoded the same fixture body — spot-check the
+    // magic-marker-derived fields came through the full stack intact.
+    for (const preset of presets) {
+      expect(preset.chain).toHaveLength(10);
+      expect(preset.chain[0].enabled).toBe(false); // bypass mask was all zeros
+    }
+  }, 20000);
 });

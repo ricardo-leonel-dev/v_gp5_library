@@ -40,13 +40,19 @@ function fromWire(wire: Uint8Array): Uint8Array {
   return out;
 }
 
+// `chunkCount` mirrors decoded[1] as confirmed against real hardware: the
+// TOTAL number of reply chunks for the transfer this frame belongs to (e.g.
+// 106 for a 100-name blob, 25 for one slot's body) -- never a fixed command
+// byte like the old (incorrect) CATSEL assumption. Defaults to a value that
+// is deliberately neither CATSEL (0x12) nor any other small constant, so
+// tests that don't care about this field still exercise the real shape.
 function buildReply(opts: {
-  selector: number;
+  chunkCount?: number;
   index: number;
   payload: number[];
 }): Uint8Array {
   const len = opts.payload.length;
-  const body = [0, 0x12, opts.index, len, ...opts.payload];
+  const body = [0, opts.chunkCount ?? 0x6a, opts.index, len, ...opts.payload];
   body[0] = crc8(body.slice(1));
   return toWire(body);
 }
@@ -84,14 +90,24 @@ function buildBody(): Uint8Array {
 }
 
 // Chunk a blob into 19-byte pieces (same as the codec writes) — used to
-// synthesize multi-frame replies for the decoder.
+// synthesize multi-frame replies for the decoder. Every frame in the
+// transfer carries the SAME chunkCount value at decoded[1] (the total number
+// of chunks for this transfer), matching real hardware — e.g. a 2002-byte
+// names blob chunks into 106 frames, each with chunkCount=106.
 function chunkForReassembly(blob: Uint8Array): Uint8Array[] {
+  const totalChunks = Math.ceil(blob.length / 19);
   const frames: Uint8Array[] = [];
   let i = 0;
   let index = 0;
   while (i < blob.length) {
     const end = Math.min(i + 19, blob.length);
-    frames.push(buildReply({ selector: 0, index, payload: Array.from(blob.subarray(i, end)) }));
+    frames.push(
+      buildReply({
+        chunkCount: totalChunks,
+        index,
+        payload: Array.from(blob.subarray(i, end)),
+      }),
+    );
     i = end;
     index++;
   }
@@ -244,7 +260,9 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — framing and CRC', () => 
 
   test('returns ignored when no read-all-request is active and the frame has a valid CRC', () => {
     const codec = new Gp5SysexPresetCodec();
-    const validReply = buildReply({ selector: 0, index: 0, payload: [] });
+    // chunkCount=106 here is deliberately a real hardware-shaped value, not
+    // CATSEL — proves acceptance no longer depends on decoded[1] at all.
+    const validReply = buildReply({ chunkCount: 106, index: 0, payload: [] });
     const result = codec.decodeIncomingMessage(validReply);
     expect(result).toEqual({ kind: 'ignored' });
   });
@@ -269,6 +287,56 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — framing and CRC', () => 
     const corrupted = new Uint8Array(req);
     corrupted[corrupted.length - 2] = 0xff;
     const result = codec.decodeIncomingMessage(corrupted);
+    expect(result.kind).toBe('invalid');
+    if (result.kind === 'invalid') {
+      expect(result.reason).toBe('bad crc');
+    }
+  });
+});
+
+describe('Gp5SysexPresetCodec.decodeIncomingMessage — chunk-count header, not CATSEL (feature 13)', () => {
+  test('names phase completes when decoded[1] carries a real chunk-count value (106), never CATSEL', () => {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+
+    const names = new Map<number, string>([[0, 'TL DLX AMP'], [1, 'RA METAL1']]);
+    const frames = chunkForReassembly(buildNamesBlob(names));
+    // Real hardware sent exactly 106 chunks for the 100-name blob; assert the
+    // fixture actually exercises that shape (and that it is not CATSEL).
+    expect(frames.length).toBe(106);
+
+    let lastResult: SysexDecodeResult = { kind: 'ignored' };
+    for (const f of frames) lastResult = codec.decodeIncomingMessage(f);
+    expect(lastResult).toEqual({ kind: 'ignored' });
+    expect(codec.isAwaitingNames()).toBe(false);
+  });
+
+  test('body phase decodes a Preset when decoded[1] carries a real chunk-count value (25), never CATSEL', () => {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+    for (const f of chunkForReassembly(buildNamesBlob(new Map([[0, 'clean']])))) {
+      codec.decodeIncomingMessage(f);
+    }
+
+    const frames = chunkForReassembly(buildBodyBlob(buildBody()));
+    // Real hardware sent exactly 25 chunks for one slot's 466-byte body.
+    expect(frames.length).toBe(25);
+
+    let lastResult: SysexDecodeResult = { kind: 'ignored' };
+    for (const f of frames) lastResult = codec.decodeIncomingMessage(f);
+    expect(lastResult.kind).toBe('preset');
+    if (lastResult.kind === 'preset') {
+      expect(lastResult.preset.slot).toBe(0);
+      expect(lastResult.preset.name).toBe('clean');
+    }
+  });
+
+  test('a CRC-invalid message is still rejected as invalid, regardless of the chunk-count value', () => {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+    const body = [0, 106, 0, 2, 0xaa, 0xbb];
+    body[0] = crc8(body.slice(1)) ^ 0xff; // deliberately wrong CRC
+    const result = codec.decodeIncomingMessage(toWire(body));
     expect(result.kind).toBe('invalid');
     if (result.kind === 'invalid') {
       expect(result.reason).toBe('bad crc');
