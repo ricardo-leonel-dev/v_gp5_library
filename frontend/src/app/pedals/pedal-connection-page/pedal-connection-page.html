@@ -18,6 +18,16 @@
       {{ t('pedal.' + stateLabelKey()) }}
     </p>
 
+    @if (connectionState() === 'connected') {
+      <a
+        routerLink="/pedal/presets"
+        data-testid="presets-link"
+        class="mt-4 inline-block text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+      >
+        {{ t('pedal.view_presets') }}
+      </a>
+    }
+
     @if (error()) {
       <p class="mt-2 text-sm text-red-600 dark:text-red-400" data-testid="connection-error">
         {{ t('pedal.' + error()) }}

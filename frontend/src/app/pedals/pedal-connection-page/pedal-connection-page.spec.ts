@@ -40,6 +40,7 @@ const esTranslations = {
     midi_access_denied: 'Se denegó el acceso MIDI. Por favor permite el acceso MIDI e inténtalo de nuevo.',
     gp5_not_found: 'No se detectó el pedal GP-5. Por favor conéctalo por USB e inténtalo de nuevo.',
     unknown: 'No se pudo conectar con el pedal.',
+    view_presets: 'Ver presets',
   },
 };
 
@@ -160,5 +161,37 @@ describe('PedalConnectionPage', () => {
     expect(error).not.toBeNull();
     expect(error?.className).toContain('text-red-600');
     expect(error?.textContent).toContain('No se detectó el pedal GP-5');
+  });
+
+  it('does not render the presets link while not connected (R14)', () => {
+    const fake = new FakePedal();
+    const httpMock = setup(fake);
+
+    const fixture = TestBed.createComponent(PedalConnectionPage);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('[data-testid="presets-link"]')).toBeNull();
+  });
+
+  it('renders the presets link pointing at /pedal/presets once connected (R14)', async () => {
+    const fake = new FakePedal();
+    const httpMock = setup(fake);
+
+    const fixture = TestBed.createComponent(PedalConnectionPage);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector('[data-testid="connect-button"]') as HTMLButtonElement;
+    button.click();
+    await fixture.componentInstance.connect();
+    fixture.detectChanges();
+
+    const link = fixture.nativeElement.querySelector('[data-testid="presets-link"]') as HTMLAnchorElement | null;
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('/pedal/presets');
+    expect(link?.textContent).toContain('Ver presets');
   });
 });

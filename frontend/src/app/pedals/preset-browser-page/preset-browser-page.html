@@ -1,0 +1,57 @@
+<div *transloco="let t" class="mx-auto max-w-3xl px-4 py-10">
+  <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ t('presetBrowser.title') }}</h1>
+
+  @if (!supported) {
+    <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="unsupported-message">
+      {{ t('pedal.unsupported') }}
+    </p>
+  } @else if (connectionState() !== 'connected') {
+    <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="not-connected-message">
+      {{ t('presetBrowser.not_connected') }}
+    </p>
+  } @else {
+    @if (loadState() === 'loading') {
+      <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="loading">
+        {{ t('presetBrowser.loading') }}
+      </p>
+    }
+    @if (loadState() === 'error') {
+      <p class="mt-4 text-sm text-red-600 dark:text-red-400" data-testid="preset-error">
+        {{ t('presetBrowser.' + error()) }}
+      </p>
+    }
+    @if (loadState() === 'loaded') {
+      @if (presets().length === 0) {
+        <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="no-presets">
+          {{ t('presetBrowser.no_presets') }}
+        </p>
+      } @else {
+        <ul class="mt-4 divide-y divide-slate-200 dark:divide-slate-700">
+          @for (preset of presets(); track preset.slot) {
+            <li class="flex items-center justify-between py-3" [attr.data-testid]="'preset-row-' + preset.slot">
+              <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-slate-100">
+                  {{ preset.slot }} — {{ preset.name }}
+                </p>
+                <p
+                  class="text-xs text-slate-500 dark:text-slate-400"
+                  [attr.data-testid]="'preset-chain-' + preset.slot"
+                >
+                  {{ chainSummary(preset) || t('presetBrowser.empty_chain') }}
+                </p>
+              </div>
+              <button
+                type="button"
+                (click)="selectPreset(preset)"
+                [attr.data-testid]="'select-preset-' + preset.slot"
+                class="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+              >
+                {{ t('presetBrowser.select') }}
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    }
+  }
+</div>

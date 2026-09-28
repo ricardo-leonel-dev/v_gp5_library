@@ -31,6 +31,20 @@
     "unsupported": "Your browser does not support the Web MIDI API. Please use Chrome, Edge, Opera, Samsung Internet, or Firefox 108+.",
     "midi_access_denied": "MIDI access was denied. Please allow MIDI access and try again.",
     "gp5_not_found": "GP-5 pedal not detected. Please connect it via USB and try again.",
-    "unknown": "Could not connect to the pedal."
+    "unknown": "Could not connect to the pedal.",
+    "view_presets": "View presets"
+  },
+  "presetBrowser": {
+    "title": "Pedal presets",
+    "not_connected": "Connect the pedal to view its presets.",
+    "loading": "Loading presets...",
+    "no_presets": "No presets were found.",
+    "empty_chain": "(empty chain)",
+    "select": "Select",
+    "not_connected_error": "The pedal is not connected.",
+    "request_in_progress": "Another MIDI operation is already in progress.",
+    "read_timeout": "Reading presets timed out.",
+    "invalid_response": "Invalid MIDI response.",
+    "unknown": "Could not read the presets."
   }
 }
