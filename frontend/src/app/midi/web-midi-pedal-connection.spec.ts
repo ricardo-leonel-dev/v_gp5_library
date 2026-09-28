@@ -1,6 +1,10 @@
 import { describe, expect, test, vi, afterEach, beforeEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { WebMidiPedalConnection, READ_TIMEOUT_MS } from './web-midi-pedal-connection';
+import {
+  WebMidiPedalConnection,
+  READ_SETTLE_MS,
+  READ_STEP_TIMEOUT_MS,
+} from './web-midi-pedal-connection';
 import { SYSEX_PRESET_CODEC, type SysexPresetCodec, type SysexDecodeResult } from './sysex-preset-codec';
 import type { Preset } from './preset';
 
@@ -84,16 +88,45 @@ function fixturePreset(slot: number, name = `preset${slot}`): Preset {
   };
 }
 
+// A read-all dump, from the codec's point of view, is: one names request
+// message, then one body-request message per slot. FakeCodec mirrors that:
+// readMessageSets[0] is [namesMessage, ...bodyMessages]. isAwaitingNames()
+// starts true right after encodeReadAllRequest() and flips false once
+// decodeIncomingMessage has been called `namesCompleteAfterCalls` times —
+// this stands in for the real codec's names-blob-reassembly bookkeeping
+// without needing to fabricate real SysEx bytes in these orchestration tests.
 class FakeCodec implements SysexPresetCodec {
   readMessageSets: Uint8Array[][] = [];
   writeMessageSets: Uint8Array[][] = [];
   decodeResults: SysexDecodeResult[] = [];
+  programChangeCalls: number[] = [];
   encodeReadAllRequestCalls = 0;
   encodeWriteRequestCalls: Preset[] = [];
+  namesCompleteAfterCalls = 1;
+  // Decode results returned while still in the names phase (isAwaitingNames()
+  // true) — defaults to "ignored" (matching the real codec, which never
+  // returns anything else for a names-reply frame). Kept separate from
+  // decodeResults so a names-phase message can never accidentally consume a
+  // body-phase result meant for a later slot.
+  namesDecodeResults: SysexDecodeResult[] = [];
+
+  private namesCallCount = 0;
+  private awaitingNames = false;
 
   encodeReadAllRequest(): Uint8Array[] {
     this.encodeReadAllRequestCalls++;
+    this.awaitingNames = true;
+    this.namesCallCount = 0;
     return this.readMessageSets[this.encodeReadAllRequestCalls - 1] ?? [];
+  }
+
+  encodeProgramChange(slot: number): Uint8Array {
+    this.programChangeCalls.push(slot);
+    return new Uint8Array([0xc0, slot & 0x7f]);
+  }
+
+  isAwaitingNames(): boolean {
+    return this.awaitingNames;
   }
 
   encodeWriteRequest(preset: Preset): Uint8Array[] {
@@ -104,6 +137,14 @@ class FakeCodec implements SysexPresetCodec {
   }
 
   decodeIncomingMessage(_message: Uint8Array): SysexDecodeResult {
+    if (this.awaitingNames) {
+      const result = this.namesDecodeResults.shift() ?? { kind: 'ignored' };
+      this.namesCallCount++;
+      if (this.namesCallCount >= this.namesCompleteAfterCalls) {
+        this.awaitingNames = false;
+      }
+      return result;
+    }
     return this.decodeResults.shift() ?? { kind: 'ignored' };
   }
 }
@@ -147,6 +188,23 @@ async function fireMessages(input: FakePort, payloads: Uint8Array[]): Promise<vo
     const ev = { data } as unknown as MIDIMessageEvent;
     input.onmidimessage?.(ev);
   }
+}
+
+// Drives one full read-all dump against a FakeCodec configured with a names
+// message + one body-request message per fixture preset: fires the
+// names-complete message, advances the settle delay + fires the body-decode
+// message for each slot in turn. Assumes fake timers are active.
+async function driveFullRead(
+  pending: Promise<Preset[]>,
+  inputPort: FakePort,
+  slotCount: number,
+): Promise<Preset[]> {
+  await fireMessages(inputPort, [new Uint8Array([0xa0])]); // completes the names phase
+  for (let slot = 0; slot < slotCount; slot++) {
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]); // decodes this slot's body
+  }
+  return pending;
 }
 
 beforeEach(() => {
@@ -329,29 +387,29 @@ describe('WebMidiPedalConnection.readPresets / writePreset — connection guards
   });
 
   test('a second readPresets call rejects with "request_in_progress" while the first is pending (R5)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01])]];
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
     codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
     const { connection, access } = await connectAndSetup(codec);
     const inputPort = [...access.inputs.values()][0];
 
     const first = connection.readPresets();
     await expect(connection.readPresets()).rejects.toThrow('request_in_progress');
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
-    await first;
+    await driveFullRead(first, inputPort, 1);
   });
 
   test('writePreset rejects with "request_in_progress" while a read is pending (R5)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01])]];
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
     codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
     const { connection, access } = await connectAndSetup(codec);
     const inputPort = [...access.inputs.values()][0];
 
     const first = connection.readPresets();
     await expect(connection.writePreset(fixturePreset(0))).rejects.toThrow('request_in_progress');
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
-    await first;
+    await driveFullRead(first, inputPort, 1);
   });
 
   test('readPresets rejects with "request_in_progress" while a write is pending (R5)', async () => {
@@ -366,57 +424,118 @@ describe('WebMidiPedalConnection.readPresets / writePreset — connection guards
 });
 
 describe('WebMidiPedalConnection.readPresets — orchestration', () => {
-  test('sends every message from encodeReadAllRequest in order via output.send (R6)', async () => {
+  test('sends the names request, then a Program Change + body request per slot, in slot order (acceptance: PC before each body request)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [
       [
-        new Uint8Array([0x10, 0x11]),
-        new Uint8Array([0x20, 0x21]),
-        new Uint8Array([0x30, 0x31]),
+        new Uint8Array([0xaa, 0xaa]), // names request
+        new Uint8Array([0xbb, 0x00]), // body request, slot 0
+        new Uint8Array([0xbb, 0x01]), // body request, slot 1
+        new Uint8Array([0xbb, 0x02]), // body request, slot 2
       ],
     ];
-    codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
+    codec.decodeResults = [
+      { kind: 'preset', preset: fixturePreset(0), isLast: false },
+      { kind: 'preset', preset: fixturePreset(1), isLast: false },
+      { kind: 'preset', preset: fixturePreset(2), isLast: true },
+    ];
     const { connection, access } = await connectAndSetup(codec);
-
     const inputPort = [...access.inputs.values()][0];
-    const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
-    await pending;
-
     const outputPort = [...access.outputs.values()][0];
-    expect(outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array))).toEqual([
-      [0x10, 0x11],
-      [0x20, 0x21],
-      [0x30, 0x31],
+
+    const pending = connection.readPresets();
+    const presets = await driveFullRead(pending, inputPort, 3);
+
+    expect(presets.map((p) => p.slot)).toEqual([0, 1, 2]);
+    expect(codec.programChangeCalls).toEqual([0, 1, 2]);
+
+    const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
+    expect(sent).toEqual([
+      [0xaa, 0xaa], // names request first
+      [0xc0, 0x00], // Program Change, slot 0
+      [0xbb, 0x00], // body request, slot 0 (only after PC + settle)
+      [0xc0, 0x01], // Program Change, slot 1
+      [0xbb, 0x01], // body request, slot 1
+      [0xc0, 0x02], // Program Change, slot 2
+      [0xbb, 0x02], // body request, slot 2
     ]);
   });
 
-  test('accumulates presets in the order the messages decode, resolving on isLast (R7, R8)', async () => {
+  test('does not send any Program Change until the names phase completes', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01])]];
+    codec.namesCompleteAfterCalls = 3; // names phase spans 3 incoming chunks
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+
+    const pending = connection.readPresets();
+
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
+    expect(codec.programChangeCalls).toEqual([]);
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
+    expect(codec.programChangeCalls).toEqual([]);
+
+    // Third chunk finishes the names phase — only now does the first PC go out.
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
+    expect(codec.programChangeCalls).toEqual([0]);
+
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]);
+    await pending;
+  });
+
+  test('waits READ_SETTLE_MS (~300ms) after the Program Change before sending the body request', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+
+    const pending = connection.readPresets();
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2); // names request + PC(0)
+
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS - 1);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2); // body request not sent yet
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3); // body request sent once settled
+
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]);
+    await pending;
+  });
+
+  test('accumulates presets in the order the slots are decoded, resolving after the last slot (R7, R8)', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.readMessageSets = [
+      [new Uint8Array([0x01]), new Uint8Array([0x02]), new Uint8Array([0x03])],
+    ];
     codec.decodeResults = [
       { kind: 'preset', preset: fixturePreset(0, 'first'), isLast: false },
-      { kind: 'preset', preset: fixturePreset(1, 'second'), isLast: false },
-      { kind: 'preset', preset: fixturePreset(2, 'third'), isLast: true },
+      { kind: 'preset', preset: fixturePreset(1, 'second'), isLast: true },
     ];
     const { connection, access } = await connectAndSetup(codec);
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [
-      new Uint8Array([0xa1]),
-      new Uint8Array([0xa2]),
-      new Uint8Array([0xa3]),
-    ]);
+    const presets = await driveFullRead(pending, inputPort, 2);
 
-    const presets = await pending;
-    expect(presets.map((p) => p.name)).toEqual(['first', 'second', 'third']);
-    expect(presets.map((p) => p.slot)).toEqual([0, 1, 2]);
+    expect(presets.map((p) => p.name)).toEqual(['first', 'second']);
+    expect(presets.map((p) => p.slot)).toEqual([0, 1]);
   });
 
-  test('ignores "ignored" decode results without affecting the pending call (R11)', async () => {
+  test('ignores "ignored" decode results without affecting the pending call, extending the per-step deadline instead (R11)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01])]];
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
     codec.decodeResults = [
       { kind: 'ignored' },
       { kind: 'ignored' },
@@ -426,44 +545,132 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
     await fireMessages(inputPort, [
-      new Uint8Array([0xa0]),
       new Uint8Array([0xa1]),
       new Uint8Array([0xa2]),
+      new Uint8Array([0xa3]),
     ]);
 
     const presets = await pending;
     expect(presets).toEqual([fixturePreset(0, 'only')]);
   });
 
-  test('rejects with "invalid_response" when a decode result is "invalid" (R10)', async () => {
+  test('rejects with "invalid_response" when a decode result is "invalid" during a body phase (R10)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01])]];
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
     codec.decodeResults = [{ kind: 'invalid', reason: 'bad crc' }];
     const { connection, access } = await connectAndSetup(codec);
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
+    pending.catch(() => {});
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]);
 
     await expect(pending).rejects.toThrow('invalid_response');
   });
 
-  test('rejects with "read_timeout" when no isLast message arrives within READ_TIMEOUT_MS (R9)', async () => {
+  test('rejects with "invalid_response" when a decode result is "invalid" during the names phase', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01])]];
-    codec.decodeResults = [{ kind: 'ignored' }];
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    codec.namesDecodeResults = [{ kind: 'invalid', reason: 'bad crc' }];
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const pending = connection.readPresets();
+    pending.catch(() => {});
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
+
+    await expect(pending).rejects.toThrow('invalid_response');
+    expect(codec.programChangeCalls).toEqual([]); // never reached the body phase
+  });
+
+  test('rejects with "read_timeout" when the names phase never completes within READ_STEP_TIMEOUT_MS', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.namesCompleteAfterCalls = Infinity; // never signals names-complete
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
     const { connection } = await connectAndSetup(codec);
 
     const pending = connection.readPresets();
-    // Pre-attach a no-op handler so the timer-driven rejection (which fires
-    // synchronously inside advanceTimersByTimeAsync) doesn't trip the
-    // unhandled-rejection warning before expect.rejects attaches its handler.
     pending.catch(() => {});
-    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS + 1);
+    await vi.advanceTimersByTimeAsync(READ_STEP_TIMEOUT_MS + 1);
 
     await expect(pending).rejects.toThrow('read_timeout');
+  });
+
+  test('a stalled slot still times out per-step (R9), instead of waiting for one global 100-slot deadline', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    // No decode result queued for the body phase — the slot 0 body request
+    // never gets a matching reply, so decodeIncomingMessage falls back to
+    // { kind: 'ignored' } forever.
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const pending = connection.readPresets();
+    pending.catch(() => {});
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // PC + settle, body request sent
+
+    // The per-step deadline for this stalled slot fires even though the
+    // names phase + settle only consumed READ_SETTLE_MS (well under the
+    // step budget) — this is the per-slot deadline, not a global one.
+    await vi.advanceTimersByTimeAsync(READ_STEP_TIMEOUT_MS + 1);
+
+    await expect(pending).rejects.toThrow('read_timeout');
+  });
+
+  test('the per-step deadline resets on every chunk received, so a slow multi-chunk body does not time out (R9 extends on progress)', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    codec.decodeResults = [
+      { kind: 'ignored' },
+      { kind: 'ignored' },
+      { kind: 'preset', preset: fixturePreset(0), isLast: true },
+    ];
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const pending = connection.readPresets();
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request sent
+
+    // Each chunk arrives just under the per-step deadline, resetting it —
+    // the cumulative time across all three chunks exceeds READ_STEP_TIMEOUT_MS,
+    // but no single gap between chunks does, so this must NOT time out.
+    await vi.advanceTimersByTimeAsync(READ_STEP_TIMEOUT_MS - 100);
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]);
+    await vi.advanceTimersByTimeAsync(READ_STEP_TIMEOUT_MS - 100);
+    await fireMessages(inputPort, [new Uint8Array([0xa2])]);
+    await vi.advanceTimersByTimeAsync(READ_STEP_TIMEOUT_MS - 100);
+    await fireMessages(inputPort, [new Uint8Array([0xa3])]);
+
+    await expect(pending).resolves.toEqual([fixturePreset(0)]);
+  });
+
+  test('leaves the pedal on the last slot read (slot 99 for a full dump) rather than restoring it', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const pending = connection.readPresets();
+    await driveFullRead(pending, inputPort, 1);
+    await pending;
+
+    // Only one Program Change is issued (to the one slot this test dumps) and
+    // nothing is sent afterward to "restore" a previous slot.
+    expect(codec.programChangeCalls).toEqual([0]);
   });
 });
 
@@ -505,6 +712,7 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
     class RoundTripCodec implements SysexPresetCodec {
       private readonly store = new Map<number, Preset>();
       private backQueue: SysexDecodeResult[] = [];
+      private awaitingNames = false;
 
       encodeReadAllRequest(): Uint8Array[] {
         const sorted = [...this.store.entries()].sort(([a], [z]) => a - z);
@@ -513,10 +721,25 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
           preset,
           isLast: i === sorted.length - 1,
         }));
-        return [new Uint8Array([0x01])];
+        this.awaitingNames = true;
+        return [new Uint8Array([0x01]), ...sorted.map(() => new Uint8Array([0x02]))];
+      }
+
+      encodeProgramChange(slot: number): Uint8Array {
+        return new Uint8Array([0xc0, slot & 0x7f]);
+      }
+
+      isAwaitingNames(): boolean {
+        return this.awaitingNames;
       }
 
       decodeIncomingMessage(_message: Uint8Array): SysexDecodeResult {
+        if (this.awaitingNames) {
+          // The one names reply frame this fake models — consumes it and
+          // transitions to the body phase, same shape as the real codec.
+          this.awaitingNames = false;
+          return { kind: 'ignored' };
+        }
         return this.backQueue.shift() ?? { kind: 'ignored' };
       }
 
@@ -526,6 +749,7 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
       }
     }
 
+    vi.useFakeTimers();
     const codec = new RoundTripCodec();
     const { connection, access } = await connectAndSetup(codec as unknown as FakeCodec);
     const inputPort = [...access.inputs.values()][0];
@@ -542,7 +766,9 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
     await connection.writePreset(preset);
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]);
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names phase
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // PC(5) settle
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]); // slot 5's body
 
     const presets = await pending;
     expect(presets).toEqual([preset]);
