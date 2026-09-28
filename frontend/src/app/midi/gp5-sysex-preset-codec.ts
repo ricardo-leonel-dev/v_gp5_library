@@ -18,6 +18,20 @@
 //     before each body request — see that probe's `go` handler). All confirmed
 //     against the GP-5, not the GP-50.
 //
+//   * decodeIncomingMessage's reply header (feature 13) — a second, deeper
+//     hardware capture (raw incoming SysEx bytes read straight off the real
+//     GP-5, decoded with this file's own crc8/nibDecode) found that every
+//     reply's decoded[1] is the TOTAL CHUNK COUNT for that transfer (106 for
+//     the 100-name blob's reply, 25 for one slot's 466-byte body reply) — it
+//     is never a fixed CATSEL echo, contrary to what the request/reply framing
+//     above assumed by analogy with the outgoing request's layout. Gating
+//     message acceptance on decoded[1] === CATSEL therefore discarded every
+//     real reply unconditionally; that gate is gone. CRC (already correct)
+//     plus index-based chunk reassembly (also already correct) fully decoded
+//     100 real preset names and one real body (echo bytes exactly
+//     [CATSEL, BODY_SEL], all four record magics at valid offsets) once the
+//     bad gate was removed — see decodeIncomingMessage's inline comment.
+//
 //   * encodeProgramChange / isAwaitingNames (feature 12) — added so
 //     WebMidiPedalConnection.readPresets can reproduce that same
 //     Program-Change-then-settle sequencing per slot, which the shipped
@@ -363,11 +377,15 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
       return { kind: 'invalid', reason: 'bad crc' };
     }
 
-    const cmd = decoded[1];
+    // decoded[1] is the total chunk count for THIS transfer (hardware-verified:
+    // 106 for the 100-name blob, 25 for one slot's 466-byte body) -- it varies
+    // per transfer and is NOT a fixed command/echo byte. It must never gate
+    // message acceptance. (This code previously compared it to CATSEL, which
+    // discarded every real reply from the pedal unconditionally, since a real
+    // reply's decoded[1] is never CATSEL.) Acceptance is CRC (above) plus the
+    // structural checks already done above it -- nothing else is needed.
     const index = decoded[2];
     const chunk = decoded.slice(4);
-
-    if (cmd !== CATSEL) return { kind: 'ignored' };
 
     // Phase 1: accumulate names. The names reply's first chunk carries the
     // [CATSEL, NAME_SEL] echo and starts the names blob; subsequent chunks
