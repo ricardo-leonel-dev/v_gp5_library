@@ -46,7 +46,12 @@ export class PresetBrowserPage implements OnInit {
       this.loadState.set('loaded');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown';
-      this.error.set(message);
+      // 'not_connected' is also the guard-state key (see the template's
+      // outer not-connected branch, worded as a "please connect" prompt) —
+      // map it to the distinct 'not_connected_error' key here so a
+      // mid-operation disconnect renders "the pedal is not connected"
+      // instead of reusing that unrelated prompt's copy.
+      this.error.set(message === 'not_connected' ? 'not_connected_error' : message);
       this.loadState.set('error');
     }
   }
