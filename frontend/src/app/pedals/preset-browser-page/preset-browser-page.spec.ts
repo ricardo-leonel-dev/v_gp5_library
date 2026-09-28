@@ -309,6 +309,29 @@ describe('PresetBrowserPage', () => {
     expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
   });
 
+  it('renders the not-connected-error message when readPresets() rejects with "not_connected" (R11)', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = new Error('not_connected');
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
+    // and another to flush the .catch handler in loadPresets().
+    await Promise.resolve();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    const error = compiled.querySelector('[data-testid="preset-error"]');
+    expect(error).not.toBeNull();
+    expect(error?.textContent).toContain('El pedal no está conectado.');
+    expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
+  });
+
   it('renders the no-presets message and no preset rows when readPresets() resolves with [] (R12)', async () => {
     const fake = new FakePedal();
     fake.setConnectionState('connected');
