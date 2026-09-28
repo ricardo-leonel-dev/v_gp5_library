@@ -9,12 +9,25 @@
 //
 // Verified against real GP-5 hardware (the user's own pedal):
 //
-//   * encodeReadAllRequest / decodeIncomingMessage (T5, R14) — READ path is
-//     byte-confirmed against a real GP-5. See progress/gp5_webmidi_read_probe.html
-//     (selector 0x40, names read, 100 names parsed) and
-//     progress/gp5_webmidi_body_read_probe.html (selector 0x41, full body read,
-//     466-byte body with all four magics decoded). All confirmed against the
-//     GP-5, not the GP-50.
+//   * encodeReadAllRequest / decodeIncomingMessage (T5, R14) — the byte-level
+//     framing/CRC/selectors of the READ path are byte-confirmed against a real
+//     GP-5. See progress/gp5_webmidi_read_probe.html (selector 0x40, names
+//     read, 100 names parsed) and progress/gp5_webmidi_body_read_probe.html
+//     (selector 0x41, full body read, 466-byte body with all four magics
+//     decoded, PLUS the Program-Change-then-300ms-settle sequencing required
+//     before each body request — see that probe's `go` handler). All confirmed
+//     against the GP-5, not the GP-50.
+//
+//   * encodeProgramChange / isAwaitingNames (feature 12) — added so
+//     WebMidiPedalConnection.readPresets can reproduce that same
+//     Program-Change-then-settle sequencing per slot, which the shipped
+//     production code originally omitted (it fired all 101 read-all requests
+//     back-to-back with no Program Change at all, which read_timeout'd on real
+//     hardware). That production wiring is now covered by unit tests with fake
+//     timers (web-midi-pedal-connection.spec.ts) asserting the PC/settle/body
+//     order and timing — it is NOT independently re-verified against the real
+//     pedal end-to-end; only the standalone probe script above and the manual
+//     bug report that prompted this fix touched real hardware.
 //
 //   * encodeWriteRequest (T21, R17) — WRITE path is corroborated, NOT byte-
 //     instrumented. Web MIDI cannot observe another app's outgoing host→device
@@ -397,6 +410,17 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
       this.currentSlot = 0;
     }
     return { kind: 'preset', preset, isLast };
+  }
+
+  encodeProgramChange(slot: number): Uint8Array {
+    // Plain 2-byte MIDI Program Change on channel 0 — NOT SysEx-framed, unlike
+    // every other message this codec builds. Matches
+    // progress/gp5_webmidi_body_read_probe.html's `output.send([0xc0, slot & 0x7f])`.
+    return new Uint8Array([0xc0, slot & 0x7f]);
+  }
+
+  isAwaitingNames(): boolean {
+    return this.namesChunks !== null;
   }
 
   encodeWriteRequest(preset: Preset): Uint8Array[] {

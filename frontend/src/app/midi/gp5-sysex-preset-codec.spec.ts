@@ -168,6 +168,66 @@ describe('Gp5SysexPresetCodec.encodeReadAllRequest', () => {
   });
 });
 
+describe('Gp5SysexPresetCodec.encodeProgramChange (feature 12)', () => {
+  test('returns a plain 2-byte MIDI Program Change on channel 0, not SysEx-framed', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const message = codec.encodeProgramChange(5);
+
+    expect(Array.from(message)).toEqual([0xc0, 5]);
+  });
+
+  test('masks the slot to 7 bits (MIDI data byte range)', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const message = codec.encodeProgramChange(99);
+
+    expect(Array.from(message)).toEqual([0xc0, 99]);
+  });
+});
+
+describe('Gp5SysexPresetCodec.isAwaitingNames (feature 12)', () => {
+  test('is false before any read-all dump has started', () => {
+    const codec = new Gp5SysexPresetCodec();
+    expect(codec.isAwaitingNames()).toBe(false);
+  });
+
+  test('is true immediately after encodeReadAllRequest(), before any names reply arrives', () => {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+    expect(codec.isAwaitingNames()).toBe(true);
+  });
+
+  test('stays true across partial names replies, then flips false once the full names blob is reassembled', () => {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+
+    const names = new Map<number, string>([[0, 'clean']]);
+    const frames = chunkForReassembly(buildNamesBlob(names));
+    expect(frames.length).toBeGreaterThan(1);
+
+    for (let i = 0; i < frames.length - 1; i++) {
+      codec.decodeIncomingMessage(frames[i]);
+      expect(codec.isAwaitingNames()).toBe(true);
+    }
+
+    codec.decodeIncomingMessage(frames[frames.length - 1]);
+    expect(codec.isAwaitingNames()).toBe(false);
+  });
+
+  test('is false during the body phase and flips back to true only when a new dump starts', () => {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+    const frames = chunkForReassembly(buildNamesBlob(new Map([[0, 'clean']])));
+    for (const f of frames) codec.decodeIncomingMessage(f);
+    expect(codec.isAwaitingNames()).toBe(false);
+
+    codec.decodeIncomingMessage(chunkForReassembly(buildBodyBlob(buildBody()))[0]);
+    expect(codec.isAwaitingNames()).toBe(false);
+
+    codec.encodeReadAllRequest();
+    expect(codec.isAwaitingNames()).toBe(true);
+  });
+});
+
 describe('Gp5SysexPresetCodec.decodeIncomingMessage — framing and CRC', () => {
   test('returns ignored when the message is not SysEx-framed (R14, T4)', () => {
     const codec = new Gp5SysexPresetCodec();
