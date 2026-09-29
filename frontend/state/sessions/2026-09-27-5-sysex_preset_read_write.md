@@ -30,16 +30,16 @@ closed_at: 2026-09-27T07:02:18.000Z
 - T20: Round-trip test with fake codec backed by in-memory Map
 
 ## Log
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] Claimed feature 2 sysex_preset_read_write. Read spec (requirements/design/tasks), progress/impl_webmidi_gp5_connection.md (style/template), and the 4 probe HTMLs. Beginning implementation.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T1 done: src/app/midi/preset.ts with Preset/PresetSlot (R1).
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T2 done: src/app/midi/sysex-preset-codec.ts with SysexDecodeResult, SysexPresetCodec, SYSEX_PRESET_CODEC token (R2, R15).
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T3+T5+T21 done: src/app/midi/gp5-sysex-preset-codec.ts implements read (byte-confirmed) and write (corroborated) protocols with MIT notice header (R14, R17, R16).
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T4 done: src/app/midi/gp5-sysex-preset-codec.spec.ts with 14 tests covering encode/decode framing, CRC, accumulation, body decode, write packet shape.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T6 done: pedal-connection.ts imports Preset and updates readPresets/writePreset signatures.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T7 partial done: SYSEX_PRESET_CODEC wired to Gp5SysexPresetCodec in app.config. WebMidiPedalConnection inject comes next.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T8-T13 done: WebMidiPedalConnection injects SYSEX_PRESET_CODEC; read/write orchestration with state guards, pendingOperation, onmidimessage routing, timeout.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] All 20 tasks complete: T1, T2, T3+T5+T21 (codec), T4 (codec spec), T6, T7, T8-T13 (orchestration), T14-T20 (orchestration tests). 58 tests passing across 6 spec files.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] Wrote progress/impl_sysex_preset_read_write.md with R<n>→test traceability map. Ready for review.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] Claimed feature 2 sysex_preset_read_write. Read spec (requirements/design/tasks), progress/impl_webmidi_gp5_connection.md (style/template), and the 4 probe HTMLs. Beginning implementation.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T1 done: src/app/midi/preset.ts with Preset/PresetSlot (R1).
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T2 done: src/app/midi/sysex-preset-codec.ts with SysexDecodeResult, SysexPresetCodec, SYSEX_PRESET_CODEC token (R2, R15).
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T3+T5+T21 done: src/app/midi/gp5-sysex-preset-codec.ts implements read (byte-confirmed) and write (corroborated) protocols with MIT notice header (R14, R17, R16).
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T4 done: src/app/midi/gp5-sysex-preset-codec.spec.ts with 14 tests covering encode/decode framing, CRC, accumulation, body decode, write packet shape.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T6 done: pedal-connection.ts imports Preset and updates readPresets/writePreset signatures.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T7 partial done: SYSEX_PRESET_CODEC wired to Gp5SysexPresetCodec in app.config. WebMidiPedalConnection inject comes next.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T8-T13 done: WebMidiPedalConnection injects SYSEX_PRESET_CODEC; read/write orchestration with state guards, pendingOperation, onmidimessage routing, timeout.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] All 20 tasks complete: T1, T2, T3+T5+T21 (codec), T4 (codec spec), T6, T7, T8-T13 (orchestration), T14-T20 (orchestration tests). 58 tests passing across 6 spec files.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] Wrote progress/impl_sysex_preset_read_write.md with R<n>→test traceability map. Ready for review.
 
 ## Next Step
 

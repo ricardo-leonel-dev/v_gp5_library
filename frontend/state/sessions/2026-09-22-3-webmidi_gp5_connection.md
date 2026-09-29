@@ -22,10 +22,10 @@ closed_at: 2026-09-22T08:41:24.000Z
 - Run ./init.sh and capture output for verification
 
 ## Log
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] Recovery: feature 1 was rolled back from orphaned in_progress to spec_ready via a user-authorized direct DB UPDATE after a prior cancel-session --force left no session. Spec remains approved; spec files unchanged.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T1-T7 implemented: PedalConnectionState exported, WebMidiPedalConnection now @Injectable, stateSignal/connectionState initialized to 'not-connected', GP5_NAME_PATTERN + findGp5Port added, connect() implements isSupported guard → 'connecting' → requestMIDIAccess({sysex:true}) with rejection→'error', port match → 'connected', handlePortStateChange → 'not-connected' on unplug.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T8 complete: 9 connect() tests added to web-midi-pedal-connection.spec.ts. All 20 tests (12 new + 8 existing across files) pass via bun run test.
-- [Claude (Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] T9-T12 complete: PedalConnectionPage component + template in src/app/pedals/pedal-connection-page/, guarded pedal route added to app.routes.ts, pedal.* namespace added to both public/i18n/{en,es}.json, 4 page tests added via TestBed with FakePedal override.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] Recovery: feature 1 was rolled back from orphaned in_progress to spec_ready via a user-authorized direct DB UPDATE after a prior cancel-session --force left no session. Spec remains approved; spec files unchanged.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T1-T7 implemented: PedalConnectionState exported, WebMidiPedalConnection now @Injectable, stateSignal/connectionState initialized to 'not-connected', GP5_NAME_PATTERN + findGp5Port added, connect() implements isSupported guard → 'connecting' → requestMIDIAccess({sysex:true}) with rejection→'error', port match → 'connected', handlePortStateChange → 'not-connected' on unplug.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T8 complete: 9 connect() tests added to web-midi-pedal-connection.spec.ts. All 20 tests (12 new + 8 existing across files) pass via bun run test.
+- [Claude (leader -> implementer (MiniMax-M3) agent by MiniMax-M3[1m])] T9-T12 complete: PedalConnectionPage component + template in src/app/pedals/pedal-connection-page/, guarded pedal route added to app.routes.ts, pedal.* namespace added to both public/i18n/{en,es}.json, 4 page tests added via TestBed with FakePedal override.
 
 ## Next Step
 

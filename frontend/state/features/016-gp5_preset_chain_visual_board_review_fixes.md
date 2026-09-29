@@ -2,9 +2,9 @@
 feature_number: 16
 name: gp5_preset_chain_visual_board_review_fixes
 title: Fix review findings on the GP-5 chain visual board (feature 14)
-status: pending
+status: in_progress
 created_at: 2026-09-28T19:16:52.000Z
-updated_at: 2026-09-28T19:16:52.000Z
+updated_at: 2026-09-29T05:22:15.000Z
 ---
 
 ## Description
@@ -21,3 +21,6 @@ An independent re-review of feature 14 found that it deviates from its approved 
 - [ ] No $any in templates; empty ngAfterViewInit removed; order tests assert content; no <p> inside <button>
 - [ ] Unrelated fixtures/comments restored in preset-browser-page.spec.ts; trailing newlines restored
 - [ ] ./init.sh green
+
+## Notes
+- 2026-09-29T05:02:13.000Z [leader] T41 CONFIRMED by user (Ricardo) on 2026-09-29: manual visual check done at 375px and >=1024px, light and dark, all OK. Gate on F17 dropped by user decision (F17 gets its own visual check; AMP title mismatch is owned by F19). Unblocked. Cannot log out yet: session 15 (review approved) was soft-deleted with cancel-session --force on 2026-09-28 to free the slot for F18, so F16 is in_progress with no session and neither claim (pending only) nor reopen (done only) can open one. Harness gap.

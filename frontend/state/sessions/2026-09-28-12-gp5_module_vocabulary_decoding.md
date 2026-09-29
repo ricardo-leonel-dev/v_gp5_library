@@ -13,9 +13,9 @@ closed_at: 2026-09-28T14:13:42.000Z
 - Verify with PATH=.../v24.21.0/bin ./init.sh
 
 ## Log
-- [Claude (Claude (implementer agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] Read specs (R1-R11), AGENTS.md, design conventions, and verified FX title lists against external_docs/gp-5-manual.pdf pp.20-36
-- [Claude (Claude (implementer agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] Implemented gp5-module-vocabulary.ts (R1-R11) + gp5-module-vocabulary.spec.ts (T7-T16); marked T1-T16 checked in tasks.md. T17 left unchecked per spec (hardware-only).
-- [Claude (Claude (implementer agent by MiniMax-M3[1m]) agent by MiniMax-M3[1m])] Verification: ng test 104/104 tests passing across 10 files; init.sh ends [OK] Environment ready. Pre-existing [WARN] on Postgres/Supabase mirror sync (PGRST125, unrelated). Wrote progress/impl_gp5_module_vocabulary_decoding.md and ready for review.
+- [Claude (implementer agent by MiniMax-M3[1m])] Read specs (R1-R11), AGENTS.md, design conventions, and verified FX title lists against external_docs/gp-5-manual.pdf pp.20-36
+- [Claude (implementer agent by MiniMax-M3[1m])] Implemented gp5-module-vocabulary.ts (R1-R11) + gp5-module-vocabulary.spec.ts (T7-T16); marked T1-T16 checked in tasks.md. T17 left unchecked per spec (hardware-only).
+- [Claude (implementer agent by MiniMax-M3[1m])] Verification: ng test 104/104 tests passing across 10 files; init.sh ends [OK] Environment ready. Pre-existing [WARN] on Postgres/Supabase mirror sync (PGRST125, unrelated). Wrote progress/impl_gp5_module_vocabulary_decoding.md and ready for review.
 
 ## Next Step
 

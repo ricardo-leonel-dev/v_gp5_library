@@ -2,9 +2,10 @@
 feature_number: 15
 name: gp5_mod_tremolo_vocabulary
 title: Add MOD tremolos (O-Trem, Sine Trem, Bias Trem) to GP-5 vocabulary after hardware check
-status: pending
+status: superseded
+superseded_by: gp5_module_vocabulary_hardware_re_verification
 created_at: 2026-09-28T17:51:47.000Z
-updated_at: 2026-09-28T17:51:58.000Z
+updated_at: 2026-09-29T04:36:28.000Z
 ---
 
 ## Description
@@ -15,3 +16,6 @@ Feature 10 kept MOD at 8 FX and feature 14's catalog follows it, so O-Trem, Sine
 - [ ] GP5_MODULE_FX_TITLES[7] has 11 entries including O-Trem, Sine Trem and Bias Trem, with feature 10's tests updated
 - [ ] GP5_FX_CATALOG MOD entries include the 3 tremolos with parameter names from manual p.33 and es/en descriptions
 - [ ] The chain board and FX browser show the tremolos instead of the unknown-module block
+
+## Notes
+- 2026-09-29T04:36:28.000Z [Claude (leader agent by claude-opus-5-5)] SUPERSEDED by 19 gp5_module_vocabulary_hardware_re_verification (was pending): Its scope (adding the MOD tremolo FX titles to GP5_MODULE_FX_TITLES, manual p.33) is fully covered by R20 of feature 19, which appends every missing non-N->S title seen on the hardware, including the MOD tremolos.
