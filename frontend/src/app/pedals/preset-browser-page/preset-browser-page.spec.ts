@@ -3,13 +3,56 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { signal } from '@angular/core';
 import { vi } from 'vitest';
 import { PresetBrowserPage } from './preset-browser-page';
-import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
+import {
+  WebMidiPedalConnection,
+  READ_SETTLE_MS,
+} from '../../midi/web-midi-pedal-connection';
+import {
+  SYSEX_PRESET_CODEC,
+  type SysexPresetCodec,
+  type SysexDecodeResult,
+} from '../../midi/sysex-preset-codec';
 import { SelectedPresetStore } from '../selected-preset.service';
 import { appConfig } from '../../app.config';
 import type { PedalConnectionState } from '../../midi/pedal-connection';
 import type { Preset } from '../../midi/preset';
 
 const esTranslations = {
+  auth: {
+    login_title: 'Iniciar sesión',
+    register_title: 'Crear cuenta',
+    email: 'Correo',
+    password: 'Contraseña',
+    login_submit: 'Entrar',
+    register_submit: 'Crear cuenta',
+    no_account: '¿No tienes cuenta?',
+    have_account: '¿Ya tienes cuenta?',
+    register_link: 'Regístrate',
+    login_link: 'Inicia sesión',
+    login_error: 'Correo o contraseña incorrectos',
+    register_error: 'No se pudo crear la cuenta',
+  },
+  songs: {
+    title: 'Mis canciones',
+    placeholder: 'Aquí vivirá tu librería de presets guardados.',
+  },
+  shared: {
+    dark_mode: 'Oscuro',
+    light_mode: 'Claro',
+  },
+  pedal: {
+    title: 'Conexión del pedal',
+    connect: 'Conectar al GP-5',
+    state_not_connected: 'No conectado',
+    state_connecting: 'Conectando...',
+    state_connected: 'Conectado',
+    state_error: 'Error de conexión',
+    unsupported: 'Tu navegador no soporta la Web MIDI API. Por favor usa Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
+    midi_access_denied: 'Se denegó el acceso MIDI. Por favor permite el acceso MIDI e inténtalo de nuevo.',
+    gp5_not_found: 'No se detectó el pedal GP-5. Por favor conéctalo por USB e inténtalo de nuevo.',
+    unknown: 'No se pudo conectar con el pedal.',
+    view_presets: 'Ver presets',
+  },
   presetBrowser: {
     title: 'Presets del pedal',
     not_connected: 'Conecta el pedal para ver sus presets.',
@@ -137,6 +180,7 @@ describe('PresetBrowserPage', () => {
   it('renders the unsupported message and never calls readPresets() when isSupported() is false (R3)', () => {
     const fake = new FakePedal();
     fake.isSupportedResult = false;
+    // If unsupported branch were ever taken by mistake, this would resolve — guard it.
     fake.resolveWith = 'pending';
     const httpMock = setup(fake);
 
@@ -336,11 +380,16 @@ describe('PresetBrowserPage', () => {
     expect(all).not.toMatch(rawPattern);
 
     // The 'empty' entry's strip block shows ? (unknown_short) not the word
-    // "empty".
+    // "empty", and the matching board block shows the translated unknown
+    // label ("No reconocido" in es) instead of a raw moduleType.
     const stripBlocks = (component.nativeElement as HTMLElement).querySelectorAll(
       '[data-testid^="strip-block-"]',
     );
     expect(stripBlocks[1].textContent?.trim()).toBe('?');
+    const boardBlocks = (component.nativeElement as HTMLElement).querySelectorAll(
+      '[data-testid^="board-block-"]',
+    );
+    expect(boardBlocks[1].textContent).toContain('No reconocido');
   });
 
   it('does not render a chain board before a preset is selected (R23)', async () => {
@@ -458,6 +507,53 @@ describe('PresetBrowserPage', () => {
     expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
   });
 
+  it('closes the detail when the already-selected preset is re-selected (R25 A→A)', async () => {
+    const fixture: Preset[] = [
+      {
+        slot: 1,
+        name: 'A',
+        chain: [
+          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+        ],
+      },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    // Select A.
+    (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-1"]',
+    )?.dispatchEvent(new Event('click'));
+    component.detectChanges();
+
+    // Open block 1 of A.
+    const boardA = (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="chain-board"]',
+    ) as HTMLElement;
+    (boardA.querySelector('[data-testid="board-block-1"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).not.toBeNull();
+
+    // Re-select A — detail panel must close (R25 A→A case: signal.set(sameRef)
+    // does not retrigger the effect, so the synchronous reset in selectPreset
+    // is what closes it).
+    (component.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-1"]',
+    )?.dispatchEvent(new Event('click'));
+    component.detectChanges();
+    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
+  });
+
   it('does not call writePreset and calls readPresets exactly once across all interactions (R36, R37)', async () => {
     const fixture: Preset[] = [
       {
@@ -522,6 +618,8 @@ describe('PresetBrowserPage', () => {
     component.detectChanges();
     flushI18n(httpMock);
     component.detectChanges();
+    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
+    // and another to flush the .catch handler in loadPresets().
     await Promise.resolve();
     await Promise.resolve();
     component.detectChanges();
@@ -544,6 +642,8 @@ describe('PresetBrowserPage', () => {
     component.detectChanges();
     flushI18n(httpMock);
     component.detectChanges();
+    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
+    // and another to flush the .catch handler in loadPresets().
     await Promise.resolve();
     await Promise.resolve();
     component.detectChanges();
@@ -598,5 +698,211 @@ describe('PresetBrowserPage', () => {
 
     expect(fakeStore.select).toHaveBeenCalledTimes(1);
     expect(fakeStore.select).toHaveBeenCalledWith(fixture[0]);
+  });
+});
+
+// --- T37 second read-only test: real WebMidiPedalConnection + stubbed
+// navigator.requestMIDIAccess, output.send() spied. Asserts no additional
+// sends are made when walking the board blocks, the FX-browser toggle, and
+// the new detail-close button.
+
+interface FakePort {
+  name: string | null;
+  state: 'connected' | 'disconnected';
+  onstatechange: ((ev: Event) => void) | null;
+  onmidimessage: ((ev: MIDIMessageEvent) => void) | null;
+}
+
+interface FakeOutput extends FakePort {
+  sendSpy: ReturnType<typeof vi.fn>;
+  send(data: number[] | Uint8Array, timestamp?: number): void;
+}
+
+function fakePort(name: string | null): FakePort {
+  return {
+    name,
+    state: 'connected',
+    onstatechange: null,
+    onmidimessage: null,
+  };
+}
+
+function fakeOutput(name: string | null): FakeOutput {
+  const sendSpy = vi.fn();
+  const out = fakePort(name) as FakeOutput;
+  out.sendSpy = sendSpy;
+  out.send = ((...args: unknown[]) => sendSpy(...args)) as FakeOutput['send'];
+  return out;
+}
+
+interface FakeAccess {
+  inputs: ReadonlyMap<string, FakePort>;
+  outputs: ReadonlyMap<string, FakeOutput>;
+}
+
+function fakeAccess(
+  inputs: Array<{ name: string | null }>,
+  outputs: Array<{ name: string | null }>,
+): FakeAccess {
+  return {
+    inputs: new Map(inputs.map((p, i) => [String(i), fakePort(p.name)])),
+    outputs: new Map(outputs.map((p, i) => [String(i), fakeOutput(p.name)])),
+  };
+}
+
+class FakeReadCodec implements SysexPresetCodec {
+  readMessageSets: Uint8Array[][] = [];
+  decodeResults: SysexDecodeResult[] = [];
+  programChangeCalls: number[] = [];
+  namesCompleteAfterCalls = 1;
+  private namesCallCount = 0;
+  private awaitingNames = false;
+
+  encodeReadAllRequest(): Uint8Array[] {
+    this.awaitingNames = true;
+    this.namesCallCount = 0;
+    return this.readMessageSets[0] ?? [];
+  }
+
+  encodeProgramChange(slot: number): Uint8Array {
+    this.programChangeCalls.push(slot);
+    return new Uint8Array([0xc0, slot & 0x7f]);
+  }
+
+  isAwaitingNames(): boolean {
+    return this.awaitingNames;
+  }
+
+  encodeWriteRequest(_preset: Preset): Uint8Array[] {
+    throw new Error('encodeWriteRequest should not be called from the preset browser page');
+  }
+
+  decodeIncomingMessage(_message: Uint8Array): SysexDecodeResult {
+    if (this.awaitingNames) {
+      // names phase completes immediately on first message
+      this.namesCallCount++;
+      if (this.namesCallCount >= this.namesCompleteAfterCalls) {
+        this.awaitingNames = false;
+      }
+      return { kind: 'ignored' };
+    }
+    return this.decodeResults.shift() ?? { kind: 'ignored' };
+  }
+}
+
+describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    TestBed.resetTestingModule();
+  });
+
+  it('does not add any MIDIOutput.send call across all interactions (R37, T37)', async () => {
+    const preset: Preset = {
+      slot: 1,
+      name: 'A',
+      chain: [
+        { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+        { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+        { moduleType: 'cat8_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
+      ],
+    };
+
+    vi.useFakeTimers();
+    const access = fakeAccess(
+      [{ name: 'Valeton GP-5' }],
+      [{ name: 'Valeton GP-5' }],
+    );
+    const requestMIDIAccess = vi.fn(() => Promise.resolve(access));
+    vi.stubGlobal('navigator', { requestMIDIAccess });
+
+    // Single TestBed configuration: real connection + page. We arm the
+    // codec BEFORE ngOnInit runs so the page's readPresets() call returns
+    // a preset. Then we call connect() ourselves first to set state =
+    // "connected" (the page's ngOnInit checks that).
+    const codec = new FakeReadCodec();
+    codec.readMessageSets = [[
+      new Uint8Array([0xaa]),
+      new Uint8Array([0xbb]),
+    ]];
+    codec.decodeResults = [{ kind: 'preset', preset, isLast: true }];
+
+    TestBed.configureTestingModule({
+      imports: [PresetBrowserPage],
+      providers: [
+        ...appConfig.providers,
+        provideHttpClientTesting(),
+        { provide: SYSEX_PRESET_CODEC, useValue: codec },
+        WebMidiPedalConnection,
+        { provide: SelectedPresetStore, useClass: FakeSelectedPresetStore },
+      ],
+    });
+    const connection = TestBed.inject(WebMidiPedalConnection);
+    await connection.connect();
+
+    const outputPort = [...access.outputs.values()][0];
+    const inputPort = [...access.inputs.values()][0];
+
+    const fixture = TestBed.createComponent(PresetBrowserPage);
+    const httpMock = TestBed.inject(HttpTestingController);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    // The page's ngOnInit -> loadPresets -> readPresets() has already sent
+    // the names request. Fire a single input message to complete the names
+    // phase, advance past the post-Program-Change settle, then fire the
+    // body message.
+    inputPort.onmidimessage?.({ data: new Uint8Array([0xa0]) } as unknown as MIDIMessageEvent);
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    inputPort.onmidimessage?.({ data: new Uint8Array([0xa1]) } as unknown as MIDIMessageEvent);
+    // Let the readPresets() promise resolve and loadState flip to "loaded".
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    // After the initial read completes, expect at least the names request
+    // + Program Change + body request = 3 sends.
+    const sendCountAfterLoad = outputPort.sendSpy.mock.calls.length;
+    expect(sendCountAfterLoad).toBeGreaterThanOrEqual(3);
+
+    // Click Select on the row to mount the board.
+    const selectBtn = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="select-preset-1"]',
+    ) as HTMLButtonElement;
+    selectBtn.click();
+    fixture.detectChanges();
+
+    // Walk every board block.
+    const board = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="chain-board"]',
+    ) as HTMLElement | null;
+    expect(board).not.toBeNull();
+    const boardBlocks = board!.querySelectorAll('[data-testid^="board-block-"]');
+    expect(boardBlocks).toHaveLength(3);
+    for (const block of Array.from(boardBlocks)) {
+      (block as HTMLButtonElement).click();
+      fixture.detectChanges();
+    }
+
+    // Toggle the FX browser open and closed on the currently open detail.
+    const browseToggle = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="browse-toggle"]',
+    ) as HTMLButtonElement;
+    browseToggle.click();
+    fixture.detectChanges();
+    browseToggle.click();
+    fixture.detectChanges();
+
+    // Click the new close button.
+    const closeBtn = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="detail-close"]',
+    ) as HTMLButtonElement;
+    closeBtn.click();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
+
+    // No additional sends after the initial load.
+    expect(outputPort.sendSpy.mock.calls.length).toBe(sendCountAfterLoad);
   });
 });

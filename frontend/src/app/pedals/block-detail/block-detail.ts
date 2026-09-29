@@ -4,6 +4,7 @@ import {
   computed,
   effect,
   input,
+  output,
   signal,
 } from '@angular/core';
 import { TranslocoDirective } from '@jsverse/transloco';
@@ -16,7 +17,6 @@ import {
 import {
   describeParameters,
   GP5_FX_CATALOG,
-  GP5_FX_PARAMETER_MAPPING_STATUS,
 } from '../../midi/gp5-fx-catalog';
 import {
   categoryStyle,
@@ -60,9 +60,10 @@ interface BrowserEntry {
 export class BlockDetail {
   readonly slot = input.required<PresetSlot>();
 
+  readonly closed = output<void>();
+
   readonly browsing = signal(false);
 
-  readonly mappingHypothesis = GP5_FX_PARAMETER_MAPPING_STATUS;
   readonly displayCategoryCode = displayCategoryCode;
   readonly formatParameterValue = formatParameterValue;
 
@@ -87,6 +88,16 @@ export class BlockDetail {
       };
     }
     return { kind: 'unknown', slot, parameters };
+  });
+
+  readonly resolved = computed<ResolvedDetail | null>(() => {
+    const v = this.view();
+    return v.kind === 'resolved' ? v : null;
+  });
+
+  readonly unknown = computed<UnknownDetail | null>(() => {
+    const v = this.view();
+    return v.kind === 'unknown' ? v : null;
   });
 
   constructor() {

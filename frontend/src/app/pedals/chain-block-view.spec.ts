@@ -27,6 +27,8 @@ describe('formatParameterValue (R9, R10)', () => {
 });
 
 describe('categoryStyle (R13, R14)', () => {
+  // Verbatim from design.md "Visual direction -> Category palette". Pinned to
+  // categoryStyle() so this test catches any drift between the two.
   const expected = [
     'bg-cyan-700 text-white dark:bg-cyan-600',
     'bg-yellow-400 text-yellow-950 dark:bg-yellow-300',
@@ -40,15 +42,19 @@ describe('categoryStyle (R13, R14)', () => {
     'bg-blue-800 text-white dark:bg-blue-700',
   ];
 
+  // Drive every assertion off the actual categoryStyle() output, so the
+  // test fails when the function diverges from the design.md palette.
+  const actual = Array.from({ length: 10 }, (_, i) => categoryStyle(i));
+
   it('R13: 10 distinct bg-* classes', () => {
-    const bgClasses = expected.map((s) => s.match(/bg-[a-z]+-\d+/)?.[0] ?? '');
+    const bgClasses = actual.map((s) => s.match(/bg-[a-z]+-\d+/)?.[0] ?? '');
     expect(new Set(bgClasses).size).toBe(10);
   });
 
   it('R13: every category bg differs from the neutral block\'s bg', () => {
     const neutralBg = NEUTRAL_BLOCK_STYLE.match(/bg-[a-z]+-\d+/)?.[0] ?? null;
     expect(neutralBg).toBeNull(); // neutral uses bg-transparent, not a color
-    for (const s of expected) {
+    for (const s of actual) {
       expect(s).not.toBe(NEUTRAL_BLOCK_STYLE);
     }
   });
@@ -59,10 +65,14 @@ describe('categoryStyle (R13, R14)', () => {
   });
 
   it('R14: every category style contains a dark: class', () => {
-    for (const s of expected) {
+    for (const s of actual) {
       expect(s).toMatch(/dark:/);
     }
     expect(NEUTRAL_BLOCK_STYLE).toMatch(/dark:/);
+  });
+
+  it('palette is pinned to design.md "Visual direction"', () => {
+    expect(actual).toEqual(expected);
   });
 });
 

@@ -117,7 +117,7 @@ describe('BlockDetail', () => {
     expect(rows[5].textContent).toContain('66');
   });
 
-  it('shows the hypothesis notice (R30)', () => {
+  it('shows the hypothesis notice (R30) — resolved slot uses the translated chainBoard.mapping_hypothesis text', () => {
     const slot: PresetSlot = {
       moduleType: 'cat4_fx0',
       enabled: true,
@@ -135,7 +135,35 @@ describe('BlockDetail', () => {
       '[data-testid="mapping-hypothesis"]',
     ) as HTMLElement | null;
     expect(notice).not.toBeNull();
-    expect(notice?.textContent?.length ?? 0).toBeGreaterThan(0);
+    // review2 M1: the notice must use the translated chainBoard.mapping_hypothesis
+    // (es fixture -> "Hipótesis"), not the developer string in
+    // GP5_FX_PARAMETER_MAPPING_STATUS. Asserts the *actual* text rather
+    // than a length-only check that any non-empty string would pass.
+    expect(notice?.textContent?.trim()).toBe(esTranslations.chainBoard.mapping_hypothesis);
+  });
+
+  it('shows the hypothesis notice (R30) — unknown slot also uses the translated chainBoard.mapping_hypothesis text', () => {
+    // review2 M1: R30 says the notice is shown WHILE the detail panel is
+    // open, with no resolved-only qualifier, so the unknown branch must
+    // also render it.
+    const slot: PresetSlot = {
+      moduleType: 'empty',
+      enabled: false,
+      parameters: { p0: 1, p2: 3 },
+    };
+    const { httpMock } = setup();
+
+    const fixture = TestBed.createComponent(BlockDetail);
+    fixture.componentRef.setInput('slot', slot);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const notice = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="mapping-hypothesis"]',
+    ) as HTMLElement | null;
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent?.trim()).toBe(esTranslations.chainBoard.mapping_hypothesis);
   });
 
   it('shows the unknown-module message and no browse control for an unresolved entry (R31, R32)', () => {

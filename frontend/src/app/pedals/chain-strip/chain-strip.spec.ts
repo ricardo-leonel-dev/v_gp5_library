@@ -9,7 +9,12 @@ import type { PresetSlot } from '../../midi/preset';
 const esTranslations = {
   chainBoard: {
     block_aria: '{{category}}: {{fx}}, {{state}}',
-    unknown_short: '?',
+    state_on: 'Activo',
+    state_off: 'Bypass',
+    unknown: 'No reconocido',
+    // Deliberately not '?', so a template that hardcodes '?' instead of
+    // translating chainBoard.unknown_short fails (m2).
+    unknown_short: 'N/D',
   },
 };
 
@@ -35,7 +40,7 @@ describe('ChainStrip', () => {
     TestBed.resetTestingModule();
   });
 
-  it('renders one block per chain entry in chain order (R15)', () => {
+  it('renders one block per chain entry in chain order with the right category code (R15)', () => {
     const chain: PresetSlot[] = [
       { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
       { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
@@ -55,6 +60,13 @@ describe('ChainStrip', () => {
     expect(blocks[0].getAttribute('data-testid')).toBe('strip-block-0');
     expect(blocks[1].getAttribute('data-testid')).toBe('strip-block-1');
     expect(blocks[2].getAttribute('data-testid')).toBe('strip-block-2');
+    // Content check: cat1/4/8 -> PRE/AMP/DLY via displayCategoryCode (N->S
+    // is the only one with a different display form, and it isn't in this
+    // chain). Guards against an order-by-testid assertion passing even when
+    // the wrong block's content is at a given position.
+    expect(blocks[0].textContent?.trim()).toBe('PRE');
+    expect(blocks[1].textContent?.trim()).toBe('AMP');
+    expect(blocks[2].textContent?.trim()).toBe('DLY');
   });
 
   it('container has flex + w-full; blocks have flex-1 + min-w-0 (R39)', () => {
@@ -143,6 +155,28 @@ describe('ChainStrip', () => {
     }
     expect((blocks[1] as HTMLElement).className).toContain(DIMMED_CLASS);
     expect((blocks[3] as HTMLElement).className).not.toContain(DIMMED_CLASS);
-    expect((blocks[1] as HTMLElement).textContent?.trim()).toBe('?');
+    expect((blocks[1] as HTMLElement).textContent?.trim()).toBe('N/D');
+  });
+
+  it('aria-label is fully translated: category, FX title and on/off state; unknown blocks use unknown_short/unknown (m1, m2)', () => {
+    const chain: PresetSlot[] = [
+      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat4_fx0', enabled: false, parameters: {} },
+      { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
+    ];
+    const { httpMock } = setup();
+
+    const fixture = TestBed.createComponent(ChainStrip);
+    fixture.componentRef.setInput('chain', chain);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const blocks = (fixture.nativeElement as HTMLElement).querySelectorAll(
+      '[data-testid^="strip-block-"]',
+    );
+    expect(blocks[0].getAttribute('aria-label')).toBe('PRE: COMP, Activo');
+    expect(blocks[1].getAttribute('aria-label')).toBe('AMP: Tweedy, Bypass');
+    expect(blocks[2].getAttribute('aria-label')).toBe('N/D: No reconocido, Activo');
   });
 });

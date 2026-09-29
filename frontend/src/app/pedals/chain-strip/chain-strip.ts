@@ -22,20 +22,8 @@ export class ChainStrip {
     this.chain().map((slot, position) => {
       const view = toChainBlockView(slot, position);
       const dimmed = !view.enabled;
-      const aria = this.ariaFor(view);
       const cls = `${view.style} flex-1 min-w-0 h-5 rounded-sm text-[10px] leading-5 text-center truncate font-semibold${dimmed ? ` ${DIMMED_CLASS}` : ''}`;
-      return { view, cls, aria, dimmed };
+      return { view, cls, dimmed };
     }),
   );
-
-  private ariaFor(view: ReturnType<typeof toChainBlockView>): { state: 'on' | 'off'; category: string; fx: string } {
-    if (view.kind === 'resolved') {
-      return {
-        category: displayCategoryCode(view.categoryCode),
-        fx: view.fxTitle,
-        state: view.enabled ? 'on' : 'off',
-      };
-    }
-    return { category: '?', fx: '?', state: view.enabled ? 'on' : 'off' };
-  }
 }

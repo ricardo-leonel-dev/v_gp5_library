@@ -4,7 +4,11 @@
       class="{{ block.cls }}"
       [attr.data-testid]="'strip-block-' + block.view.position"
       [attr.data-enabled]="block.view.enabled ? 'true' : 'false'"
-      [attr.aria-label]="t('chainBoard.block_aria', block.aria)"
+      [attr.aria-label]="t('chainBoard.block_aria', {
+        category: block.view.kind === 'resolved' ? displayCategoryCode(block.view.categoryCode) : t('chainBoard.unknown_short'),
+        fx: block.view.kind === 'resolved' ? block.view.fxTitle : t('chainBoard.unknown'),
+        state: t(block.view.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off'),
+      })"
     >
       @if (block.view.kind === 'resolved') {
         {{ displayCategoryCode(block.view.categoryCode) }}

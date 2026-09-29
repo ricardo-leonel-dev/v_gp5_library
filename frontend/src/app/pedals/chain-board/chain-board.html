@@ -11,18 +11,23 @@
         [attr.data-testid]="'board-block-' + block.view.position"
         [attr.data-enabled]="block.view.enabled ? 'true' : 'false'"
         [attr.aria-pressed]="block.isSelected ? 'true' : 'false'"
+        [attr.aria-label]="t('chainBoard.block_aria', {
+          category: block.view.kind === 'resolved' ? displayCategoryCode(block.view.categoryCode) : t('chainBoard.unknown_short'),
+          fx: block.view.kind === 'resolved' ? block.view.fxTitle : t('chainBoard.unknown'),
+          state: t(block.view.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off'),
+        })"
         (click)="onBlockClick(block.view.position)"
       >
-        <span
-          class="absolute right-1.5 top-1.5 size-1.5 rounded-full {{ block.ledCls }}"
-          aria-hidden="true"
-        ></span>
         @if (block.view.kind === 'resolved') {
-          <p class="text-sm font-bold tracking-tight">{{ displayCategoryCode(block.view.categoryCode) }}</p>
-          <p class="text-[11px] leading-tight line-clamp-2">{{ block.view.fxTitle }}</p>
+          <span
+            class="absolute right-1.5 top-1.5 size-1.5 rounded-full {{ block.ledCls }}"
+            aria-hidden="true"
+          ></span>
+          <span class="block text-sm font-bold tracking-tight">{{ displayCategoryCode(block.view.categoryCode) }}</span>
+          <span class="block text-[11px] leading-tight line-clamp-2">{{ block.view.fxTitle }}</span>
         } @else {
-          <p class="text-sm font-bold tracking-tight">?</p>
-          <p class="text-[11px] leading-tight line-clamp-2">{{ t('chainBoard.unknown') }}</p>
+          <span class="block text-sm font-bold tracking-tight">{{ t('chainBoard.unknown_short') }}</span>
+          <span class="block text-[11px] leading-tight line-clamp-2">{{ t('chainBoard.unknown') }}</span>
         }
       </button>
     }

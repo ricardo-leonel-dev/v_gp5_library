@@ -105,7 +105,7 @@ proves. The implementer documents the final R → test mapping in `progress/impl
 
 ## Verification
 
-- [ ] T41 (R38, R39, R14) Manual Level 2 check (`bun run start`). This backs up the class-based tests
+- [x] T41 (R38, R39, R14) Manual Level 2 check (`bun run start`). This backs up the class-based tests
   T16, T21, and T24:
   - at 375px and ≥1024px widths, in light and dark mode, confirm there is no horizontal overflow on rows,
     the board, or the detail;
@@ -115,11 +115,16 @@ proves. The implementer documents the final R → test mapping in `progress/impl
   Use the real pedal if available, otherwise a stubbed `readPresets`. Record the result in
   `progress/impl_gp5_preset_chain_visual_board.md`. Check the result against design.md's "Visual
   direction" section (palette, LED, lifted selected block, cable at `sm`+, scroll-on-select) and record
-  the palette and block patterns in `docs/architecture.md` §2b.
+  the palette and block patterns in `docs/architecture.md` §2b. Note: the `sm:` breakpoint is **640px**
+  in Tailwind v4, not 1024px — the previous "≥1024px (the sm: breakpoint)" wording in the prior impl
+  doc was incorrect and is corrected here.
 
-  **Status:** not yet performed. The feature 14 implementer ticked it without running it. It will be done
-  manually with Ricardo, and it is a hard gate on feature 16 (`gp5_preset_chain_visual_board_review_fixes`),
-  which must not log out until he confirms it.
+  **Status:** performed manually with Ricardo (the user) and confirmed on 2026-09-29, during feature 16
+  (`gp5_preset_chain_visual_board_review_fixes`). At 375px and ≥1024px, in light and dark mode: no
+  horizontal overflow on rows, the board, or the detail; colors legible in both themes; bypassed dimming
+  visible. Palette and block patterns are recorded in `docs/architecture.md` §2b. Out of scope here, by
+  the user's decision: the pedal-style visual redesign is feature 17's scope (with its own visual check),
+  and the AMP FX title mismatch is feature 19's scope (vocabulary).
 - [x] T42 Run `./init.sh`. It must pass, including `bun run test` and `bun run build`.
 - [ ] T43 (R11 follow-up, hardware verification; **not** executable by an implementer or reviewer
   session) Ricardo sets known knob values on the real GP-5 for a sample of FX (at least one AMP, one DLY,

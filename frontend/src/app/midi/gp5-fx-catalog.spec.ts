@@ -166,6 +166,30 @@ describe('describeParameters (R6, R7, R8)', () => {
     });
     expect(result.map((r) => r.label)).toEqual(['p0', 'p2', 'p5']);
   });
+
+  // design.md "Signatures" says describeParameters must be labelled only
+  // when describeModuleType(...).kind === 'resolved' AND GP5_FX_CATALOG[cat]?.[fxlow]
+  // exists. Given R1 (GP5_FX_CATALOG and GP5_MODULE_FX_TITLES are
+  // length-aligned, and describeModuleType only resolves within the
+  // FX-title range), the case "parseModuleType succeeds AND
+  // describeModuleType returns raw" is structurally unreachable with the
+  // current vocabulary. The gate is therefore defense-in-depth (review2
+  // N3): the existing R6 test already proves it doesn't change behavior
+  // on resolved FX; this test documents the same for every valid
+  // (cat, fxlow) pair, so a future vocabulary change that breaks the
+  // alignment would surface here.
+  it('every R1-aligned (cat, fxlow) pair still gets labelled entries (N3 gate)', () => {
+    for (let cat = 0; cat < GP5_MODULE_CATEGORIES.length; cat++) {
+      for (let fxlow = 0; fxlow < GP5_MODULE_FX_TITLES[cat].length; fxlow++) {
+        const moduleType = `cat${cat.toString(16)}_fx${fxlow.toString(16)}`;
+        const result = describeParameters(moduleType, { p0: 1, p1: 2 });
+        const catalog = GP5_FX_CATALOG[cat][fxlow];
+        expect(result).toHaveLength(catalog.parameterNames.length);
+        expect(result[0].label).toBe(catalog.parameterNames[0]);
+        expect(result[0].value).toBe(1);
+      }
+    }
+  });
 });
 
 describe('GP5_FX_PARAMETER_MAPPING_STATUS (R11, R12)', () => {
