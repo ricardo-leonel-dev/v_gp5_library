@@ -89,6 +89,27 @@ function buildBody(): Uint8Array {
   return body;
 }
 
+// Variant of buildBody() that stamps the supplied REC_MODELS records into the
+// MODELS data area (offset 4..44). Each entry is a 4-byte tuple
+// [b0, b1, b2, b3] written verbatim — the codec reads b0|b1<<8|b2<<16 as
+// `fxlow` and b3 as `cat`, so the test pins that exact interpretation against
+// real captured bytes from the GP-5 (see feature 18 / R37). Bypass mask,
+// order, and params stay identical to buildBody() so this only exercises the
+// REC_MODELS path.
+function buildBodyWithModels(records: readonly (readonly [number, number, number, number])[]): Uint8Array {
+  const body = buildBody();
+  // REC_MODELS data area is 10 records of 4 bytes each (offset 4..44 in the
+  // body). Hardcoded 10 to match the codec's N_BLOCKS, which is internal.
+  for (let k = 0; k < records.length && k < 10; k++) {
+    const [b0, b1, b2, b3] = records[k];
+    body[4 + k * 4 + 0] = b0;
+    body[4 + k * 4 + 1] = b1;
+    body[4 + k * 4 + 2] = b2;
+    body[4 + k * 4 + 3] = b3;
+  }
+  return body;
+}
+
 // Chunk a blob into 19-byte pieces (same as the codec writes) — used to
 // synthesize multi-frame replies for the decoder. Every frame in the
 // transfer carries the SAME chunkCount value at decoded[1] (the total number
@@ -444,6 +465,51 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
       chunkForReassembly(buildBodyBlob(buildBody()))[0],
     );
     expect(postDump.kind).toBe('ignored');
+  });
+
+  test('decodeBody decodes non-zero REC_MODELS records against the captured preset 0 (R37, T17 precursor)', () => {
+    // Captured by Ricardo from the real GP-5 on 2026-09-28: 4 of the 10 blocks
+    // in preset 0 carry populated REC_MODELS records (the rest are zero). The
+    // exact bytes below were read straight off the pedal via
+    // progress/gp5_webmidi_body_read_probe.html and confirmed against the
+    // pedal's own UI labels (NR-empty / PRE+COMP / AMP+DarkTwin / CAB+User IR
+    // 1-20). This test pins the CODEC's byte interpretation — that b0|b1<<8|
+    // b2<<16 is `fxlow` and b3 is `cat` — so future refactors cannot silently
+    // swap them. It does NOT pin the FX-title mapping; that lives in
+    // gp5-module-vocabulary.ts (GP5_MODULE_FX_TITLES) and is HYPOTHESIS until
+    // feature 19 re-verifies it against hardware.
+    const capturedRecords: ReadonlyArray<readonly [number, number, number, number]> = [
+      [0x1b, 0x00, 0x00, 0x00], // block 0 — NR, no module populated, fxlow=0x1b
+      [0x00, 0x00, 0x00, 0x00], // block 1 — PRE/COMP, fxlow=0, cat=0
+      [0x00, 0x00, 0x00, 0x00], // block 2 — zero (unused slot)
+      [0x04, 0x00, 0x00, 0x07], // block 3 — AMP/DarkTwin, fxlow=4, cat=7
+      [0x00, 0x00, 0x10, 0x0a], // block 4 — CAB/User IR, fxlow=0x100000, cat=0xa
+      [0x00, 0x00, 0x00, 0x00],
+      [0x00, 0x00, 0x00, 0x00],
+      [0x00, 0x00, 0x00, 0x00],
+      [0x00, 0x00, 0x00, 0x00],
+      [0x00, 0x00, 0x00, 0x00],
+    ];
+
+    const codec = newCodec();
+    const frames = chunkForReassembly(buildBodyBlob(buildBodyWithModels(capturedRecords)));
+    let lastResult: SysexDecodeResult = { kind: 'ignored' };
+    for (const f of frames) lastResult = codec.decodeIncomingMessage(f);
+
+    expect(lastResult.kind).toBe('preset');
+    if (lastResult.kind !== 'preset') return;
+    const chain = lastResult.preset.chain;
+
+    // The codec reads each 4-byte REC_MODELS record literally as
+    // fxlow = body[0] | body[1]<<8 | body[2]<<16 and cat = body[3]. The
+    // `moduleType` string is `cat${cat_hex}_fx${fxlow_hex}` (see the
+    // REC_MODELS record loop in `decodeBody()`). These assertions pin that
+    // interpretation for every captured block; a regression that swaps
+    // fxlow/cat, widens fxlow, or reorders the bytes will fail loudly here.
+    expect(chain[0].moduleType).toBe('cat0_fx1b');
+    expect(chain[1].moduleType).toBe('cat0_fx0');
+    expect(chain[3].moduleType).toBe('cat7_fx4');
+    expect(chain[4].moduleType).toBe('cata_fx100000');
   });
 });
 

@@ -35,11 +35,8 @@
               [selectedIndex]="selectedBlockIndex()"
               (blockSelected)="onBlockSelected($event)"
             ></app-chain-board>
-            @if (selectedBlockIndex() !== null) {
-              @let blockIndex = $any(selectedBlockIndex());
-              @if (blockIndex !== null && blockIndex >= 0 && blockIndex < preset.chain.length) {
-                <app-block-detail [slot]="preset.chain[blockIndex]"></app-block-detail>
-              }
+            @if (selectedSlot(); as slot) {
+              <app-block-detail [slot]="slot" (closed)="selectedBlockIndex.set(null)"></app-block-detail>
             }
           </section>
         }

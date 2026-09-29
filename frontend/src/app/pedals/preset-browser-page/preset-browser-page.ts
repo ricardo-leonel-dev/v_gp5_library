@@ -1,15 +1,15 @@
 import {
-  AfterViewInit,
   Component,
   ElementRef,
   OnInit,
+  computed,
   effect,
   inject,
   signal,
   viewChild,
 } from '@angular/core';
 import { TranslocoDirective } from '@jsverse/transloco';
-import type { Preset } from '../../midi/preset';
+import type { Preset, PresetSlot } from '../../midi/preset';
 import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
 import { SelectedPresetStore } from '../selected-preset.service';
 import { ChainStrip } from '../chain-strip/chain-strip';
@@ -23,7 +23,7 @@ type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
   imports: [TranslocoDirective, ChainStrip, ChainBoard, BlockDetail],
   templateUrl: './preset-browser-page.html',
 })
-export class PresetBrowserPage implements OnInit, AfterViewInit {
+export class PresetBrowserPage implements OnInit {
   private readonly pedal = inject(WebMidiPedalConnection);
   private readonly selectedPresetStore = inject(SelectedPresetStore);
 
@@ -34,6 +34,13 @@ export class PresetBrowserPage implements OnInit, AfterViewInit {
   readonly error = signal<string | null>(null);
   readonly selectedPreset = this.selectedPresetStore.selectedPreset;
   readonly selectedBlockIndex = signal<number | null>(null);
+
+  readonly selectedSlot = computed<PresetSlot | null>(() => {
+    const idx = this.selectedBlockIndex();
+    const preset = this.selectedPreset();
+    if (idx === null || !preset) return null;
+    return preset.chain[idx] ?? null;
+  });
 
   private readonly boardSection = viewChild<ElementRef<HTMLElement>>('boardSection');
 
@@ -73,11 +80,8 @@ export class PresetBrowserPage implements OnInit, AfterViewInit {
     void this.loadPresets();
   }
 
-  ngAfterViewInit(): void {
-    // No-op; kept for the lifecycle hook to exist if it becomes useful.
-  }
-
   selectPreset(preset: Preset): void {
+    this.selectedBlockIndex.set(null);
     this.selectedPresetStore.select(preset);
   }
 

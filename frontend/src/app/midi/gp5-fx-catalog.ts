@@ -45,6 +45,7 @@
  * read a patch with known knob positions from the real GP-5 and compare
  * (tasks.md's final task, left unchecked by design).
  */
+import { describeModuleType, parseModuleType } from './gp5-module-vocabulary';
 
 // --- R1-R4: GP5_FX_CATALOG -------------------------------------------------
 // `parameterNames` — one entry per `p<k>` slot the FX exposes
@@ -226,7 +227,7 @@ export function describeParameters(
   parameters: Readonly<Record<string, number>>,
 ): DescribedParameter[] {
   const parsed = parseModuleType(moduleType);
-  if (parsed) {
+  if (parsed && describeModuleType(moduleType).kind === 'resolved') {
     const cat = parsed.cat;
     const fx = parsed.fxlow;
     const category = GP5_FX_CATALOG[cat];
@@ -260,8 +261,3 @@ function rawParameters(parameters: Readonly<Record<string, number>>): DescribedP
     ...other.map((key) => ({ label: key, value: parameters[key] ?? null })),
   ];
 }
-
-// Imported here at the bottom to keep the file's public surface (data +
-// describeParameters + status) reading top-to-bottom before the import
-// resolution detail.
-import { parseModuleType } from './gp5-module-vocabulary';
