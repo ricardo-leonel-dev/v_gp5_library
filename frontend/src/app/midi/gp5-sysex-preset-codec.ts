@@ -60,6 +60,39 @@
 //     payload shape and the protocol mechanics, not a verified bit-perfect
 //     GP-5 serializer.
 //
+//   * decodeBody REC_MODELS byte layout (feature 18, R37) — INDEPENDENTLY RE-
+//     VERIFIED against real GP-5 hardware on 2026-09-28 from a captured preset
+//     0 body dump. The REC_MODELS record read inside `decodeBody()` in this
+//     file (`fxlow = body[0] | body[1]<<8 | body[2]<<16` 24-bit little-endian,
+//     `cat = body[3]`) matches the valeton-gp50 reference byte-for-byte. Real
+//     evidence from the capture (the 4 REC_MODELS bytes Ricardo confirmed as
+//     PRE/COMP, AMP/DarkTwin, CAB/UserIR on the pedal):
+//
+//       block 0 (NR, no module):        [0x1b, 0x00, 0x00, 0x00]
+//       block 1 (PRE/COMP):             [0x00, 0x00, 0x00, 0x00]
+//       block 3 (AMP/DarkTwin):         [0x04, 0x00, 0x00, 0x07]
+//       block 4 (CAB/User IR):         [0x00, 0x00, 0x10, 0x0a]
+//
+//     `decodeBody()` reads these literally as (fxlow, cat) pairs — (0x1b, 0x0),
+//     (0x0, 0x0), (0x4, 0x7), (0x100000, 0xa) — and emits the corresponding
+//     `moduleType` strings (`cat0_fx1b`, `cat0_fx0`, `cat7_fx4`, `cata_fx100000`).
+//     A non-zero REC_MODELS test exercising exactly this byte sequence is
+//     pinned in gp5-sysex-preset-codec.spec.ts under the
+//     "decodes non-zero REC_MODELS records against the captured preset 0"
+//     case.
+//
+//     IMPORTANT — the FX-title mismatch Ricardo observed (preset 0 AMP renders
+//     as "MOD/O-Phase" instead of "Dark Twin"; preset 0 PRE renders as "NR/
+//     Gate" instead of "COMP"; preset 0 CAB renders as invalid instead of
+//     "User IR 1-20") is NOT a codec bug. The codec faithfully produces the
+//     literal (cat, fxlow) values the pedal sent. The title mapping lives in
+//     src/app/midi/gp5-module-vocabulary.ts (GP5_MODULE_FX_TITLES) and is
+//     HYPOTHESIS — that file's own header comment already flags T17 as
+//     the human-hardware follow-up to confirm the GP-5's internal FX
+//     numbering against the manual's per-category listing, and that follow-up
+//     was never executed. The proper fix is feature 19
+//     (`gp5_module_vocabulary_hardware_re_verification`), not a codec change.
+//
 // MIT License, Copyright (c) 2026 Andrew Mercurio:
 //
 //   Permission is hereby granted, free of charge, to any person obtaining a copy
