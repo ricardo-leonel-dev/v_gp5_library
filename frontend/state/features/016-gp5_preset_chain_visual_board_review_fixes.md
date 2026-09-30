@@ -2,9 +2,9 @@
 feature_number: 16
 name: gp5_preset_chain_visual_board_review_fixes
 title: Fix review findings on the GP-5 chain visual board (feature 14)
-status: in_progress
+status: done
 created_at: 2026-09-28T19:16:52.000Z
-updated_at: 2026-09-29T05:22:15.000Z
+updated_at: 2026-09-29T05:32:11.000Z
 ---
 
 ## Description

@@ -55,7 +55,7 @@ describe('BlockDetail', () => {
 
   it('shows the translated category name, FX title, and on label for an enabled resolved entry (R26, R27, R28)', () => {
     const slot: PresetSlot = {
-      moduleType: 'cat4_fx0',
+      moduleType: 'cat7_fx1',
       enabled: true,
       parameters: { p0: 10, p1: 20, p2: 30 },
     };
@@ -75,7 +75,7 @@ describe('BlockDetail', () => {
 
   it('shows the off label for a bypassed resolved entry (R28)', () => {
     const slot: PresetSlot = {
-      moduleType: 'cat4_fx1',
+      moduleType: 'cat7_fx3',
       enabled: false,
       parameters: { p0: 1, p1: 2, p2: 3, p3: 4, p4: 5, p5: 6 },
     };
@@ -94,7 +94,7 @@ describe('BlockDetail', () => {
 
   it('renders one parameter row per describeParameters entry in order (R29)', () => {
     const slot: PresetSlot = {
-      moduleType: 'cat4_fx1',
+      moduleType: 'cat7_fx3',
       enabled: true,
       parameters: { p0: 11, p1: 22, p2: 33, p3: 44, p4: 55, p5: 66 },
     };
@@ -119,7 +119,7 @@ describe('BlockDetail', () => {
 
   it('shows the hypothesis notice (R30) — resolved slot uses the translated chainBoard.mapping_hypothesis text', () => {
     const slot: PresetSlot = {
-      moduleType: 'cat4_fx0',
+      moduleType: 'cat7_fx1',
       enabled: true,
       parameters: { p0: 1, p1: 2, p2: 3 },
     };
@@ -187,7 +187,7 @@ describe('BlockDetail', () => {
 
   it('browsing an AMP block renders 32 entries in order with translated content (R33, R34)', () => {
     const slot: PresetSlot = {
-      moduleType: 'cat4_fx0',
+      moduleType: 'cat7_fx1',
       enabled: true,
       parameters: { p0: 1, p1: 2, p2: 3 },
     };
@@ -218,7 +218,7 @@ describe('BlockDetail', () => {
 
   it('marks only the active FX index with aria-current="true" and the active badge (R35)', () => {
     const slot: PresetSlot = {
-      moduleType: 'cat4_fx5',
+      moduleType: 'cat7_fx15',
       enabled: true,
       parameters: { p0: 1, p1: 2, p2: 3, p3: 4, p4: 5, p5: 6 },
     };

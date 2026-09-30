@@ -42,8 +42,8 @@ describe('ChainBoard', () => {
 
   it('renders one <button> per chain entry in order with the right titles, and applies grid classes (R22, R38)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat8_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
+      { moduleType: 'catb_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -63,7 +63,7 @@ describe('ChainBoard', () => {
     expect(buttons).toHaveLength(2);
     expect(buttons[0].getAttribute('data-testid')).toBe('board-block-0');
     expect(buttons[1].getAttribute('data-testid')).toBe('board-block-1');
-    // Content check: cat4_fx0 = AMP/Tweedy, cat8_fx0 = DLY/Pure (m6 —
+    // Content check: cat7_fx1 = AMP/Tweedy, catb_fx0 = DLY/Pure (m6 —
     // order-by-testid alone is tautological because the @for position is
     // always ascending).
     expect((buttons[0] as HTMLElement).textContent).toContain('Tweedy');
@@ -72,8 +72,8 @@ describe('ChainBoard', () => {
 
   it('reflects selectedIndex in aria-pressed (R24)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat8_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
+      { moduleType: 'catb_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -93,9 +93,9 @@ describe('ChainBoard', () => {
 
   it('emits blockSelected with the clicked position (R24)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx1', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx2', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx3', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx4', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -118,9 +118,9 @@ describe('ChainBoard', () => {
     sub.unsubscribe();
   });
 
-  it('R16: a block for cat1_fx0 shows the PRE code and carries every categoryStyle(1) token', () => {
+  it('R16: a block for cat0_fx0 shows the PRE code and carries every categoryStyle(1) token', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -143,8 +143,8 @@ describe('ChainBoard', () => {
 
   it('R17, R18: a bypassed block carries opacity-40 and an enabled one does not', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx1', enabled: false, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx3', enabled: false, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -164,7 +164,7 @@ describe('ChainBoard', () => {
 
   it('R19: "empty" and cat99_fx0 render with every NEUTRAL_BLOCK_STYLE token and the translated chainBoard.unknown title; block count equals chain.length', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
       { moduleType: 'empty', enabled: false, parameters: {} },
       { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
     ];
@@ -191,8 +191,8 @@ describe('ChainBoard', () => {
 
   it('aria-label is fully translated: category, FX title and on/off state; unknown blocks use unknown_short/unknown (m1, m2)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx0', enabled: false, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: false, parameters: {} },
       { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
@@ -232,7 +232,7 @@ describe('ChainBoard', () => {
 
   it('renders the LED only on resolved blocks, never on unknown ones (m3)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
       { moduleType: 'empty', enabled: false, parameters: {} },
       { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
     ];

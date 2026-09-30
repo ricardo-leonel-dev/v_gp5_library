@@ -37,15 +37,16 @@
  *   - EV 51 (p.28) lists `PRES` last, unlike other amps. Transcribed as
  *     printed.
  *   - MOD: the manual continues MOD onto p.33 with O-Trem, Sine Trem, Bias
- *     Trem. Feature 10 kept MOD at 8 entries; R1 aligns the catalog to
- *     feature 10, so these three are **not** in the catalog or the FX
- *     browser.
+ *     Trem. The pedal offers them after Vibrato (feature 19), so they are
+ *     appended at MOD indices 8-10 with their p.33 controls.
+ *   - N->S: every SnapTone (the 50 factory files and the generic
+ *     `User SnapTone`) exposes the p.23 N->S controls.
  *
  * Nothing in this file can confirm the hypothesis. It needs Ricardo to
  * read a patch with known knob positions from the real GP-5 and compare
  * (tasks.md's final task, left unchecked by design).
  */
-import { describeModuleType, parseModuleType } from './gp5-module-vocabulary';
+import { resolveModuleIndices } from './gp5-module-vocabulary';
 
 // --- R1-R4: GP5_FX_CATALOG -------------------------------------------------
 // `parameterNames` — one entry per `p<k>` slot the FX exposes
@@ -60,6 +61,8 @@ export interface Gp5FxCatalogEntry {
 function entry(parameterNames: readonly string[], manualPage: number, c: number, i: number): Gp5FxCatalogEntry {
   return { parameterNames, manualPage, descriptionKey: `gp5Fx.c${c}.f${i}` };
 }
+
+const SNAPTONE_PARAMETERS = ['Gain', 'VOL', 'Bass', 'Middle', 'Treble'];
 
 export const GP5_FX_CATALOG: readonly (readonly Gp5FxCatalogEntry[])[] = [
   // 0: NR — p.20
@@ -92,10 +95,8 @@ export const GP5_FX_CATALOG: readonly (readonly Gp5FxCatalogEntry[])[] = [
     entry(['Fuzz', 'VOL'], 23, 2, 8),
     entry(['Gain', 'Blend', 'VOL', 'Bass', 'Treble'], 23, 2, 9),
   ],
-  // 3: N->S — p.23
-  [
-    entry(['Gain', 'VOL', 'Bass', 'Middle', 'Treble'], 23, 3, 0),
-  ],
+  // 3: N->S — p.23. Every SnapTone (factory 1-50 and `User SnapTone` 51) uses the N->S row's controls.
+  Array.from({ length: 52 }, (_, i) => entry(SNAPTONE_PARAMETERS, 23, 3, i)),
   // 4: AMP — pp.24-30
   [
     entry(['Gain', 'Tone', 'VOL'], 24, 4, 0),
@@ -164,7 +165,7 @@ export const GP5_FX_CATALOG: readonly (readonly Gp5FxCatalogEntry[])[] = [
     entry(['50Hz', '120Hz', '400Hz', '800Hz', '4.5kHz', 'VOL'], 31, 6, 3),
     entry(['80Hz', '240Hz', '750Hz', '2.2kHz', '6.6kHz'], 31, 6, 4),
   ],
-  // 7: MOD — p.32 (8 entries per feature 10; tremolo entries on p.33 omitted)
+  // 7: MOD — p.32, then the p.33 tremolos (O-Trem, Sine Trem, Bias Trem)
   [
     entry(['Depth', 'Rate', 'Tone'], 32, 7, 0),
     entry(['Depth', 'Rate', 'VOL'], 32, 7, 1),
@@ -174,6 +175,9 @@ export const GP5_FX_CATALOG: readonly (readonly Gp5FxCatalogEntry[])[] = [
     entry(['Depth', 'Rate'], 32, 7, 5),
     entry(['Depth', 'Rate'], 32, 7, 6),
     entry(['Depth', 'Rate', 'VOL'], 32, 7, 7),
+    entry(['Depth', 'Rate'], 33, 7, 8),
+    entry(['Depth', 'Rate', 'VOL'], 33, 7, 9),
+    entry(['Depth', 'Rate', 'VOL', 'Bias'], 33, 7, 10),
   ],
   // 8: DLY — pp.33-34
   [
@@ -213,10 +217,8 @@ export const GP5_FX_PARAMETER_MAPPING_STATUS =
   "specs/gp5_preset_chain_visual_board/tasks.md's final task.";
 
 // --- R6-R8: describeParameters -------------------------------------------
-// Labelled only when `describeModuleType(...).kind === 'resolved'` **and**
-// `GP5_FX_CATALOG[cat]?.[fxlow]` exists; given R1 the second check always
-// passes, but it is kept as a guard so a future vocabulary change cannot
-// silently produce a different shape.
+// Labelled only when the hardware code resolves to a canonical pair (feature 19,
+// `resolveModuleIndices`); the raw `cat`/`fxlow` are never catalog indices.
 export interface DescribedParameter {
   readonly label: string;
   readonly value: number | null;
@@ -226,18 +228,13 @@ export function describeParameters(
   moduleType: string,
   parameters: Readonly<Record<string, number>>,
 ): DescribedParameter[] {
-  const parsed = parseModuleType(moduleType);
-  if (parsed && describeModuleType(moduleType).kind === 'resolved') {
-    const cat = parsed.cat;
-    const fx = parsed.fxlow;
-    const category = GP5_FX_CATALOG[cat];
-    const entry = category?.[fx];
-    if (entry) {
-      return entry.parameterNames.map((label, k) => ({
-        label,
-        value: parameters[`p${k}`] ?? null,
-      }));
-    }
+  const indices = resolveModuleIndices(moduleType);
+  const entry = indices && GP5_FX_CATALOG[indices.categoryIndex]?.[indices.fxIndex];
+  if (entry) {
+    return entry.parameterNames.map((label, k) => ({
+      label,
+      value: parameters[`p${k}`] ?? null,
+    }));
   }
   return rawParameters(parameters);
 }

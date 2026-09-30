@@ -279,10 +279,10 @@ describe('PresetBrowserPage', () => {
         slot: 1,
         name: 'Mixed',
         chain: [
-          { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
-          { moduleType: 'cat4_fx0', enabled: false, parameters: {} },
-          { moduleType: 'cat8_fx0', enabled: true, parameters: {} },
-          { moduleType: 'cat5_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat7_fx1', enabled: false, parameters: {} },
+          { moduleType: 'catb_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cata_fx1', enabled: true, parameters: {} },
         ],
       },
     ];
@@ -339,7 +339,7 @@ describe('PresetBrowserPage', () => {
         slot: 1,
         name: 'Mixed',
         chain: [
-          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
           { moduleType: 'empty', enabled: false, parameters: { p0: 1 } },
           { moduleType: 'cat99_fx0', enabled: true, parameters: { p0: 1 } },
         ],
@@ -394,8 +394,8 @@ describe('PresetBrowserPage', () => {
 
   it('does not render a chain board before a preset is selected (R23)', async () => {
     const fixture: Preset[] = [
-      { slot: 1, name: 'A', chain: [{ moduleType: 'cat1_fx0', enabled: true, parameters: {} }] },
-      { slot: 2, name: 'B', chain: [{ moduleType: 'cat1_fx0', enabled: true, parameters: {} }] },
+      { slot: 1, name: 'A', chain: [{ moduleType: 'cat0_fx0', enabled: true, parameters: {} }] },
+      { slot: 2, name: 'B', chain: [{ moduleType: 'cat0_fx0', enabled: true, parameters: {} }] },
     ];
     const fake = new FakePedal();
     fake.setConnectionState('connected');
@@ -418,14 +418,14 @@ describe('PresetBrowserPage', () => {
         slot: 1,
         name: 'Alpha',
         chain: [
-          { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
-          { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+          { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
         ],
       },
       {
         slot: 2,
         name: 'Beta',
-        chain: [{ moduleType: 'cat8_fx0', enabled: true, parameters: {} }],
+        chain: [{ moduleType: 'catb_fx0', enabled: true, parameters: {} }],
       },
     ];
     const fake = new FakePedal();
@@ -463,14 +463,14 @@ describe('PresetBrowserPage', () => {
         slot: 1,
         name: 'A',
         chain: [
-          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
         ],
       },
       {
         slot: 2,
         name: 'B',
-        chain: [{ moduleType: 'cat8_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } }],
+        chain: [{ moduleType: 'catb_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } }],
       },
     ];
     const fake = new FakePedal();
@@ -513,8 +513,8 @@ describe('PresetBrowserPage', () => {
         slot: 1,
         name: 'A',
         chain: [
-          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
         ],
       },
     ];
@@ -560,9 +560,9 @@ describe('PresetBrowserPage', () => {
         slot: 1,
         name: 'A',
         chain: [
-          { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
-          { moduleType: 'cat8_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
+          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+          { moduleType: 'catb_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
         ],
       },
     ];
@@ -802,9 +802,9 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
       slot: 1,
       name: 'A',
       chain: [
-        { moduleType: 'cat1_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-        { moduleType: 'cat4_fx0', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
-        { moduleType: 'cat8_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
+        { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
+        { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
+        { moduleType: 'catb_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
       ],
     };
 

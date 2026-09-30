@@ -42,9 +42,9 @@ describe('ChainStrip', () => {
 
   it('renders one block per chain entry in chain order with the right category code (R15)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat8_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
+      { moduleType: 'catb_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -60,7 +60,7 @@ describe('ChainStrip', () => {
     expect(blocks[0].getAttribute('data-testid')).toBe('strip-block-0');
     expect(blocks[1].getAttribute('data-testid')).toBe('strip-block-1');
     expect(blocks[2].getAttribute('data-testid')).toBe('strip-block-2');
-    // Content check: cat1/4/8 -> PRE/AMP/DLY via displayCategoryCode (N->S
+    // Content check: cat0_fx0/cat7_fx1/catb_fx0 -> PRE/AMP/DLY via displayCategoryCode (N->S
     // is the only one with a different display form, and it isn't in this
     // chain). Guards against an order-by-testid assertion passing even when
     // the wrong block's content is at a given position.
@@ -70,7 +70,7 @@ describe('ChainStrip', () => {
   });
 
   it('container has flex + w-full; blocks have flex-1 + min-w-0 (R39)', () => {
-    const chain: PresetSlot[] = [{ moduleType: 'cat4_fx0', enabled: true, parameters: {} }];
+    const chain: PresetSlot[] = [{ moduleType: 'cat7_fx1', enabled: true, parameters: {} }];
     const { httpMock } = setup();
 
     const fixture = TestBed.createComponent(ChainStrip);
@@ -90,7 +90,7 @@ describe('ChainStrip', () => {
   });
 
   it('shows the category code on resolved blocks and applies categoryStyle (R16)', () => {
-    const chain: PresetSlot[] = [{ moduleType: 'cat1_fx0', enabled: true, parameters: {} }];
+    const chain: PresetSlot[] = [{ moduleType: 'cat0_fx0', enabled: true, parameters: {} }];
     const { httpMock } = setup();
 
     const fixture = TestBed.createComponent(ChainStrip);
@@ -112,8 +112,8 @@ describe('ChainStrip', () => {
 
   it('applies opacity-40 to a bypassed entry and not to an enabled one (R17, R18)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx1', enabled: false, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx3', enabled: false, parameters: {} },
     ];
     const { httpMock } = setup();
 
@@ -132,9 +132,9 @@ describe('ChainStrip', () => {
 
   it('renders neutral blocks at the right positions and preserves chain length (R19)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
       { moduleType: 'empty', enabled: false, parameters: {} },
-      { moduleType: 'cat4_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
       { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();
@@ -160,8 +160,8 @@ describe('ChainStrip', () => {
 
   it('aria-label is fully translated: category, FX title and on/off state; unknown blocks use unknown_short/unknown (m1, m2)', () => {
     const chain: PresetSlot[] = [
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
-      { moduleType: 'cat4_fx0', enabled: false, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat7_fx1', enabled: false, parameters: {} },
       { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
     ];
     const { httpMock } = setup();

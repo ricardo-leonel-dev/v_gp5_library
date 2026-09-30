@@ -81,17 +81,16 @@
 //     "decodes non-zero REC_MODELS records against the captured preset 0"
 //     case.
 //
-//     IMPORTANT — the FX-title mismatch Ricardo observed (preset 0 AMP renders
-//     as "MOD/O-Phase" instead of "Dark Twin"; preset 0 PRE renders as "NR/
-//     Gate" instead of "COMP"; preset 0 CAB renders as invalid instead of
-//     "User IR 1-20") is NOT a codec bug. The codec faithfully produces the
-//     literal (cat, fxlow) values the pedal sent. The title mapping lives in
-//     src/app/midi/gp5-module-vocabulary.ts (GP5_MODULE_FX_TITLES) and is
-//     HYPOTHESIS — that file's own header comment already flags T17 as
-//     the human-hardware follow-up to confirm the GP-5's internal FX
-//     numbering against the manual's per-category listing, and that follow-up
-//     was never executed. The proper fix is feature 19
-//     (`gp5_module_vocabulary_hardware_re_verification`), not a codec change.
+//     IMPORTANT — the FX-title mismatch Ricardo observed (preset 0 AMP rendered
+//     as "MOD/O-Phase" instead of "Dark Twin"; PRE as "NR/Gate" instead of
+//     "COMP"; CAB as invalid instead of "User IR 1-20") was NOT a codec bug.
+//     The codec faithfully produces the literal (cat, fxlow) values the pedal
+//     sent. Feature 19 (`gp5_module_vocabulary_hardware_re_verification`)
+//     closed the gap in src/app/midi/gp5-module-vocabulary.ts: titles are now
+//     resolved through a per-code lookup table (GP5_HARDWARE_MODULE_CODES)
+//     backed by real reads recorded in gp5-hardware-captures.ts, and codes not
+//     in that table resolve raw. The 2026-09-30 reorder capture also confirmed
+//     that moving a block only changes REC_ORDER, never REC_MODELS.
 //
 // MIT License, Copyright (c) 2026 Andrew Mercurio:
 //

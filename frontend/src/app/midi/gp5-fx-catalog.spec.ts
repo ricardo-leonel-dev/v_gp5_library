@@ -12,6 +12,7 @@ import {
   GP5_FX_PARAMETER_MAPPING_STATUS,
 } from './gp5-fx-catalog';
 import {
+  GP5_HARDWARE_MODULE_CODES,
   GP5_MODULE_CATEGORIES,
   GP5_MODULE_FX_TITLES,
 } from './gp5-module-vocabulary';
@@ -114,10 +115,29 @@ describe('GP5_FX_CATALOG shape (R1, R2, R3, R4)', () => {
   });
 });
 
+describe('catalog entries for appended titles (R23)', () => {
+  it('R23: MOD tremolos have their p.33 controls', () => {
+    expect(GP5_FX_CATALOG[7].slice(8).map((e) => [e.parameterNames, e.manualPage])).toEqual([
+      [['Depth', 'Rate'], 33],
+      [['Depth', 'Rate', 'VOL'], 33],
+      [['Depth', 'Rate', 'VOL', 'Bias'], 33],
+    ]);
+  });
+
+  it('R23: every SnapTone (factory and User SnapTone) uses the p.23 N->S controls', () => {
+    const snapTones = GP5_FX_CATALOG[3].slice(1);
+    expect(snapTones).toHaveLength(GP5_MODULE_FX_TITLES[3].length - 1);
+    for (const entry of snapTones) {
+      expect(entry.parameterNames).toEqual(['Gain', 'VOL', 'Bass', 'Middle', 'Treble']);
+      expect(entry.manualPage).toBe(23);
+    }
+  });
+});
+
 describe('describeParameters (R6, R7, R8)', () => {
   it('R6: a resolved FX returns one labelled entry per name with values from p<k>', () => {
-    // cat4_fx1 = Bellman 59N -> Gain, PRES, VOL, Bass, Middle, Treble
-    const result = describeParameters('cat4_fx1', {
+    // cat7_fx3 = AMP / Bellman 59N (captured) -> Gain, PRES, VOL, Bass, Middle, Treble
+    const result = describeParameters('cat7_fx3', {
       p0: 1, p1: 2, p2: 3, p3: 4, p4: 5, p5: 6, p6: 7, p7: 8,
     });
     expect(result).toEqual([
@@ -131,9 +151,9 @@ describe('describeParameters (R6, R7, R8)', () => {
   });
 
   it('R7: missing p<k> keys map to value: null', () => {
-    // cat4_fx8 = UK 50JP -> Gain 1, Gain 2, PRES, VOL, Bass, Middle, Treble (7 names)
+    // cat7_fx2f = AMP / UK 50JP (captured) -> Gain 1, Gain 2, PRES, VOL, Bass, Middle, Treble
     // Pass only p0..p3
-    const result = describeParameters('cat4_fx8', {
+    const result = describeParameters('cat7_fx2f', {
       p0: 10, p1: 20, p2: 30, p3: 40,
     });
     expect(result).toEqual([
@@ -167,28 +187,35 @@ describe('describeParameters (R6, R7, R8)', () => {
     expect(result.map((r) => r.label)).toEqual(['p0', 'p2', 'p5']);
   });
 
-  // design.md "Signatures" says describeParameters must be labelled only
-  // when describeModuleType(...).kind === 'resolved' AND GP5_FX_CATALOG[cat]?.[fxlow]
-  // exists. Given R1 (GP5_FX_CATALOG and GP5_MODULE_FX_TITLES are
-  // length-aligned, and describeModuleType only resolves within the
-  // FX-title range), the case "parseModuleType succeeds AND
-  // describeModuleType returns raw" is structurally unreachable with the
-  // current vocabulary. The gate is therefore defense-in-depth (review2
-  // N3): the existing R6 test already proves it doesn't change behavior
-  // on resolved FX; this test documents the same for every valid
-  // (cat, fxlow) pair, so a future vocabulary change that breaks the
-  // alignment would surface here.
-  it('every R1-aligned (cat, fxlow) pair still gets labelled entries (N3 gate)', () => {
-    for (let cat = 0; cat < GP5_MODULE_CATEGORIES.length; cat++) {
-      for (let fxlow = 0; fxlow < GP5_MODULE_FX_TITLES[cat].length; fxlow++) {
-        const moduleType = `cat${cat.toString(16)}_fx${fxlow.toString(16)}`;
-        const result = describeParameters(moduleType, { p0: 1, p1: 2 });
-        const catalog = GP5_FX_CATALOG[cat][fxlow];
-        expect(result).toHaveLength(catalog.parameterNames.length);
-        expect(result[0].label).toBe(catalog.parameterNames[0]);
-        expect(result[0].value).toBe(1);
-      }
+  it('every hardware code in the table gets its canonical entry\'s labels', () => {
+    for (const [moduleType, { categoryIndex, fxIndex }] of GP5_HARDWARE_MODULE_CODES) {
+      const result = describeParameters(moduleType, { p0: 1, p1: 2 });
+      const names = GP5_FX_CATALOG[categoryIndex][fxIndex].parameterNames;
+      expect(result.map((r) => r.label), moduleType).toEqual(names);
+      expect(result[0].value).toBe(1);
     }
+  });
+});
+
+describe('describeParameters by hardware code (R15, R16)', () => {
+  it('R15: cat7_fx4 (AMP / Dark Twin) is labelled with Dark Twin\'s names, not a positional entry', () => {
+    const result = describeParameters('cat7_fx4', { p0: 1, p1: 2, p2: 3, p3: 4, p4: 5, p5: 6 });
+    expect(result.map((r) => r.label)).toEqual(GP5_FX_CATALOG[4][2].parameterNames);
+    expect(result.map((r) => r.label)).toEqual(['Gain', 'VOL', 'Bass', 'Middle', 'Treble', 'Bright']);
+    expect(result[5]).toEqual({ label: 'Bright', value: 6 });
+  });
+
+  it('R15: a factory SnapTone code gets the N->S controls', () => {
+    const result = describeParameters('catf_fx0', { p0: 1 });
+    expect(result.map((r) => r.label)).toEqual(['Gain', 'VOL', 'Bass', 'Middle', 'Treble']);
+  });
+
+  it('R16: a code absent from the table returns raw entries, even if it was a valid positional pair', () => {
+    const result = describeParameters('cat1_fx0', { p1: 2, p0: 1 });
+    expect(result).toEqual([
+      { label: 'p0', value: 1 },
+      { label: 'p1', value: 2 },
+    ]);
   });
 });
 
@@ -210,6 +237,24 @@ describe('GP5_FX_PARAMETER_MAPPING_STATUS (R11, R12)', () => {
 describe('i18n descriptionKey coverage (R5)', () => {
   const en = loadTranslations('en') as Record<string, unknown>;
   const es = loadTranslations('es') as Record<string, unknown>;
+
+  it('R24: every appended title (N->S 1-51, MOD 8-10) has an es and an en description', () => {
+    const appended = [
+      ...GP5_FX_CATALOG[3].slice(1),
+      ...GP5_FX_CATALOG[7].slice(8),
+    ];
+    expect(appended).toHaveLength(54);
+    for (const { descriptionKey } of appended) {
+      for (const lang of [en, es]) {
+        const value = getNested(lang, descriptionKey);
+        expect(typeof value, descriptionKey).toBe('string');
+        expect((value as string).length, descriptionKey).toBeGreaterThan(0);
+      }
+    }
+    expect(getNested(en, 'gp5Fx.c3.f51')).toBe('SnapTone file imported by the user.');
+    expect(getNested(es, 'gp5Fx.c3.f51')).toBe('Archivo SnapTone importado por el usuario.');
+    expect(getNested(en, 'gp5Fx.c3.f1')).toContain('NATAS');
+  });
 
   it('every descriptionKey resolves to a non-empty string in both JSON files', () => {
     for (let c = 0; c < GP5_FX_CATALOG.length; c++) {

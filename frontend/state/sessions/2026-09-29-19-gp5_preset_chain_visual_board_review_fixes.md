@@ -3,7 +3,7 @@ session_id: 19
 feature: gp5_preset_chain_visual_board_review_fixes
 agent: leader
 started_at: 2026-09-29T05:22:15.000Z
-closed_at:
+closed_at: 2026-09-29T05:32:11.000Z
 ---
 
 ## Plan
@@ -19,3 +19,9 @@ closed_at:
 - [leader] review3 fixes: (1) Ticked T41 [x] at tasks.md:108; my earlier edit only changed the status paragraph and I wrongly reported it as ticked. (2) Added m1/m2/m3 tests: a translated aria-label test in chain-strip.spec.ts and chain-board.spec.ts (exact 'PRE: COMP, Activo' / 'AMP: Tweedy, Bypass' / 'N/D: No reconocido, Activo'), a board unknown_short test, and a test that the board LED appears on resolved blocks only. Fixture unknown_short changed to 'N/D' so a hardcoded '?' fails. Mutation-checked against the real files (restored afterwards): strip/board state literal, strip/board aria removed, board unknown code hardcoded, board aria unknown_short hardcoded, LED in unknown branch -> all fail. (3) The F18 codec header and spec comments now point at decodeBody()'s REC_MODELS loop instead of line numbers; also dropped the 'lines 5-22' ref to the vocabulary header. docs 2b now says the LED is resolved-only. init.sh passed, 191 tests.
 
 ## Next Step
+
+## Verification
+./init.sh green under Node v24.21.0: 16 test files, 191/191 tests passed (includes the new m1/m2/m3 aria-label, unknown_short and resolved-only LED tests, each mutation-checked). Independent reviewer approved session 19 after review3 fixes. Only WARN: best-effort bootstrap_project mirror sync.
+
+## Closure
+Feature 14 review fixes (M1-M7, m1-m6, N1-N5) complete. T41 manual Level 2 visual check confirmed by Ricardo 2026-09-29 (375px and >=1024px, light and dark: no overflow, colors legible, bypass dimming visible); T41 ticked, and palette/block patterns recorded in docs/architecture.md 2b. Scope handed off: the pedal-style visual redesign goes to F17 (with its own visual check), and the AMP FX title mismatch goes to F19 (vocabulary). T43 (hardware parameter-mapping check) stays unchecked by design. F18 codec changes excluded from this changeset. Not committed.

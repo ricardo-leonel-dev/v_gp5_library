@@ -1,187 +1,321 @@
 import { describe, expect, it } from 'vitest';
+import { GP5_HARDWARE_CAPTURES } from './gp5-hardware-captures';
 import {
   decodeModule,
   describeModuleType,
+  GP5_HARDWARE_MODULE_CODES,
   GP5_MODULE_CATEGORIES,
   GP5_MODULE_FX_TITLES,
   GP5_MODULE_VOCABULARY_STATUS,
+  GP5_UNCAPTURABLE_FX,
   parseModuleType,
+  resolveModuleIndices,
 } from './gp5-module-vocabulary';
 
-// Plain Vitest (no TestBed) — this module is pure logic with no DI, same
-// category as `WebMidiPedalConnection.isSupported` per `docs/conventions.md`'s
-// Tests section.
+// Plain Vitest (no TestBed): pure logic, per `docs/conventions.md`'s Tests section.
 
-describe('GP5_MODULE_CATEGORIES (R1)', () => {
-  it('has length 10', () => {
-    expect(GP5_MODULE_CATEGORIES).toHaveLength(10);
-  });
+const N_S = GP5_MODULE_CATEGORIES.indexOf('N->S');
+const MOD = GP5_MODULE_CATEGORIES.indexOf('MOD');
 
-  it('matches the manual p.40 NR..RVB sequence exactly', () => {
+// Feature 10's arrays, frozen: every one must stay a prefix of the current table (R19).
+const FEATURE_10_FX_TITLES: readonly (readonly string[])[] = [
+  ['Gate'],
+  ['COMP', 'COMP4', 'Boost', 'Micro Boost', 'B-Boost', 'Toucher', 'Crier', 'OCTA', 'Pitch', 'Detune'],
+  [
+    'Green OD', 'Yellow OD', 'Super OD', 'SM Dist', 'Plustortion', 'La Charger', 'Darktale',
+    'Sora Fuzz', 'Red Haze', 'Bass OD',
+  ],
+  ['Empty'],
+  [
+    'Tweedy', 'Bellman 59N', 'Dark Twin', 'Foxy 30N', 'J-120 CL', 'Match CL', 'L-Star CL', 'UK 45',
+    'UK 50JP', 'UK 800', 'Bellman 59B', 'Foxy 30TB', 'SUPDual OD', 'Solo100 OD', 'Z38 OD',
+    'Bad-KT OD', 'Juice R100', 'Dizz VH', 'Dizz VH+', 'Eagle 120', 'EV 51', 'Solo100 LD',
+    'Mess DualV', 'Mess DualM', 'Power LD', 'Flagman+', 'Bog RedV', 'Classic Bass', 'Foxy Bass',
+    'Mess Bass', 'AC Pre1', 'AC Pre2',
+  ],
+  [
+    'TWD CP 1x8', 'Dark VIT 1x12', 'Foxy 1x12', 'L-Star 1x12', 'Dark CS 2x12', 'Dark Twin 2x12',
+    'SUP Star 2x12', 'J-120 2x12', 'Foxy 2x12', 'UK GRN 2x12', 'UK GRN 4x12', 'Bog 4x12',
+    'Dizz 4x12', 'EV 4x12', 'Solo 4x12', 'Mess 4x12', 'Eagle 4x12', 'Juice 4x12', 'Bellman 2x12',
+    'AMPG 4x10', 'User IR 1-20',
+  ],
+  ['Guitar EQ 1', 'Guitar EQ 2', 'Bass EQ 1', 'Bass EQ 2', 'Mess EQ'],
+  ['A-Chorus', 'B-Chorus', 'Jet', 'N-Jet', 'O-Phase', 'M-Vibe', 'V-Roto', 'Vibrato'],
+  [
+    'Pure', 'Analog', 'Slapback', 'Sweet Echo', 'Tape', 'Tube', 'Rev Echo', 'Ring Echo',
+    'Sweep Echo', 'Ping Pong',
+  ],
+  [
+    'Air', 'Room', 'Hall', 'Church', 'Plate L', 'Plate', 'Spring', 'N-Star', 'Deepsea',
+    'Sweet Space',
+  ],
+];
+
+function isValidPair(categoryIndex: number, fxIndex: number): boolean {
+  return GP5_MODULE_FX_TITLES[categoryIndex]?.[fxIndex] !== undefined;
+}
+
+describe('canonical tables (R19, R20, R21)', () => {
+  it('R19: GP5_MODULE_CATEGORIES keeps its values and order', () => {
     expect(GP5_MODULE_CATEGORIES).toEqual([
-      'NR',
-      'PRE',
-      'DST',
-      'N->S',
-      'AMP',
-      'CAB',
-      'EQ',
-      'MOD',
-      'DLY',
-      'RVB',
-    ]);
-  });
-});
-
-describe('GP5_MODULE_FX_TITLES (R2, R3)', () => {
-  it('has exactly 10 per-category arrays', () => {
-    expect(GP5_MODULE_FX_TITLES).toHaveLength(10);
-  });
-
-  it('lengths match R3: [1, 10, 10, 1, 32, 21, 5, 8, 10, 10]', () => {
-    expect(GP5_MODULE_FX_TITLES.map((arr) => arr.length)).toEqual([
-      1, 10, 10, 1, 32, 21, 5, 8, 10, 10,
+      'NR', 'PRE', 'DST', 'N->S', 'AMP', 'CAB', 'EQ', 'MOD', 'DLY', 'RVB',
     ]);
   });
 
-  it('NR has the single expected entry', () => {
-    expect(GP5_MODULE_FX_TITLES[0]).toEqual(['Gate']);
+  it('R19: every feature 10 title array is a prefix of the current one (no index moved)', () => {
+    expect(GP5_MODULE_FX_TITLES).toHaveLength(FEATURE_10_FX_TITLES.length);
+    FEATURE_10_FX_TITLES.forEach((titles, c) => {
+      expect(GP5_MODULE_FX_TITLES[c].slice(0, titles.length)).toEqual(titles);
+    });
   });
 
-  it('PRE first/last entries match the manual pp.20-21', () => {
-    expect(GP5_MODULE_FX_TITLES[1][0]).toBe('COMP');
-    expect(GP5_MODULE_FX_TITLES[1][9]).toBe('Detune');
+  it('R20/R21: category lengths after the appends are [1, 10, 10, 52, 32, 21, 5, 11, 10, 10]', () => {
+    expect(GP5_MODULE_FX_TITLES.map((titles) => titles.length)).toEqual([
+      1, 10, 10, 52, 32, 21, 5, 11, 10, 10,
+    ]);
   });
 
-  it('DST first/last entries match the manual pp.22-23', () => {
-    expect(GP5_MODULE_FX_TITLES[2][0]).toBe('Green OD');
-    expect(GP5_MODULE_FX_TITLES[2][9]).toBe('Bass OD');
+  it('R20: MOD ends with the three tremolos the pedal lists after Vibrato', () => {
+    expect(GP5_MODULE_FX_TITLES[MOD].slice(8)).toEqual(['O-Trem', 'Sine Trem', 'Bias Trem']);
   });
 
-  it('N->S has the single expected entry', () => {
-    expect(GP5_MODULE_FX_TITLES[3]).toEqual(['Empty']);
+  it("R21: N->S keeps 'Empty' at index 0 and ends with 'User SnapTone'", () => {
+    const titles = GP5_MODULE_FX_TITLES[N_S];
+    expect(titles[0]).toBe('Empty');
+    expect(titles[titles.length - 1]).toBe('User SnapTone');
   });
 
-  it('EQ first/last entries match the manual p.31', () => {
-    expect(GP5_MODULE_FX_TITLES[6][0]).toBe('Guitar EQ 1');
-    expect(GP5_MODULE_FX_TITLES[6][4]).toBe('Mess EQ');
+  it('R21: every N->S capture title is in the N->S list', () => {
+    for (const row of GP5_HARDWARE_CAPTURES.filter((r) => r.pedalCategory === 'N->S')) {
+      expect(GP5_MODULE_FX_TITLES[N_S], `${row.source} block ${row.blockIndex}`).toContain(
+        row.pedalFxTitle,
+      );
+    }
   });
 
-  it('RVB last entry matches the manual p.36', () => {
-    expect(GP5_MODULE_FX_TITLES[9][9]).toBe('Sweet Space');
+  it("R21: factory SnapTones follow the pedal's list order (factory code [n,0,0,15] is title n + 1)", () => {
+    const factory = GP5_HARDWARE_CAPTURES.filter(
+      (r) =>
+        r.pedalCategory === 'N->S' &&
+        r.pedalFxTitle !== 'Empty' &&
+        r.pedalFxTitle !== 'User SnapTone',
+    );
+    expect(new Set(factory.map((r) => r.pedalFxTitle)).size).toBe(50);
+    for (const row of factory) {
+      expect(GP5_MODULE_FX_TITLES[N_S][row.rawBytes[0] + 1], row.source).toBe(row.pedalFxTitle);
+    }
+  });
+
+  it("R22: every N->S capture with a pedalDisplayName is a 'User SnapTone' row", () => {
+    const named = GP5_HARDWARE_CAPTURES.filter(
+      (r) => r.pedalCategory === 'N->S' && r.pedalDisplayName !== undefined,
+    );
+    expect(named.length).toBeGreaterThan(0);
+    for (const row of named) {
+      expect(row.pedalFxTitle, row.source).toBe('User SnapTone');
+    }
   });
 });
 
-describe('decodeModule (R4, R5, R6)', () => {
-  it('R4: resolves a known (cat, fxlow) pair', () => {
-    expect(decodeModule(1, 0)).toEqual({
-      kind: 'resolved',
-      category: 'PRE',
-      fxTitle: 'COMP',
-    });
+describe('GP5_HARDWARE_MODULE_CODES (R7, R8)', () => {
+  it('R7: every key is in the codec format and every value is a valid canonical pair', () => {
+    expect(GP5_HARDWARE_MODULE_CODES.size).toBeGreaterThan(0);
+    for (const [moduleType, { categoryIndex, fxIndex }] of GP5_HARDWARE_MODULE_CODES) {
+      expect(moduleType).toMatch(/^cat[0-9a-f]+_fx[0-9a-f]+$/);
+      expect(isValidPair(categoryIndex, fxIndex), moduleType).toBe(true);
+    }
   });
 
-  it('R4: resolves the last entry of the last category', () => {
-    expect(decodeModule(9, 9)).toEqual({
-      kind: 'resolved',
-      category: 'RVB',
-      fxTitle: 'Sweet Space',
-    });
+  it('R8: every entry is supported by at least one capture row with the same code and names', () => {
+    for (const [moduleType, { categoryIndex, fxIndex }] of GP5_HARDWARE_MODULE_CODES) {
+      const supported = GP5_HARDWARE_CAPTURES.some(
+        (row) =>
+          row.moduleType === moduleType &&
+          row.pedalCategory === GP5_MODULE_CATEGORIES[categoryIndex] &&
+          row.pedalFxTitle === GP5_MODULE_FX_TITLES[categoryIndex][fxIndex],
+      );
+      expect(supported, moduleType).toBe(true);
+    }
   });
 
-  it('R5: returns raw fallback for an out-of-table cat', () => {
-    expect(decodeModule(99, 0)).toEqual({
-      kind: 'raw',
-      cat: 99,
-      fxlow: 0,
-    });
-  });
-
-  it('R6: returns raw fallback for an out-of-range fxlow', () => {
-    expect(decodeModule(1, 999)).toEqual({
-      kind: 'raw',
-      cat: 1,
-      fxlow: 999,
-    });
-  });
-
-  it('R6: returns raw fallback for a negative fxlow (out-of-range)', () => {
-    expect(decodeModule(1, -1)).toEqual({
-      kind: 'raw',
-      cat: 1,
-      fxlow: -1,
-    });
+  it('every captured code has an entry', () => {
+    const missing = [...new Set(GP5_HARDWARE_CAPTURES.map((r) => r.moduleType))].filter(
+      (moduleType) => !GP5_HARDWARE_MODULE_CODES.has(moduleType),
+    );
+    expect(missing).toEqual([]);
   });
 });
 
-describe('parseModuleType (R7, R8)', () => {
-  it('R7: parses a single-hex-digit cat/fxlow pair', () => {
+describe('coverage (R5, R6)', () => {
+  it('R6: every GP5_UNCAPTURABLE_FX entry names a valid pair and has a reason', () => {
+    for (const { categoryIndex, fxIndex, reason } of GP5_UNCAPTURABLE_FX) {
+      expect(isValidPair(categoryIndex, fxIndex)).toBe(true);
+      expect(reason.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('R5: every canonical pair is resolved by some hardware code or listed as uncapturable', () => {
+    const covered = new Set<string>();
+    for (const { categoryIndex, fxIndex } of GP5_HARDWARE_MODULE_CODES.values()) {
+      covered.add(`${categoryIndex}/${fxIndex}`);
+    }
+    for (const { categoryIndex, fxIndex } of GP5_UNCAPTURABLE_FX) {
+      covered.add(`${categoryIndex}/${fxIndex}`);
+    }
+    const uncovered: string[] = [];
+    GP5_MODULE_FX_TITLES.forEach((titles, c) =>
+      titles.forEach((title, i) => {
+        if (!covered.has(`${c}/${i}`)) uncovered.push(`${GP5_MODULE_CATEGORIES[c]} / ${title}`);
+      }),
+    );
+    expect(uncovered).toEqual([]);
+  });
+});
+
+describe('describeModuleType against every capture (R10)', () => {
+  it.each(GP5_HARDWARE_CAPTURES.map((row) => [`${row.source} block ${row.blockIndex}`, row] as const))(
+    '%s',
+    (_label, row) => {
+      expect(describeModuleType(row.moduleType)).toEqual({
+        kind: 'resolved',
+        category: row.pedalCategory,
+        fxTitle: row.pedalFxTitle,
+      });
+    },
+  );
+});
+
+describe('decodeModule (R11, R12)', () => {
+  it('R11: resolves the preset-0 codes by lookup', () => {
+    expect(decodeModule(0, 0)).toEqual({ kind: 'resolved', category: 'PRE', fxTitle: 'COMP' });
+    expect(decodeModule(7, 4)).toEqual({ kind: 'resolved', category: 'AMP', fxTitle: 'Dark Twin' });
+    expect(decodeModule(0xa, 0x100000)).toEqual({
+      kind: 'resolved',
+      category: 'CAB',
+      fxTitle: 'User IR 1-20',
+    });
+  });
+
+  it('R11: resolves an appended title (MOD / Bias Trem) and a SnapTone code', () => {
+    expect(decodeModule(4, 40)).toEqual({ kind: 'resolved', category: 'MOD', fxTitle: 'Bias Trem' });
+    expect(decodeModule(0xf, 0)).toEqual({ kind: 'resolved', category: 'N->S', fxTitle: '14DST' });
+    expect(decodeModule(0xf, 50)).toEqual({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'User SnapTone',
+    });
+  });
+
+  it('R12: a code that was a valid positional pair under feature 10 but is not in the table is raw', () => {
+    expect(GP5_HARDWARE_MODULE_CODES.has('cat1_fx0')).toBe(false);
+    expect(decodeModule(1, 0)).toEqual({ kind: 'raw', cat: 1, fxlow: 0 });
+    expect(decodeModule(9, 9)).toEqual({ kind: 'raw', cat: 9, fxlow: 9 });
+  });
+
+  it('R12: an uncaptured N->S user slot (the unnamed [63,0,0,15]) is raw', () => {
+    expect(decodeModule(0xf, 63)).toEqual({ kind: 'raw', cat: 0xf, fxlow: 63 });
+  });
+
+  it('R12: out-of-table, negative and non-integer inputs are raw without throwing', () => {
+    expect(decodeModule(99, 0)).toEqual({ kind: 'raw', cat: 99, fxlow: 0 });
+    expect(decodeModule(1, 999)).toEqual({ kind: 'raw', cat: 1, fxlow: 999 });
+    expect(decodeModule(1, -1)).toEqual({ kind: 'raw', cat: 1, fxlow: -1 });
+    expect(decodeModule(7, 4.5)).toEqual({ kind: 'raw', cat: 7, fxlow: 4.5 });
+  });
+});
+
+describe('resolveModuleIndices (R13, R14)', () => {
+  it('R13: returns the canonical pair of a table entry', () => {
+    expect(resolveModuleIndices('cat7_fx4')).toEqual({ categoryIndex: 4, fxIndex: 2 });
+    expect(resolveModuleIndices('cata_fx100013')).toEqual({ categoryIndex: 5, fxIndex: 20 });
+    expect(resolveModuleIndices('catf_fx33')).toEqual({ categoryIndex: 3, fxIndex: 0 });
+  });
+
+  it('R13: accepts upper-case hex the same way parseModuleType does', () => {
+    expect(resolveModuleIndices('CAT7_FX4')).toEqual({ categoryIndex: 4, fxIndex: 2 });
+    expect(resolveModuleIndices('cat7_fxA')).toBeNull();
+    expect(resolveModuleIndices('catA_fx1')).toEqual({ categoryIndex: 5, fxIndex: 0 });
+  });
+
+  it("R14: returns null for 'empty', unparseable strings and codes with no entry", () => {
+    expect(resolveModuleIndices('empty')).toBeNull();
+    expect(resolveModuleIndices('garbage')).toBeNull();
+    expect(resolveModuleIndices('cat1')).toBeNull();
+    expect(resolveModuleIndices('cat1_fx0')).toBeNull();
+    expect(resolveModuleIndices('cat99_fx0')).toBeNull();
+  });
+});
+
+describe('parseModuleType (feature 10 R7, R8)', () => {
+  it('parses a single-hex-digit cat/fxlow pair', () => {
     expect(parseModuleType('cat1_fx0')).toEqual({ cat: 1, fxlow: 0 });
   });
 
-  it('R7: parses a multi-hex-digit cat/fxlow pair', () => {
+  it('parses a multi-hex-digit cat/fxlow pair', () => {
     expect(parseModuleType('cata_fx1b')).toEqual({ cat: 0xa, fxlow: 0x1b });
   });
 
-  it('R7: parses upper-case hex digits (regex is case-insensitive)', () => {
+  it('parses upper-case hex digits (regex is case-insensitive)', () => {
     expect(parseModuleType('catA_fxB')).toEqual({ cat: 0xa, fxlow: 0xb });
   });
 
-  it('R8: returns null for the codec\'s "empty" sentinel', () => {
+  it('returns null for the codec\'s "empty" sentinel', () => {
     expect(parseModuleType('empty')).toBeNull();
   });
 
-  it('R8: returns null for an arbitrary non-matching string', () => {
+  it('returns null for an arbitrary non-matching string', () => {
     expect(parseModuleType('garbage')).toBeNull();
   });
 
-  it('R8: returns null for a malformed cat-only string', () => {
+  it('returns null for a malformed cat-only string', () => {
     expect(parseModuleType('cat1')).toBeNull();
   });
 });
 
-describe('describeModuleType (R9, R10)', () => {
-  it('R9: resolves a parseable, resolvable moduleType end-to-end', () => {
-    expect(describeModuleType('cat1_fx0')).toEqual({
-      kind: 'resolved',
-      category: 'PRE',
-      fxTitle: 'COMP',
-    });
+describe('describeModuleType raw paths (feature 10 R10, R12)', () => {
+  it('falls back to { kind: "raw", moduleType } for an unparseable string', () => {
+    expect(describeModuleType('empty')).toEqual({ kind: 'raw', moduleType: 'empty' });
   });
 
-  it('R10: falls back to { kind: "raw" moduleType } for an unparseable string', () => {
-    expect(describeModuleType('empty')).toEqual({
-      kind: 'raw',
-      moduleType: 'empty',
-    });
-  });
-
-  it('R10: falls back to { kind: "raw" moduleType } for a parseable but unresolved (cat, fxlow) pair', () => {
-    expect(describeModuleType('cat99_fx0')).toEqual({
-      kind: 'raw',
-      moduleType: 'cat99_fx0',
-    });
-  });
-
-  it('R10: falls back when parseable but fxlow is out of range for a known cat', () => {
-    expect(describeModuleType('cat1_fx999')).toEqual({
-      kind: 'raw',
-      moduleType: 'cat1_fx999',
-    });
+  it('falls back for a parseable code with no table entry', () => {
+    expect(describeModuleType('cat99_fx0')).toEqual({ kind: 'raw', moduleType: 'cat99_fx0' });
+    expect(describeModuleType('cat1_fx999')).toEqual({ kind: 'raw', moduleType: 'cat1_fx999' });
   });
 });
 
-describe('GP5_MODULE_VOCABULARY_STATUS (R11)', () => {
-  it('is a non-empty string', () => {
-    expect(typeof GP5_MODULE_VOCABULARY_STATUS).toBe('string');
-    expect(GP5_MODULE_VOCABULARY_STATUS.length).toBeGreaterThan(0);
+describe('reorder evidence (R26)', () => {
+  it('the 1e before/after reads put at least one code at two different chain positions', () => {
+    const before = GP5_HARDWARE_CAPTURES.filter((r) => r.source.endsWith(' 1e before'));
+    const after = GP5_HARDWARE_CAPTURES.filter((r) => r.source.endsWith(' 1e after'));
+    expect(before.length).toBeGreaterThan(0);
+    expect(after.length).toBeGreaterThan(0);
+    expect(before[0].source.replace(/ 1e before$/, '')).toBe(
+      after[0].source.replace(/ 1e after$/, ''),
+    );
+    const moved = before.filter((b) =>
+      after.some((a) => a.moduleType === b.moduleType && a.chainPosition !== b.chainPosition),
+    );
+    expect(moved.length).toBeGreaterThan(0);
   });
 
-  it('contains "HYPOTHESIS"', () => {
-    expect(GP5_MODULE_VOCABULARY_STATUS).toContain('HYPOTHESIS');
+  it('the 1e reorder kept every block on the same code (only REC_ORDER changed)', () => {
+    const codeByBlock = (suffix: string) =>
+      GP5_HARDWARE_CAPTURES.filter((r) => r.source.endsWith(suffix))
+        .map((r) => [r.blockIndex, r.moduleType] as const)
+        .sort((a, b) => a[0] - b[0]);
+    expect(codeByBlock(' 1e after')).toEqual(codeByBlock(' 1e before'));
+  });
+});
+
+describe('GP5_MODULE_VOCABULARY_STATUS (R17, R18)', () => {
+  it('R17: contains HARDWARE-VERIFIED and cites gp5-hardware-captures', () => {
+    expect(GP5_MODULE_VOCABULARY_STATUS).toContain('HARDWARE-VERIFIED');
+    expect(GP5_MODULE_VOCABULARY_STATUS).toContain('gp5-hardware-captures');
   });
 
-  it('contains "gp-5-manual.pdf" (the citation convention)', () => {
-    expect(GP5_MODULE_VOCABULARY_STATUS).toContain('gp-5-manual.pdf');
+  it('R18: no longer says the mapping is unconfirmed', () => {
+    expect(GP5_MODULE_VOCABULARY_STATUS).not.toContain(
+      'NOT yet confirmed against real GP-5 hardware',
+    );
   });
 });
