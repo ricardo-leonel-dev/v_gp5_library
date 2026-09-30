@@ -2,9 +2,9 @@
 feature_number: 24
 name: gp5_preset_read_100slot_race
 title: Investigate production 100-slot preset read race — all cards show preset 0's chain
-status: pending
+status: done
 created_at: 2026-09-30T16:43:13.000Z
-updated_at: 2026-09-30T16:44:33.000Z
+updated_at: 2026-09-30T20:51:10.000Z
 ---
 
 ## Description
@@ -15,3 +15,9 @@ After F20/F22/F23: the app loads presets again (timeout fix), but the original b
 - [ ] Fix proposed and verified against the probe pattern at frontend/progress/gp5_webmidi_body_read_probe.html
 - [ ] 3 distinct presets in the production read show their own chains in the app
 - [ ] F20 and F23 reverted once the real fix lands
+
+## Notes
+- 2026-09-30T17:36:30.000Z [leader] ACCEPTANCE CORRECTION (2026-09-30): IGNORE the acceptance bullet 'F20 and F23 reverted once the real fix lands'. F20 is already reverted by F23, and reverting F23 would re-introduce the slot byte that makes the GP-5 stop replying (read_timeout). Do NOT revert anything; the correct baseline is the current code: PC [0xc0, slot] -> READ_SETTLE_MS -> buildRequest(BODY_SEL) with byte 2 = 0x00.
+- 2026-09-30T17:36:31.000Z [leader] PRE-STEP FOR THE IMPLEMENTER (do it as a separate commit before the fix): remove stale slot-byte wording left by F20/F22 that F23's review missed — src/app/midi/web-midi-pedal-connection.spec.ts:430 (test name 'slot-encoded body request'), :454 (comment 'F20 slot-byte wire-format fix'), :702 (comment 'body request itself carries the slot byte (F20)'), :918 (test name '100 slot-encoded body reads (F20)'); src/app/pedals/preset-browser-page/preset-browser-page.spec.ts:866-872 (references buildBodyRequest, which no longer exists). Also trim the F20->F22->F23 history narrative in the gp5-sysex-preset-codec.ts header and in web-midi-pedal-connection.ts readPresets comments down to a few lines stating the actual protocol (history belongs in git/harness). Also: F24 needs a live GP-5 capture before any implementer runs — see progress/gp5_webmidi_100slot_capture.html.
+- 2026-09-30T17:54:17.000Z [leader] ROOT CAUSE CONFIRMED with live GP-5 capture (progress/gp5_f24_capture_2026-09-30T17-50-31-876Z.json, tool progress/gp5_webmidi_100slot_capture.html, slots 0-9, pedal parked on preset 14): the GP-5 IGNORES MIDI Program Change [0xc0, slot] — with PC at 300ms AND at 1500ms settle, all 10 body replies were byte-identical (fingerprint 881835b5 = the active preset 14) and the pedal screen never changed. With CC0 [0xb0, 0x00, slot] (manual p.40: CC0 = patch select 0-99) at 300ms, the screen followed and all 10 bodies were distinct; slot 0's REC_MODELS (0:1b 0:0 3:0 7:4 a:100000) match F18's independently captured preset 0. Body replies were complete in every run (25/25 chunks, 468 bytes, echo ok, first frame ~152ms after request) — no race, no timeout, settle length irrelevant. Side finding: ~3ms-50ms after each CC0 the pedal emits an unsolicited 1-chunk notification (decoded [crc,0x01,0x00,0x06, 0x12,0x1b,0x01,0x00,0x00,0x00], selector 0x1b) which the current codec would feed into bodyChunks at index 0 (harmless only because the real body chunk 0 later overwrites it) — the fix should filter it out explicitly. Why things looked like 'preset 0': in F19's check the pedal happened to be on preset 0; the probe 'worked' because it always read the active preset. Fix direction: select each slot with CC0 instead of PC; keep 300ms settle and buildRequest(BODY_SEL). UX consequence: CC0 really switches the pedal's active preset during the read (it ends on the last slot read).
+- 2026-09-30T17:57:34.000Z [leader] USER DECISION (2026-09-30, Ricardo): restore the pre-read preset after a full read. Design agreed: before selecting any slot, send one body request with NO selection (reads the currently active preset) and keep its body; after the 100-slot loop, find the slot whose body is byte-identical; if exactly one matches, send CC0 back to it; if zero or several match (unsaved edits on the pedal, duplicate presets), stay on the last slot read and surface a non-blocking warning to the caller/UI. Known and accepted: the pedal audibly switches presets during the ~50s read, and unsaved edits on the active preset may be lost.
