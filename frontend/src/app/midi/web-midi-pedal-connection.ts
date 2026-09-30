@@ -109,28 +109,38 @@ export class WebMidiPedalConnection implements PedalConnection {
       this.output.send(namesRequest);
       await this.waitForNamesComplete(pending);
 
-      // Each body request carries its slot byte at payload position 2 (see
-      // Gp5SysexPresetCodec.buildBodyRequest's doc comment), so the pedal
-      // returns the body for the requested slot regardless of which preset
-      // is currently loaded. No Program Change + settle is needed before
-      // each body request — pre-F20 this loop did PC + READ_SETTLE_MS, which
-      // (a) cycled the pedal's LCD through every preset on every read, and
-      // (b) didn't actually work for slots > 0 because the body request
-      // itself always asked for slot 0 anyway, so the reply was preset 0's
-      // body for every slot.
+      // Two complementary mechanisms target the per-slot body read:
+      //
+      //   1. The body request itself carries the slot byte at payload
+      //      position 2 (see Gp5SysexPresetCodec.buildBodyRequest's doc
+      //      comment) — the F20 wire-format fix.
+      //   2. Each iteration also sends a MIDI Program Change + waits
+      //      READ_SETTLE_MS before the body request — the load-bearing
+      //      protocol handshake the GP-5 hardware requires (confirmed
+      //      against the real pedal on 2026-09-30: removing this
+      //      handshake alone caused "La lectura de presets ha expirado",
+      //      i.e. the pedal never replied to the body requests at all).
+      //
+      // The slot byte is what actually disambiguates which slot's body
+      // the pedal returns once it does reply; the PC + settle is what
+      // makes it reply in the first place. Either one alone is not
+      // sufficient. F22 restores the PC + settle from pre-F20 wiring;
+      // buildBodyRequest (and the F20 regression test that pins it) is
+      // unchanged.
       const presets: Preset[] = [];
       for (let slot = 0; slot < bodyRequests.length; slot++) {
+        this.output!.send(this.codec.encodeProgramChange(slot));
+        await this.delay(READ_SETTLE_MS);
         this.output!.send(bodyRequests[slot]);
         presets.push(await this.waitForSlotPreset(pending));
       }
 
-      // Deliberately left on whatever preset was active at read time. With
-      // the slot-encoded body request (F20) there is no longer a PC at the
-      // end of the loop, so the "last slot read" UX side effect documented
-      // for feature 12 no longer applies; the pedal's active preset is
-      // untouched by readPresets(). The pre-existing capture-before-read
-      // caveat from feature 12 (no protocol-level way to query the current
-      // slot) still stands for any caller that wants to restore it later.
+      // The last iteration's Program Change (slot = 99 for a full dump)
+      // leaves the pedal on the last slot read. This is the feature-12
+      // UX side effect, restored in F22 along with the per-slot PC +
+      // settle handshake. Callers that want to capture and restore the
+      // preset active before the read need to track it themselves —
+      // there is no protocol-level query for the current slot.
       return presets;
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));

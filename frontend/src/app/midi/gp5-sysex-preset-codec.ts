@@ -26,21 +26,29 @@
 //     production read the pedal's "currently loaded" preset didn't reliably
 //     follow the PCs, so every body request returned the active preset's
 //     body — preset 0's body for every slot, which is exactly what the
-//     app rendered. The fix puts the slot byte at payload position 2 of
-//     each body request (mirroring encodeWriteRequest's WRITE_HDR layout
-//     where `payload[2] = preset.slot`), so every request unambiguously
-//     targets its slot and no PC + settle is needed. F20 was NOT hardware-
-//     re-verified end-to-end against the pedal in this session: the change
-//     is a wire-format addition that the existing real-codec end-to-end
-//     test exercises for slot-0 body bytes (and the new F20 regression
-//     test pins the slot-byte position), but Ricardo needs to reconnect the
-//     GP-5 to confirm three distinct presets now show their own chains.
-//     The 2026-09-29 probe capture that originally surfaced this bug
-//     (mixed bytes when reading slot 0 with the pedal loaded on preset 84)
-//     is also consistent with this root cause: pre-F20 the request asked
-//     for slot 0 regardless of the active preset, and the pedal replied
-//     with the active preset's bytes for the dynamic parts and slot 0's
-//     bytes for the static parts.
+//     app rendered. The F20 wire-format fix puts the slot byte at payload
+//     position 2 of each body request (mirroring encodeWriteRequest's
+//     WRITE_HDR layout where `payload[2] = preset.slot`), so every
+//     request unambiguously targets its slot on the wire.
+//
+//     F22 update (2026-09-30): hardware-re-verification of F20 by Ricardo
+//     found the body requests were not getting any reply at all ("La
+//     lectura de presets ha expirado") with F20's no-PC-and-no-settle
+//     production flow — the slot-byte fix alone is necessary but not
+//     sufficient. The two mechanisms are orthogonal and coexist: the slot
+//     byte is the wire-format addition that disambiguates which slot's
+//     body the pedal returns once it does reply, and the Program Change +
+//     READ_SETTLE_MS handshake before each body request is the load-
+//     bearing protocol handshake that makes the GP-5 reply in the first
+//     place. WebMidiPedalConnection.readPresets restores the PC + settle
+//     from pre-F20 wiring on top of buildBodyRequest; buildBodyRequest
+//     itself and the F20 regression test that pins it are unchanged. The
+//     2026-09-29 probe capture that originally surfaced this bug (mixed
+//     bytes when reading slot 0 with the pedal loaded on preset 84) is
+//     also consistent with the combined root cause: pre-F20 the request
+//     asked for slot 0 regardless of the active preset, and the pedal
+//     replied with the active preset's bytes for the dynamic parts and
+//     slot 0's bytes for the static parts.
 //
 //   * decodeIncomingMessage's reply header (feature 13) — a second, deeper
 //     hardware capture (raw incoming SysEx bytes read straight off the real
@@ -58,16 +66,16 @@
 //
 //   * encodeProgramChange / isAwaitingNames (feature 12) — added so
 //     WebMidiPedalConnection.readPresets can drive a Program-Change-then-
-//     settle sequence before each body request. F20 (2026-09-30) later
-//     superseded that workaround by adding the slot byte to the body
-//     request itself (see encodeReadAllRequest's F20 note above); encodeProgramChange
-//     is still on the codec interface for any caller that wants to manually
-//     select a preset (e.g. a future "go to preset N" feature), and
-//     isAwaitingNames still gates the names-phase accumulation in the codec.
-//     The pre-F20 production wiring of PC + 300ms settle per slot is the
-//     version that read_timeout'd on real hardware — feature 12's PC +
-//     settle change fixed the timeout symptom, but F20 identified that the
-//     body request itself was the missing piece.
+//     settle sequence before each body request. F20 (2026-09-30) added the
+//     slot byte to the body request itself (see encodeReadAllRequest's
+//     F20 note above) and removed the PC + settle from the production read
+//     flow. F22 (2026-09-30) restored the PC + settle on top of the slot
+//     byte after Ricardo hardware-tested F20 and got "La lectura de
+//     presets ha expirado" — the pedal doesn't respond to the body
+//     requests at all without a preceding PC + settle. The two mechanisms
+//     are orthogonal: encodeProgramChange fires the per-slot Program
+//     Change, buildBodyRequest puts the slot byte on the wire. isAwaitingNames
+//     still gates the names-phase accumulation in the codec.
 //
 //   * encodeWriteRequest (T21, R17) — WRITE path is corroborated, NOT byte-
 //     instrumented. Web MIDI cannot observe another app's outgoing host→device

@@ -193,8 +193,10 @@ async function fireMessages(input: FakePort, payloads: Uint8Array[]): Promise<vo
 
 // Drives one full read-all dump against a FakeCodec configured with a names
 // message + one body-request message per fixture preset: fires the
-// names-complete message, advances the settle delay + fires the body-decode
-// message for each slot in turn. Assumes fake timers are active.
+// names-complete message, then for each slot advances the settle delay
+// (READ_SETTLE_MS — the Program-Change-then-settle handshake the GP-5
+// hardware requires) before firing the body-decode message. Assumes
+// fake timers are active.
 async function driveFullRead(
   pending: Promise<Preset[]>,
   inputPort: FakePort,
@@ -425,7 +427,7 @@ describe('WebMidiPedalConnection.readPresets / writePreset — connection guards
 });
 
 describe('WebMidiPedalConnection.readPresets — orchestration', () => {
-  test('sends the names request, then a body request per slot, in slot order (F20: each body request carries its slot byte, no PC needed)', async () => {
+  test('sends the names request, then a Program Change + body request per slot, in slot order (F20+F22: PC + settle handshake AND slot-encoded body request)', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [
@@ -449,18 +451,24 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const presets = await driveFullRead(pending, inputPort, 3);
 
     expect(presets.map((p) => p.slot)).toEqual([0, 1, 2]);
-    expect(codec.programChangeCalls).toEqual([]);
+    // F22: PC + READ_SETTLE_MS handshake restored on top of the F20 slot-byte
+    // wire-format fix. Each slot gets its own Program Change before the body
+    // request — the pedal's protocol handshake requires it.
+    expect(codec.programChangeCalls).toEqual([0, 1, 2]);
 
     const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
     expect(sent).toEqual([
       [0xaa, 0xaa], // names request first
+      [0xc0, 0x00], // PC slot 0
       [0xbb, 0x00], // body request, slot 0
+      [0xc0, 0x01], // PC slot 1
       [0xbb, 0x01], // body request, slot 1
+      [0xc0, 0x02], // PC slot 2
       [0xbb, 0x02], // body request, slot 2
     ]);
   });
 
-  test('does not send any body request until the names phase completes', async () => {
+  test('does not send any Program Change or body request until the names phase completes', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.namesCompleteAfterCalls = 3; // names phase spans 3 incoming chunks
@@ -478,15 +486,22 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await fireMessages(inputPort, [new Uint8Array([0xa0])]);
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(1);
 
-    // Third chunk finishes the names phase — only now does the first body request go out.
+    // Third chunk finishes the names phase — only now does the per-slot
+    // Program Change fire (sync, after waitForNamesComplete resolves).
+    // The body request itself is gated on READ_SETTLE_MS after that PC,
+    // so it hasn't gone out yet.
     await fireMessages(inputPort, [new Uint8Array([0xa0])]);
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2);
+
+    // Advance past the settle delay so the body request goes out.
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
 
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
     await pending;
   });
 
-  test('emits body requests back-to-back with no inter-slot settle delay (F20 removed the PC + 300ms wait)', async () => {
+  test('waits READ_SETTLE_MS (~300ms) after the Program Change before sending the body request', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [
@@ -503,16 +518,24 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const pending = connection.readPresets();
     await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
 
-    // Names request + slot 0 body request sent as soon as names finishes.
+    // Names request + slot 0 PC fired as soon as names phase completes.
+    // Body request is gated on READ_SETTLE_MS after the PC.
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2);
 
-    // Drive slot 0's reply, then immediately check slot 1 went out without
-    // a 300ms settle — pre-F20 the test had to advance READ_SETTLE_MS
-    // before the next body request would fire, because the production code
-    // was waiting on a setTimeout. The slot-encoded body request makes the
-    // settle unnecessary.
-    await fireMessages(inputPort, [new Uint8Array([0xa1])]);
+    // Advance just under the settle delay — body request must NOT have fired yet.
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS - 1);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2);
+
+    // Advance past the settle delay — body request fires now.
+    await vi.advanceTimersByTimeAsync(1);
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
+
+    // Drive slot 0's reply, then slot 1's PC + body with another settle.
+    await fireMessages(inputPort, [new Uint8Array([0xa1])]);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(4); // slot 1 PC fired
+
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(5); // slot 1 body fired
 
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
     await pending;
@@ -551,7 +574,8 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, body request sent
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires
     await fireMessages(inputPort, [
       new Uint8Array([0xa1]),
       new Uint8Array([0xa2]),
@@ -572,7 +596,8 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
 
     const pending = connection.readPresets();
     pending.catch(() => {});
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
 
     await expect(pending).rejects.toThrow('invalid_response');
@@ -620,8 +645,9 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
 
     const pending = connection.readPresets();
     pending.catch(() => {});
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // advances the per-step deadline, body request sent
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires, waitForSlotPreset armed
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // advances the per-step deadline
 
     // The per-step deadline for this stalled slot fires even though the
     // names phase consumed no time (well under the step budget) — this is
@@ -644,7 +670,8 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, body request sent
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires
 
     // Each chunk arrives just under the per-step deadline, resetting it —
     // the cumulative time across all three chunks exceeds READ_STEP_TIMEOUT_MS,
@@ -659,7 +686,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await expect(pending).resolves.toEqual([fixturePreset(0)]);
   });
 
-  test('does not change the active preset on the pedal during a read (F20: no PC, no "last slot read" side effect)', async () => {
+  test('leaves the pedal on the last slot read (F22 restores the per-slot Program Change handshake that feature 12 introduced)', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
@@ -671,12 +698,14 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await driveFullRead(pending, inputPort, 1);
     await pending;
 
-    // F20 removed the per-slot Program Change from readPresets: the body
-    // request itself carries the slot byte (see gp5-sysex-preset-codec.ts
-    // buildBodyRequest), so the pedal's active preset is untouched for
-    // the entire read. encodeProgramChange is still on the codec interface
-    // for any caller that wants to select a preset manually.
-    expect(codec.programChangeCalls).toEqual([]);
+    // F22 restores the per-slot Program Change from pre-F20 wiring. The
+    // body request itself carries the slot byte (F20), but the GP-5 needs
+    // the PC + READ_SETTLE_MS handshake to actually reply. The last slot
+    // read is the preset the pedal is left on — this is the feature-12
+    // UX side effect, restored in F22. encodeProgramChange is also still
+    // on the codec interface for any caller that wants to select a preset
+    // manually outside a read.
+    expect(codec.programChangeCalls).toEqual([0]);
   });
 });
 
@@ -773,6 +802,7 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
 
     const pending = connection.readPresets();
     await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names phase
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // PC(5) settle, body request fires
     await fireMessages(inputPort, [new Uint8Array([0xa1])]); // slot 5's body
 
     const presets = await pending;
@@ -907,6 +937,7 @@ describe('WebMidiPedalConnection + real Gp5SysexPresetCodec — full read flow (
     await fireMessages(inputPort, namesFrames);
 
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // PC(slot) settle, body request fires
       await fireMessages(inputPort, bodyFrames);
     }
 

@@ -5,6 +5,7 @@ import { vi } from 'vitest';
 import { PresetBrowserPage } from './preset-browser-page';
 import {
   WebMidiPedalConnection,
+  READ_SETTLE_MS,
 } from '../../midi/web-midi-pedal-connection';
 import {
   SYSEX_PRESET_CODEC,
@@ -849,15 +850,13 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // The page's ngOnInit -> loadPresets -> readPresets() has already sent
-    // the names request. Fire the names-completion message, let the
-    // microtask that re-enters the read loop run so waitForSlotPreset is
-    // registered, then fire the body message. F20 removed the per-slot
-    // Program Change + READ_SETTLE_MS settle from readPresets, so the
-    // settle advance that used to bridge these two messages is no longer
-    // needed — but the microtask flush still is, because the second
-    // onmidimessage call otherwise fires before waitForSlotPreset is set up.
+    // the names request. Fire the names-completion message so the loop
+    // advances; readPresets then sends a Program Change for slot 0 and
+    // waits READ_SETTLE_MS before sending the body request. Advance the
+    // settle timer to release the body request, then fire the body
+    // message so waitForSlotPreset can consume it.
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa0]) } as unknown as MIDIMessageEvent);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa1]) } as unknown as MIDIMessageEvent);
     // Let the readPresets() promise resolve and loadState flip to "loaded".
     await Promise.resolve();
@@ -865,11 +864,14 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // After the initial read completes, expect at least the names request
-    // + body request = 2 sends. F20 removed the per-slot Program Change +
-    // settle from readPresets (each body request now carries the slot byte
-    // itself; see gp5-sysex-preset-codec.ts buildBodyRequest).
+    // + PC + body request = 3 sends. F22 restored the per-slot Program
+    // Change + READ_SETTLE_MS settle on top of buildBodyRequest's slot
+    // byte (see gp5-sysex-preset-codec.ts buildBodyRequest) — the two
+    // mechanisms are orthogonal: PC + settle is what makes the pedal
+    // reply, slot byte is what disambiguates which slot's body it
+    // returns.
     const sendCountAfterLoad = outputPort.sendSpy.mock.calls.length;
-    expect(sendCountAfterLoad).toBeGreaterThanOrEqual(2);
+    expect(sendCountAfterLoad).toBeGreaterThanOrEqual(3);
 
     // Click Select on the row to mount the board.
     const selectBtn = (fixture.nativeElement as HTMLElement).querySelector(
