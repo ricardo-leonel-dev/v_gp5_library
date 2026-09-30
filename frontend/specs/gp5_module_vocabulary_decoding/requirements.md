@@ -27,10 +27,14 @@ The lengths of `GP5_MODULE_FX_TITLES`'s ten arrays (keys `0`-`9`) SHALL be exact
 (external_docs/gp-5-manual.pdf pp.20-36; see design.md's per-category tables for the exact transcribed
 values and their page numbers).
 
+> Superseded by feature 19 (`gp5_module_vocabulary_hardware_re_verification`): titles are only appended, so these lengths are now prefixes (feature 19 R19-R21).
+
 ## R4
 WHEN `decodeModule(cat, fxlow)` is called with a `cat` that has an entry in `GP5_MODULE_CATEGORIES` (R1) and
 an `fxlow` that is a valid index into that category's `GP5_MODULE_FX_TITLES` array (R2), the system SHALL
 return a resolved result containing that category's code and the FX title at index `fxlow`.
+
+> Superseded by feature 19 (`gp5_module_vocabulary_hardware_re_verification`): `decodeModule` resolves through the per-code `GP5_HARDWARE_MODULE_CODES` lookup, not by position (feature 19 R11, R12).
 
 ## R5
 IF `decodeModule(cat, fxlow)` is called with a `cat` that has no entry in `GP5_MODULE_CATEGORIES` (R1) THEN
@@ -67,3 +71,5 @@ whose value states that the `cat`/`fxlow` mapping is a hypothesis derived from
 external_docs/gp-5-manual.pdf's MIDI CC table (p.40) and Effect List (pp.20-36), and that it has not yet been
 confirmed against real GP-5 hardware — mirroring `gp5-sysex-preset-codec.ts`'s existing
 CONFIRMED/CORROBORATED/UNCONFIRMED documentation convention for exactly this kind of claim.
+
+> Superseded by feature 19 (`gp5_module_vocabulary_hardware_re_verification`): the status is now `HARDWARE-VERIFIED` and cites `gp5-hardware-captures` (feature 19 R17, R18).

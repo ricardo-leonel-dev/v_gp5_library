@@ -31,7 +31,11 @@
 - [x] T15 (R10) Add tests: `describeModuleType` falls back to `{ kind: 'raw', moduleType }` for both an
   unparseable string and a parseable-but-unresolved `(cat, fxlow)` string.
 - [x] T16 (R11) Add a test: `GP5_MODULE_VOCABULARY_STATUS` contains `'HYPOTHESIS'` and `'gp-5-manual.pdf'`.
-- [ ] T17 (acceptance criterion 2 — hardware round-trip verification; **not** mapped to any R above and
+- [x] T17 (done via feature 19, `gp5_module_vocabulary_hardware_re_verification`: Ricardo's 2026-09-28..30
+  preset-0 reads are recorded in `src/app/midi/gp5-hardware-captures.ts`; sources `2026-09-28 preset 0 TL DLX AMP`,
+  `2026-09-29 preset 0 baseline` / `1b unsaved AMP edit`, and `2026-09-30 preset 0 round 1`..`round 51`,
+  `round IR13 re-read`, `round IR20`, `round 1e before` / `round 1e after`. The comparison disproved the positional
+  mapping, which feature 19 replaced with a per-code lookup.) (acceptance criterion 2 — hardware round-trip verification; **not** mapped to any R above and
   **not** executable by an implementer/reviewer subagent session) Ricardo connects his real GP-5, reads a
   known factory patch through the existing `sysex_preset_read_write`/`preset_browser_ui` features, and
   compares `describeModuleType`'s resolved names for that patch's modules against what the pedal's own

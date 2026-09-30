@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { describeModuleType } from './gp5-module-vocabulary';
 import { Gp5SysexPresetCodec } from './gp5-sysex-preset-codec';
 import type { Preset } from './preset';
 import type { SysexDecodeResult } from './sysex-preset-codec';
@@ -510,6 +511,57 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
     expect(chain[1].moduleType).toBe('cat0_fx0');
     expect(chain[3].moduleType).toBe('cat7_fx4');
     expect(chain[4].moduleType).toBe('cata_fx100000');
+  });
+
+  test('decodeBody resolves a reordered chain by code, not position (feature 19 R25, T1 step 1e)', () => {
+    // Real preset 0 bytes from T1 step 1e (2026-09-30): RVB moved before MOD in the Valeton app. The 10
+    // REC_MODELS records were identical before and after; only REC_ORDER changed, to the value below.
+    const recModels: ReadonlyArray<readonly [number, number, number, number]> = [
+      [27, 0, 0, 0], // block 0 NR / Gate
+      [41, 0, 0, 1], // block 1 PRE / Detune
+      [64, 0, 0, 3], // block 2 DST / Bass OD
+      [123, 0, 0, 8], // block 3 AMP / AC Pre2
+      [19, 0, 16, 10], // block 4 CAB / User IR 1-20 (slot 20)
+      [60, 0, 0, 1], // block 5 EQ / Mess EQ
+      [40, 0, 0, 4], // block 6 MOD / Bias Trem
+      [4, 0, 0, 11], // block 7 DLY / Ping Pong
+      [21, 0, 0, 12], // block 8 RVB / Sweet Space
+      [51, 0, 0, 15], // block 9 N->S / Empty (empty user slot)
+    ];
+    const recOrderAfter = [0, 1, 2, 9, 3, 4, 5, 8, 6, 7];
+    const body = buildBodyWithModels(recModels);
+    for (let k = 0; k < 10; k++) body[56 + k] = recOrderAfter[k];
+
+    const codec = newCodec();
+    let lastResult: SysexDecodeResult = { kind: 'ignored' };
+    for (const f of chunkForReassembly(buildBodyBlob(body))) lastResult = codec.decodeIncomingMessage(f);
+
+    expect(lastResult.kind).toBe('preset');
+    if (lastResult.kind !== 'preset') return;
+    const chain = lastResult.preset.chain;
+    expect(chain).toHaveLength(10);
+    recOrderAfter.forEach((blockIndex, chainPosition) => {
+      const [b0, b1, b2, b3] = recModels[blockIndex];
+      const blockCode = `cat${b3.toString(16)}_fx${(b0 | (b1 << 8) | (b2 << 16)).toString(16)}`;
+      expect(describeModuleType(chain[chainPosition].moduleType)).toEqual(
+        describeModuleType(blockCode),
+      );
+    });
+    expect(describeModuleType(chain[7].moduleType)).toEqual({
+      kind: 'resolved',
+      category: 'RVB',
+      fxTitle: 'Sweet Space',
+    });
+    expect(describeModuleType(chain[8].moduleType)).toEqual({
+      kind: 'resolved',
+      category: 'MOD',
+      fxTitle: 'Bias Trem',
+    });
+    expect(describeModuleType(chain[3].moduleType)).toEqual({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'Empty',
+    });
   });
 });
 

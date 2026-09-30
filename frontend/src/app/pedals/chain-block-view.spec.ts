@@ -95,9 +95,9 @@ describe('displayCategoryCode', () => {
 });
 
 describe('toChainBlockView (R16, R19)', () => {
-  it('R16: resolves cat1_fx0 (PRE COMP) to a resolved view with category index 1 and FX index 0', () => {
+  it('R16: resolves cat0_fx0 (PRE COMP) to a resolved view with category index 1 and FX index 0', () => {
     const view = toChainBlockView(
-      { moduleType: 'cat1_fx0', enabled: true, parameters: {} },
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
       0,
     );
     expect(view.kind).toBe('resolved');
