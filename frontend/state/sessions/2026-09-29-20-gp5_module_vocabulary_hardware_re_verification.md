@@ -3,7 +3,7 @@ session_id: 20
 feature: gp5_module_vocabulary_hardware_re_verification
 agent: leader -> implementer (Claude Opus 5.5)
 started_at: 2026-09-29T05:50:42.000Z
-closed_at:
+closed_at: 2026-09-30T06:53:25.000Z
 ---
 
 ## Plan
@@ -27,3 +27,9 @@ closed_at:
 - [leader -> implementer (Claude Opus 5.5)] T19 done by Ricardo 2026-09-30: preset 0 NR, PRE COMP and AMP Dark Twin correct; CAB shows canonical 'User IR 1-20' (pedal shows 'User IR'/'TL DLX GP5'), accepted, per-slot label is feature 21 gp5_user_slot_labels; spot-check of other presets impossible because every preset shows preset 0's chain (pre-existing read bug, feature 20 gp5_preset_body_read_same_preset). Ricardo closes F19 anyway.
 
 ## Next Step
+
+## Verification
+./init.sh (Node v24.21.0): 17 test files, 793 tests passed; tsc --noEmit clean for app and spec tsconfigs; ng build OK. R1-R26 traceability in progress/impl_gp5_module_vocabulary_hardware_re_verification.md. Only warning: Supabase mirror sync (HTTP 404 PGRST125).
+
+## Closure
+Per-code, hardware-verified GP-5 module lookup (182 captured codes, all 162 canonical pairs covered); MOD tremolos, 50 factory SnapTones and User SnapTone appended with catalog and es/en i18n; feature 15 absorbed. Reviewer approved after es 'a partir del' and comment fixes. T19: Ricardo confirmed preset 0 on 2026-09-30 (NR, PRE COMP, AMP Dark Twin, CAB canonical 'User IR 1-20'); the other-preset spot-check is blocked by feature 20 (gp5_preset_body_read_same_preset, pre-existing read bug); per-slot 'User IR n' labels are feature 21 (gp5_user_slot_labels). Not committed.

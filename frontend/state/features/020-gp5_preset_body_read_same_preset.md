@@ -2,9 +2,9 @@
 feature_number: 20
 name: gp5_preset_body_read_same_preset
 title: Todos los presets muestran el contenido del preset 0
-status: pending
+status: done
 created_at: 2026-09-30T06:50:40.000Z
-updated_at: 2026-09-30T06:50:49.000Z
+updated_at: 2026-09-30T07:37:21.000Z
 ---
 
 ## Description

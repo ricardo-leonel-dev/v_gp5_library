@@ -2,9 +2,9 @@
 feature_number: 19
 name: gp5_module_vocabulary_hardware_re_verification
 title: GP-5 module vocabulary: hardware re-verification of FX ordering (T17 closure)
-status: in_progress
+status: done
 created_at: 2026-09-28T21:30:43.000Z
-updated_at: 2026-09-30T06:11:05.000Z
+updated_at: 2026-09-30T06:53:25.000Z
 ---
 
 ## Description
