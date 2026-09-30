@@ -864,12 +864,7 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // After the initial read completes, expect at least the names request
-    // + PC + body request = 3 sends. F22 restored the per-slot Program
-    // Change + READ_SETTLE_MS settle on top of buildBodyRequest's slot
-    // byte (see gp5-sysex-preset-codec.ts buildBodyRequest) — the two
-    // mechanisms are orthogonal: PC + settle is what makes the pedal
-    // reply, slot byte is what disambiguates which slot's body it
-    // returns.
+    // + slot selection + body request = 3 sends.
     const sendCountAfterLoad = outputPort.sendSpy.mock.calls.length;
     expect(sendCountAfterLoad).toBeGreaterThanOrEqual(3);
 

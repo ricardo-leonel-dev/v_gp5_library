@@ -427,7 +427,7 @@ describe('WebMidiPedalConnection.readPresets / writePreset — connection guards
 });
 
 describe('WebMidiPedalConnection.readPresets — orchestration', () => {
-  test('sends the names request, then a Program Change + body request per slot, in slot order (F20+F22: PC + settle handshake AND slot-encoded body request)', async () => {
+  test('sends the names request, then a Program Change + body request per slot, in slot order', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [
@@ -451,9 +451,8 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const presets = await driveFullRead(pending, inputPort, 3);
 
     expect(presets.map((p) => p.slot)).toEqual([0, 1, 2]);
-    // F22: PC + READ_SETTLE_MS handshake restored on top of the F20 slot-byte
-    // wire-format fix. Each slot gets its own Program Change before the body
-    // request — the pedal's protocol handshake requires it.
+    // Each slot is selected before its body request, since the body request
+    // itself carries no slot number.
     expect(codec.programChangeCalls).toEqual([0, 1, 2]);
 
     const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
@@ -686,7 +685,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await expect(pending).resolves.toEqual([fixturePreset(0)]);
   });
 
-  test('leaves the pedal on the last slot read (F22 restores the per-slot Program Change handshake that feature 12 introduced)', async () => {
+  test('leaves the pedal on the last slot read', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
@@ -698,13 +697,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await driveFullRead(pending, inputPort, 1);
     await pending;
 
-    // F22 restores the per-slot Program Change from pre-F20 wiring. The
-    // body request itself carries the slot byte (F20), but the GP-5 needs
-    // the PC + READ_SETTLE_MS handshake to actually reply. The last slot
-    // read is the preset the pedal is left on — this is the feature-12
-    // UX side effect, restored in F22. encodeProgramChange is also still
-    // on the codec interface for any caller that wants to select a preset
-    // manually outside a read.
+    // The last slot selected is the preset the pedal is left on.
     expect(codec.programChangeCalls).toEqual([0]);
   });
 });
@@ -915,7 +908,7 @@ describe('WebMidiPedalConnection + real Gp5SysexPresetCodec — full read flow (
     return frames;
   }
 
-  test('names phase + 100 slot-encoded body reads decode correctly end-to-end (F20)', async () => {
+  test('names phase + 100 body reads decode correctly end-to-end', async () => {
     vi.useFakeTimers();
 
     const codec = new Gp5SysexPresetCodec();

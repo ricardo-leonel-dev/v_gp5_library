@@ -11,9 +11,7 @@ import {
 // against real hardware; matches gp5 / gp-5 / gp 5 in any casing.
 export const GP5_NAME_PATTERN = /gp[\s-]?5/i;
 
-// Post-Program-Change settle before requesting a slot's body. Matches the
-// hardware-verified progress/gp5_webmidi_body_read_probe.html ("POST_PC
-// settle, matches scan_bank.py/select_patch.py").
+// Settle after selecting a slot before requesting its body.
 export const READ_SETTLE_MS = 300;
 
 // Deadline for ONE read step (the names phase completing, or one slot's body
@@ -109,25 +107,9 @@ export class WebMidiPedalConnection implements PedalConnection {
       this.output.send(namesRequest);
       await this.waitForNamesComplete(pending);
 
-      // The body request is byte-identical for every slot — it does NOT
-      // carry a slot byte. The slot travels only on the MIDI Program
-      // Change fired below; the PC + READ_SETTLE_MS handshake is the
-      // load-bearing protocol piece that the GP-5 hardware requires to
-      // reply at all. F23 (2026-09-30) established this as the protocol:
-      // F20's hypothesis that the body request needed a slot byte at
-      // payload position 2 was disproven by Ricardo's hardware test of
-      // F20 (and F22's restoration of the PC + settle on top of the
-      // slot byte — both timed out: "La lectura de presets ha
-      // expirado"). F23 reverts F20's slot byte and re-establishes
-      // PC + settle alone as sufficient.
-      //
-      // Ground truth: `progress/gp5_webmidi_body_read_probe.html` —
-      // lines 115-119 are the `buildRequest(selector)` helper used for
-      // the body read (byte 2 = 0x00, no slot byte on the wire);
-      // lines 340-345 are the per-slot sequence
-      // (`output.send([0xc0, slot & 0x7f])` + `setTimeout(300)` +
-      // `buildRequest(BODY_SEL)`). The slot is carried on the MIDI
-      // Program Change only, never on the SysEx.
+      // The body request carries no slot number — the pedal replies with
+      // its active preset — so each slot is selected first and given
+      // READ_SETTLE_MS to settle before its body is requested.
       const presets: Preset[] = [];
       for (let slot = 0; slot < bodyRequests.length; slot++) {
         this.output!.send(this.codec.encodeProgramChange(slot));
@@ -136,14 +118,7 @@ export class WebMidiPedalConnection implements PedalConnection {
         presets.push(await this.waitForSlotPreset(pending));
       }
 
-      // The last iteration's Program Change (slot = 99 for a full dump)
-      // leaves the pedal on the last slot read. This is the feature-12
-      // UX side effect, restored in F22 along with the per-slot PC +
-      // settle handshake and re-established as the load-bearing protocol
-      // piece in F23 after F23 reverted the F20 slot-byte hypothesis.
-      // Callers that want to capture and restore the preset active
-      // before the read need to track it themselves — there is no
-      // protocol-level query for the current slot.
+      // The last selection leaves the pedal on the last slot read.
       return presets;
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));
