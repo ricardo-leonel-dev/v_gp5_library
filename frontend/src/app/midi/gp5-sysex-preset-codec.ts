@@ -9,14 +9,38 @@
 //
 // Verified against real GP-5 hardware (the user's own pedal):
 //
-//   * encodeReadAllRequest / decodeIncomingMessage (T5, R14) — the byte-level
-//     framing/CRC/selectors of the READ path are byte-confirmed against a real
-//     GP-5. See progress/gp5_webmidi_read_probe.html (selector 0x40, names
-//     read, 100 names parsed) and progress/gp5_webmidi_body_read_probe.html
-//     (selector 0x41, full body read, 466-byte body with all four magics
-//     decoded, PLUS the Program-Change-then-300ms-settle sequencing required
-//     before each body request — see that probe's `go` handler). All confirmed
+//   * encodeReadAllRequest / decodeIncomingMessage (T5, R14, F20) — the
+//     byte-level framing/CRC/selectors of the READ path are byte-confirmed
+//     against a real GP-5. See progress/gp5_webmidi_read_probe.html
+//     (selector 0x40, names read, 100 names parsed) and
+//     progress/gp5_webmidi_body_read_probe.html (selector 0x41, full body
+//     read, 466-byte body with all four magics decoded). All confirmed
 //     against the GP-5, not the GP-50.
+//
+//     F20 root-cause note: pre-F20 `encodeReadAllRequest()` built 100
+//     IDENTICAL body requests (one `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]`
+//     each, slot byte hardcoded to 0). WebMidiPedalConnection then sent a
+//     MIDI Program Change + 300ms settle before each one — which worked for
+//     one slot at a time in the probe (the active preset at request time
+//     happened to be the slot being read), but in the full 100-slot
+//     production read the pedal's "currently loaded" preset didn't reliably
+//     follow the PCs, so every body request returned the active preset's
+//     body — preset 0's body for every slot, which is exactly what the
+//     app rendered. The fix puts the slot byte at payload position 2 of
+//     each body request (mirroring encodeWriteRequest's WRITE_HDR layout
+//     where `payload[2] = preset.slot`), so every request unambiguously
+//     targets its slot and no PC + settle is needed. F20 was NOT hardware-
+//     re-verified end-to-end against the pedal in this session: the change
+//     is a wire-format addition that the existing real-codec end-to-end
+//     test exercises for slot-0 body bytes (and the new F20 regression
+//     test pins the slot-byte position), but Ricardo needs to reconnect the
+//     GP-5 to confirm three distinct presets now show their own chains.
+//     The 2026-09-29 probe capture that originally surfaced this bug
+//     (mixed bytes when reading slot 0 with the pedal loaded on preset 84)
+//     is also consistent with this root cause: pre-F20 the request asked
+//     for slot 0 regardless of the active preset, and the pedal replied
+//     with the active preset's bytes for the dynamic parts and slot 0's
+//     bytes for the static parts.
 //
 //   * decodeIncomingMessage's reply header (feature 13) — a second, deeper
 //     hardware capture (raw incoming SysEx bytes read straight off the real
@@ -33,15 +57,17 @@
 //     bad gate was removed — see decodeIncomingMessage's inline comment.
 //
 //   * encodeProgramChange / isAwaitingNames (feature 12) — added so
-//     WebMidiPedalConnection.readPresets can reproduce that same
-//     Program-Change-then-settle sequencing per slot, which the shipped
-//     production code originally omitted (it fired all 101 read-all requests
-//     back-to-back with no Program Change at all, which read_timeout'd on real
-//     hardware). That production wiring is now covered by unit tests with fake
-//     timers (web-midi-pedal-connection.spec.ts) asserting the PC/settle/body
-//     order and timing — it is NOT independently re-verified against the real
-//     pedal end-to-end; only the standalone probe script above and the manual
-//     bug report that prompted this fix touched real hardware.
+//     WebMidiPedalConnection.readPresets can drive a Program-Change-then-
+//     settle sequence before each body request. F20 (2026-09-30) later
+//     superseded that workaround by adding the slot byte to the body
+//     request itself (see encodeReadAllRequest's F20 note above); encodeProgramChange
+//     is still on the codec interface for any caller that wants to manually
+//     select a preset (e.g. a future "go to preset N" feature), and
+//     isAwaitingNames still gates the names-phase accumulation in the codec.
+//     The pre-F20 production wiring of PC + 300ms settle per slot is the
+//     version that read_timeout'd on real hardware — feature 12's PC +
+//     settle change fixed the timeout symptom, but F20 identified that the
+//     body request itself was the missing piece.
 //
 //   * encodeWriteRequest (T21, R17) — WRITE path is corroborated, NOT byte-
 //     instrumented. Web MIDI cannot observe another app's outgoing host→device
@@ -149,9 +175,26 @@ function nibDecode(arr: Uint8Array): Uint8Array {
 }
 
 // Build a 6-byte read request: [crc, 0x01, 0x00, 0x02, 0x12, selector]. The CRC
-// is computed over the buffer with byte 0 held at 0.
+// is computed over the buffer with byte 0 held at 0. Used for the names read
+// (selector 0x40), which has no per-slot byte — it asks the pedal for all 100
+// names at once. The body read uses buildBodyRequest below because each slot
+// needs its own request.
 function buildRequest(selector: number): Uint8Array {
   const buf = new Uint8Array([0, 0x01, 0x00, 0x02, 0x12, selector]);
+  buf[0] = crc8(buf);
+  return buf;
+}
+
+// Build a 7-byte body read request: [crc, 0x01, slot, 0x02, 0x12, 0x41]. The
+// slot byte lives at payload position 2 — the same place the WRITE payload
+// stores `preset.slot` in encodeWriteRequest (WRITE_HDR[2]). Without the slot
+// byte the pedal returns the body for whatever preset is currently loaded
+// regardless of the slot we asked for (F20: feature 19 T19 confirmation on
+// 2026-09-30 found that every preset in the running app showed preset 0's
+// chain). With it, each request unambiguously targets its slot, so the codec
+// does not need to drive a Program Change + settle before every body read.
+function buildBodyRequest(slot: number): Uint8Array {
+  const buf = new Uint8Array([0, 0x01, slot & 0xff, 0x02, 0x12, BODY_SEL]);
   buf[0] = crc8(buf);
   return buf;
 }
@@ -382,10 +425,13 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     this.currentSlot = 0;
     this.nextIndex = 0;
 
-    // One names request, then 100 body requests (one per slot).
+    // One names request, then 100 body requests — one per slot, each with
+    // the slot byte baked into the request itself (see buildBodyRequest's
+    // doc comment). The pedal replies with the body for the slot in the
+    // request, not for whatever preset happens to be active.
     const messages: Uint8Array[] = [toWire(buildRequest(NAME_SEL))];
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
-      messages.push(toWire(buildRequest(BODY_SEL)));
+      messages.push(toWire(buildBodyRequest(slot)));
     }
     return messages;
   }

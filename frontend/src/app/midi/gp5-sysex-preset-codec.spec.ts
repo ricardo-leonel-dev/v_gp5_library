@@ -204,6 +204,41 @@ describe('Gp5SysexPresetCodec.encodeReadAllRequest', () => {
       expect(crc).toBe(crc8(body));
     }
   });
+
+  // F20 regression: every body read must target its own slot. Without the
+  // slot byte the pedal returns the active preset's body for every slot
+  // (feature 19 T19 confirmation, 2026-09-30), so the app shows preset 0's
+  // chain on every preset card. The body request layout mirrors the WRITE
+  // payload (`encodeWriteRequest` sets `payload[2] = preset.slot`), so the
+  // slot byte lives at the same payload position for reads.
+  test('each of the 100 body requests encodes its slot at payload position 2 (F20 regression)', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const messages = codec.encodeReadAllRequest();
+
+    expect(messages).toHaveLength(101);
+
+    // Names request keeps payload[2] = 0 (the request returns all 100 names,
+    // so there is no per-slot byte). The bug only affected the body phase.
+    const namesDecoded = fromWire(messages[0]);
+    expect(namesDecoded).toHaveLength(6);
+    expect(namesDecoded[2]).toBe(0x00);
+
+    // Body requests must be pairwise distinct, with payload[2] = slot index.
+    // Pre-F20 every entry here was an identical 6-byte `[crc, 0x01, 0x00,
+    // 0x02, 0x12, 0x41]` because the slot byte was hardcoded to 0.
+    const seen = new Set<number>();
+    for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      const decoded = fromWire(messages[slot + 1]);
+      expect(decoded).toHaveLength(6); // [crc, 0x01, slot, 0x02, 0x12, 0x41]
+      expect(decoded[1]).toBe(0x01);
+      expect(decoded[2]).toBe(slot & 0xff);
+      expect(decoded[3]).toBe(0x02);
+      expect(decoded[4]).toBe(CATSEL);
+      expect(decoded[5]).toBe(BODY_SEL);
+      seen.add(decoded[2]);
+    }
+    expect(seen.size).toBe(SLOT_COUNT); // every slot byte unique
+  });
 });
 
 describe('Gp5SysexPresetCodec.encodeProgramChange (feature 12)', () => {
