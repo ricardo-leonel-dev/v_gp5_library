@@ -2,9 +2,9 @@
 feature_number: 23
 name: gp5_preset_body_read_remove_slot_byte
 title: Revertir buildBodyRequest(slot): body request sin byte de slot (F23, basado en evidencia de probe)
-status: in_progress
+status: done
 created_at: 2026-09-30T16:41:22.000Z
-updated_at: 2026-09-30T16:42:55.000Z
+updated_at: 2026-09-30T16:52:43.000Z
 ---
 
 ## Description
