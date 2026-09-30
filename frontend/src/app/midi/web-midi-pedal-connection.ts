@@ -109,25 +109,41 @@ export class WebMidiPedalConnection implements PedalConnection {
       this.output.send(namesRequest);
       await this.waitForNamesComplete(pending);
 
+      // The body request is byte-identical for every slot — it does NOT
+      // carry a slot byte. The slot travels only on the MIDI Program
+      // Change fired below; the PC + READ_SETTLE_MS handshake is the
+      // load-bearing protocol piece that the GP-5 hardware requires to
+      // reply at all. F23 (2026-09-30) established this as the protocol:
+      // F20's hypothesis that the body request needed a slot byte at
+      // payload position 2 was disproven by Ricardo's hardware test of
+      // F20 (and F22's restoration of the PC + settle on top of the
+      // slot byte — both timed out: "La lectura de presets ha
+      // expirado"). F23 reverts F20's slot byte and re-establishes
+      // PC + settle alone as sufficient.
+      //
+      // Ground truth: `progress/gp5_webmidi_body_read_probe.html` —
+      // lines 115-119 are the `buildRequest(selector)` helper used for
+      // the body read (byte 2 = 0x00, no slot byte on the wire);
+      // lines 340-345 are the per-slot sequence
+      // (`output.send([0xc0, slot & 0x7f])` + `setTimeout(300)` +
+      // `buildRequest(BODY_SEL)`). The slot is carried on the MIDI
+      // Program Change only, never on the SysEx.
       const presets: Preset[] = [];
       for (let slot = 0; slot < bodyRequests.length; slot++) {
-        // Body requests carry no slot number (see SysexPresetCodec.encodeProgramChange's
-        // doc comment) — the device replies with whatever slot is currently
-        // selected, so we must select it with a Program Change and let it
-        // settle before asking for the body.
         this.output!.send(this.codec.encodeProgramChange(slot));
         await this.delay(READ_SETTLE_MS);
         this.output!.send(bodyRequests[slot]);
         presets.push(await this.waitForSlotPreset(pending));
       }
 
-      // Deliberately left on slot 99 (the last slot read), not "restored".
-      // readPresets() never captured which slot was active before it was
-      // called — the GP-5 protocol has no query-current-slot request — so any
-      // restore target (e.g. slot 0) would be an arbitrary guess, not an
-      // actual restore. Left as a known UX side effect; a future feature that
-      // needs to preserve the pre-browse active slot would have to capture it
-      // via some other means before calling readPresets().
+      // The last iteration's Program Change (slot = 99 for a full dump)
+      // leaves the pedal on the last slot read. This is the feature-12
+      // UX side effect, restored in F22 along with the per-slot PC +
+      // settle handshake and re-established as the load-bearing protocol
+      // piece in F23 after F23 reverted the F20 slot-byte hypothesis.
+      // Callers that want to capture and restore the preset active
+      // before the read need to track it themselves — there is no
+      // protocol-level query for the current slot.
       return presets;
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));

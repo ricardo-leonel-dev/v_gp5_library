@@ -850,9 +850,11 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // The page's ngOnInit -> loadPresets -> readPresets() has already sent
-    // the names request. Fire a single input message to complete the names
-    // phase, advance past the post-Program-Change settle, then fire the
-    // body message.
+    // the names request. Fire the names-completion message so the loop
+    // advances; readPresets then sends a Program Change for slot 0 and
+    // waits READ_SETTLE_MS before sending the body request. Advance the
+    // settle timer to release the body request, then fire the body
+    // message so waitForSlotPreset can consume it.
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa0]) } as unknown as MIDIMessageEvent);
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa1]) } as unknown as MIDIMessageEvent);
@@ -862,7 +864,12 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // After the initial read completes, expect at least the names request
-    // + Program Change + body request = 3 sends.
+    // + PC + body request = 3 sends. F22 restored the per-slot Program
+    // Change + READ_SETTLE_MS settle on top of buildBodyRequest's slot
+    // byte (see gp5-sysex-preset-codec.ts buildBodyRequest) — the two
+    // mechanisms are orthogonal: PC + settle is what makes the pedal
+    // reply, slot byte is what disambiguates which slot's body it
+    // returns.
     const sendCountAfterLoad = outputPort.sendSpy.mock.calls.length;
     expect(sendCountAfterLoad).toBeGreaterThanOrEqual(3);
 

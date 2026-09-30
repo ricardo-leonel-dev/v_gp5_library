@@ -9,14 +9,52 @@
 //
 // Verified against real GP-5 hardware (the user's own pedal):
 //
-//   * encodeReadAllRequest / decodeIncomingMessage (T5, R14) — the byte-level
-//     framing/CRC/selectors of the READ path are byte-confirmed against a real
-//     GP-5. See progress/gp5_webmidi_read_probe.html (selector 0x40, names
-//     read, 100 names parsed) and progress/gp5_webmidi_body_read_probe.html
-//     (selector 0x41, full body read, 466-byte body with all four magics
-//     decoded, PLUS the Program-Change-then-300ms-settle sequencing required
-//     before each body request — see that probe's `go` handler). All confirmed
+//   * encodeReadAllRequest / decodeIncomingMessage (T5, R14, F20) — the
+//     byte-level framing/CRC/selectors of the READ path are byte-confirmed
+//     against a real GP-5. See progress/gp5_webmidi_read_probe.html
+//     (selector 0x40, names read, 100 names parsed) and
+//     progress/gp5_webmidi_body_read_probe.html (selector 0x41, full body
+//     read, 466-byte body with all four magics decoded). All confirmed
 //     against the GP-5, not the GP-50.
+//
+//     F20 hypothesis (later disproven, see F23 below): pre-F20 the body
+//     request was an identical 6-byte `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]`
+//     for every slot (slot byte hardcoded to 0). Pre-F20 production wired
+//     a MIDI Program Change + 300ms settle before each body request, which
+//     worked in the single-slot probe (the active preset at request time
+//     happened to be the slot being read) but did not reliably follow the
+//     PCs in the full 100-slot production read — every card ended up
+//     showing preset 0's chain. F20 added a per-slot byte at payload
+//     position 2 (mirroring encodeWriteRequest's WRITE_HDR layout, where
+//     `payload[2] = preset.slot`) so each request unambiguously targeted
+//     its slot on the wire, and F20 REMOVED the PC + settle.
+//
+//     F22 update (2026-09-30): hardware-re-verification of F20 by Ricardo
+//     found the body requests were not getting any reply at all ("La
+//     lectura de presets ha expirado") with F20's no-PC-and-no-settle
+//     production flow. F22 restored the PC + READ_SETTLE_MS handshake on
+//     top of F20's slot byte, treating the two mechanisms as orthogonal
+//     and coexisting: the slot byte disambiguates which slot's body the
+//     pedal returns once it does reply, and the Program Change + settle
+//     is what makes the GP-5 reply in the first place.
+//
+//     F23 revert (2026-09-30): hardware-re-verification of F22 by Ricardo
+//     still gave "La lectura de presets ha expirado" — the slot byte
+//     hypothesis was wrong. The empirically-correct body read is just
+//     `buildRequest(BODY_SEL)` — i.e. `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]`
+//     for every slot, with byte 2 hardcoded to 0 — preceded by a MIDI
+//     Program Change (`[0xc0, slot & 0x7f]`) + 300ms settle. The slot
+//     travels on the MIDI Program Change channel, NOT on a SysEx byte.
+//     Ground truth: `progress/gp5_webmidi_body_read_probe.html`, lines
+//     115-119 (the `buildRequest(selector)` helper used for the body read
+//     has byte 2 = 0x00, no slot byte) and lines 340-345 (the per-slot
+//     sequence is PC → 300ms → body request, with the slot byte only
+//     carried on the MIDI Program Change, never on the SysEx). F23
+//     removes F20's `buildBodyRequest(slot)` helper; `encodeReadAllRequest`
+//     now uses `buildRequest(BODY_SEL)` for all 100 body requests (they
+//     are byte-identical). F22's PC + READ_SETTLE_MS handshake in
+//     `WebMidiPedalConnection.readPresets` is the load-bearing piece
+//     preserved by F23.
 //
 //   * decodeIncomingMessage's reply header (feature 13) — a second, deeper
 //     hardware capture (raw incoming SysEx bytes read straight off the real
@@ -33,15 +71,26 @@
 //     bad gate was removed — see decodeIncomingMessage's inline comment.
 //
 //   * encodeProgramChange / isAwaitingNames (feature 12) — added so
-//     WebMidiPedalConnection.readPresets can reproduce that same
-//     Program-Change-then-settle sequencing per slot, which the shipped
-//     production code originally omitted (it fired all 101 read-all requests
-//     back-to-back with no Program Change at all, which read_timeout'd on real
-//     hardware). That production wiring is now covered by unit tests with fake
-//     timers (web-midi-pedal-connection.spec.ts) asserting the PC/settle/body
-//     order and timing — it is NOT independently re-verified against the real
-//     pedal end-to-end; only the standalone probe script above and the manual
-//     bug report that prompted this fix touched real hardware.
+//     WebMidiPedalConnection.readPresets can drive a Program-Change-then-
+//     settle sequence before each body request. F12 made the per-slot PC +
+//     settle load-bearing; F20 (2026-09-30) added a slot byte to the body
+//     request itself and removed the PC + settle from the production read
+//     flow (wrong direction); F22 (2026-09-30) restored the PC + settle
+//     on top of the slot byte; F23 (2026-09-30) reverted the slot byte
+//     after F22 also timed out on hardware — the slot travels on the
+//     Program Change, not on a SysEx byte. encodeProgramChange fires the
+//     per-slot Program Change; the body request itself stays identical
+//     for every slot. isAwaitingNames still gates the names-phase
+//     accumulation in the codec.
+//
+//     The user manual's "MIDI Control Information List" (page 40) only
+//     documents standard MIDI CCs (Patch Volume, Bank Select, Module
+//     On/Off) — it does NOT document the SysEx preset read/write protocol
+//     used here. That protocol was reverse-engineered from real hardware
+//     captures (the probe HTMLs in `progress/`), so byte-level discoveries
+//     like the F20 slot-byte hypothesis only become visible after
+//     hardware testing. Treat any inferred SysEx field as a hypothesis
+//     until re-verified against the pedal.
 //
 //   * encodeWriteRequest (T21, R17) — WRITE path is corroborated, NOT byte-
 //     instrumented. Web MIDI cannot observe another app's outgoing host→device
@@ -149,7 +198,16 @@ function nibDecode(arr: Uint8Array): Uint8Array {
 }
 
 // Build a 6-byte read request: [crc, 0x01, 0x00, 0x02, 0x12, selector]. The CRC
-// is computed over the buffer with byte 0 held at 0.
+// is computed over the buffer with byte 0 held at 0. Used for BOTH the names
+// read (selector 0x40, asks the pedal for all 100 names at once) AND every
+// per-slot body read (selector 0x41) — the body request does NOT carry a
+// per-slot byte on the wire. The slot travels via the MIDI Program Change
+// (`encodeProgramChange` + READ_SETTLE_MS settle) fired by
+// WebMidiPedalConnection.readPresets before each body request. The wire-
+// format / slot-byte hypothesis (F20/F22) was disproven by hardware testing:
+// `progress/gp5_webmidi_body_read_probe.html`, lines 115-119 (the helper
+// used for body reads has byte 2 = 0x00) and lines 340-345 (the per-slot
+// sequence is PC → 300ms → body request), is the ground truth.
 function buildRequest(selector: number): Uint8Array {
   const buf = new Uint8Array([0, 0x01, 0x00, 0x02, 0x12, selector]);
   buf[0] = crc8(buf);
@@ -382,10 +440,16 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     this.currentSlot = 0;
     this.nextIndex = 0;
 
-    // One names request, then 100 body requests (one per slot).
+    // One names request, then 100 body requests — all 100 are byte-identical
+    // `buildRequest(BODY_SEL)` (i.e. `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]`).
+    // The slot does NOT travel on the SysEx wire; it travels on a MIDI
+    // Program Change fired by WebMidiPedalConnection.readPresets before each
+    // body request. See buildRequest's doc comment and the F23 revert
+    // paragraph in the class header for the ground truth.
+    const bodyRequest = toWire(buildRequest(BODY_SEL));
     const messages: Uint8Array[] = [toWire(buildRequest(NAME_SEL))];
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
-      messages.push(toWire(buildRequest(BODY_SEL)));
+      messages.push(bodyRequest);
     }
     return messages;
   }

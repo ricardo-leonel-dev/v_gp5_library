@@ -204,6 +204,51 @@ describe('Gp5SysexPresetCodec.encodeReadAllRequest', () => {
       expect(crc).toBe(crc8(body));
     }
   });
+
+  // F23 regression: every body request is byte-identical to
+  // `buildRequest(BODY_SEL)` — `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]` with
+  // payload[2] hardcoded to 0x00 (NO slot byte on the wire). The slot
+  // travels on the MIDI Program Change fired by
+  // WebMidiPedalConnection.readPresets before each body request, not on the
+  // SysEx.
+  //
+  // F20/F22 had asserted the opposite (each body request carries a unique
+  // slot byte at payload position 2); that hypothesis was disproven by
+  // Ricardo's 2026-09-30 hardware test of both F20 and F22 — both gave
+  // "La lectura de presets ha expirado". Ground truth is
+  // `progress/gp5_webmidi_body_read_probe.html` (lines 115-119: the body-
+  // read helper has byte 2 = 0x00; lines 340-345: the per-slot sequence is
+  // PC → 300ms → body request, with the slot carried only on the PC).
+  test('all 100 body requests are byte-identical to buildRequest(BODY_SEL), with byte 2 = 0x00 (F23 regression)', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const messages = codec.encodeReadAllRequest();
+
+    expect(messages).toHaveLength(101);
+
+    // Names request keeps payload[2] = 0 (the request returns all 100 names,
+    // so there is no per-slot byte).
+    const namesDecoded = fromWire(messages[0]);
+    expect(namesDecoded).toHaveLength(6);
+    expect(namesDecoded[2]).toBe(0x00);
+
+    // All 100 body requests are byte-identical: payload[2] is 0x00 (NOT the
+    // slot index), and the SET of decoded payloads has exactly one unique
+    // entry. Pre-F23, F20's regression test asserted the opposite — that
+    // each body request was pairwise distinct with payload[2] = slot. That
+    // hypothesis was wrong.
+    const seen = new Set<string>();
+    for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      const decoded = fromWire(messages[slot + 1]);
+      expect(decoded).toHaveLength(6); // [crc, 0x01, 0x00, 0x02, 0x12, 0x41]
+      expect(decoded[1]).toBe(0x01);
+      expect(decoded[2]).toBe(0x00); // NOT slot & 0xff — F20 was wrong here
+      expect(decoded[3]).toBe(0x02);
+      expect(decoded[4]).toBe(CATSEL);
+      expect(decoded[5]).toBe(BODY_SEL);
+      seen.add(Array.from(decoded).join(','));
+    }
+    expect(seen.size).toBe(1); // every body request is byte-identical
+  });
 });
 
 describe('Gp5SysexPresetCodec.encodeProgramChange (feature 12)', () => {
