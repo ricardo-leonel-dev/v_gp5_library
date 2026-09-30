@@ -22,6 +22,16 @@
 //     answers with the body of whatever preset is active. Selecting the
 //     slot to read is a separate step (see WebMidiPedalConnection.readPresets).
 //
+//   * encodeSelectPreset (feature 24) — MIDI CC0 `[0xb0, 0x00, slot]`, the
+//     patch-select message listed on page 40 of the user manual. A live
+//     capture (progress/gp5_f24_capture_2026-09-30T17-50-31-876Z.json)
+//     showed the GP-5 ignores Program Change `[0xc0, slot]`: every body
+//     reply was the active preset. With CC0 the screen follows and each slot
+//     returns its own body. ~3-50ms after each CC0 the pedal also sends an
+//     unsolicited 1-chunk frame, decoded `[crc, 0x01, 0x00, 0x06, 0x12, 0x1b,
+//     0x01, 0x00, 0x00, 0x00]` (selector 0x1b, a patch-change notification);
+//     decodeIncomingMessage drops it by its missing body echo.
+//
 //   * decodeIncomingMessage's reply header (feature 13) — a second, deeper
 //     hardware capture (raw incoming SysEx bytes read straight off the real
 //     GP-5, decoded with this file's own crc8/nibDecode) found that every
@@ -36,10 +46,8 @@
 //     [CATSEL, BODY_SEL], all four record magics at valid offsets) once the
 //     bad gate was removed — see decodeIncomingMessage's inline comment.
 //
-//   * encodeProgramChange / isAwaitingNames (feature 12) — let
-//     WebMidiPedalConnection.readPresets select a slot and let it settle
-//     before each body request, and wait for the names phase to finish
-//     before the first one.
+//   * isAwaitingNames (feature 12) — lets WebMidiPedalConnection.readPresets
+//     wait for the names phase to finish before the first body request.
 //
 //     The user manual's "MIDI Control Information List" (page 40) only
 //     documents standard MIDI CCs — it does NOT document the SysEx preset
@@ -218,6 +226,14 @@ function findMagic(body: Uint8Array, magic: number[]): number {
   return -1;
 }
 
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function sumLengths(chunks: ReadonlyMap<number, Uint8Array>): number {
   let total = 0;
   for (const chunk of chunks.values()) {
@@ -381,6 +397,9 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
   private namesMap: Map<number, string> | null = null;
   private currentSlot = 0;
   private nextIndex = 0;
+  private awaitingActiveBody = false;
+  private activeBody: Uint8Array | null = null;
+  private matchingSlots: number[] = [];
 
   encodeReadAllRequest(): Uint8Array[] {
     // Reset the dump state.
@@ -389,6 +408,9 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     this.namesMap = null;
     this.currentSlot = 0;
     this.nextIndex = 0;
+    this.awaitingActiveBody = false;
+    this.activeBody = null;
+    this.matchingSlots = [];
 
     // One names request, then 100 byte-identical body requests; the caller
     // selects each slot before sending its body request.
@@ -451,7 +473,13 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     }
 
     // Phase 2: accumulate body for the current slot. Echo bytes ride along
-    // on the first chunk and are stripped during reassembly.
+    // on the first chunk and are stripped during reassembly. A first chunk
+    // without the [CATSEL, BODY_SEL] echo is not part of a body reply — in
+    // practice the 0x1b patch-change notification that follows every slot
+    // selection — and would otherwise take chunk 0's place.
+    if (index === 0 && (chunk[0] !== CATSEL || chunk[1] !== BODY_SEL)) {
+      return { kind: 'ignored' };
+    }
     this.bodyChunks.set(index, chunk);
     const total = sumLengths(this.bodyChunks);
     if (total < BODY_BLOB_LEN) {
@@ -460,6 +488,14 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     const blob = concatChunks(this.bodyChunks, BODY_BLOB_LEN);
     this.bodyChunks = new Map();
     const body = blob.subarray(ECHO_LEN);
+    if (this.awaitingActiveBody) {
+      this.awaitingActiveBody = false;
+      this.activeBody = body;
+      return { kind: 'activePreset' };
+    }
+    if (this.activeBody && bytesEqual(body, this.activeBody)) {
+      this.matchingSlots.push(this.currentSlot);
+    }
     const name = this.namesMap?.get(this.currentSlot) ?? `slot${this.currentSlot}`;
     const preset = decodeBody(body, name, this.currentSlot);
     const isLast = this.currentSlot === SLOT_COUNT - 1;
@@ -472,11 +508,19 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     return { kind: 'preset', preset, isLast };
   }
 
-  encodeProgramChange(slot: number): Uint8Array {
-    // Plain 2-byte MIDI Program Change on channel 0 — NOT SysEx-framed, unlike
-    // every other message this codec builds. Matches
-    // progress/gp5_webmidi_body_read_probe.html's `output.send([0xc0, slot & 0x7f])`.
-    return new Uint8Array([0xc0, slot & 0x7f]);
+  encodeSelectPreset(slot: number): Uint8Array {
+    // MIDI CC0 on channel 1 — NOT SysEx-framed, unlike every other message
+    // this codec builds.
+    return new Uint8Array([0xb0, 0x00, slot & 0x7f]);
+  }
+
+  encodeActivePresetRequest(): Uint8Array {
+    this.awaitingActiveBody = true;
+    return toWire(buildRequest(BODY_SEL));
+  }
+
+  slotsMatchingActivePreset(): number[] {
+    return [...this.matchingSlots];
   }
 
   isAwaitingNames(): boolean {

@@ -96,11 +96,15 @@ function fixturePreset(slot: number, name = `preset${slot}`): Preset {
 // decodeIncomingMessage has been called `namesCompleteAfterCalls` times —
 // this stands in for the real codec's names-blob-reassembly bookkeeping
 // without needing to fabricate real SysEx bytes in these orchestration tests.
+// The first message decoded after encodeActivePresetRequest() is the
+// active-preset reply; slotsMatchingActivePreset() returns `activeMatches`.
 class FakeCodec implements SysexPresetCodec {
   readMessageSets: Uint8Array[][] = [];
   writeMessageSets: Uint8Array[][] = [];
   decodeResults: SysexDecodeResult[] = [];
-  programChangeCalls: number[] = [];
+  selectCalls: number[] = [];
+  activeRequestCalls = 0;
+  activeMatches: number[] = [0];
   encodeReadAllRequestCalls = 0;
   encodeWriteRequestCalls: Preset[] = [];
   namesCompleteAfterCalls = 1;
@@ -113,6 +117,7 @@ class FakeCodec implements SysexPresetCodec {
 
   private namesCallCount = 0;
   private awaitingNames = false;
+  private awaitingActive = false;
 
   encodeReadAllRequest(): Uint8Array[] {
     this.encodeReadAllRequestCalls++;
@@ -121,9 +126,19 @@ class FakeCodec implements SysexPresetCodec {
     return this.readMessageSets[this.encodeReadAllRequestCalls - 1] ?? [];
   }
 
-  encodeProgramChange(slot: number): Uint8Array {
-    this.programChangeCalls.push(slot);
-    return new Uint8Array([0xc0, slot & 0x7f]);
+  encodeSelectPreset(slot: number): Uint8Array {
+    this.selectCalls.push(slot);
+    return new Uint8Array([0xb0, 0x00, slot & 0x7f]);
+  }
+
+  encodeActivePresetRequest(): Uint8Array {
+    this.activeRequestCalls++;
+    this.awaitingActive = true;
+    return new Uint8Array([0xac]);
+  }
+
+  slotsMatchingActivePreset(): number[] {
+    return this.activeMatches;
   }
 
   isAwaitingNames(): boolean {
@@ -145,6 +160,10 @@ class FakeCodec implements SysexPresetCodec {
         this.awaitingNames = false;
       }
       return result;
+    }
+    if (this.awaitingActive) {
+      this.awaitingActive = false;
+      return { kind: 'activePreset' };
     }
     return this.decodeResults.shift() ?? { kind: 'ignored' };
   }
@@ -191,18 +210,24 @@ async function fireMessages(input: FakePort, payloads: Uint8Array[]): Promise<vo
   }
 }
 
+// Fires the names-complete message, then the active-preset reply to the
+// pre-read body request that readPresets sends right after the names phase.
+async function completeNamesAndActive(inputPort: FakePort): Promise<void> {
+  await fireMessages(inputPort, [new Uint8Array([0xa0])]); // completes the names phase
+  await fireMessages(inputPort, [new Uint8Array([0xac])]); // active-preset body
+}
+
 // Drives one full read-all dump against a FakeCodec configured with a names
-// message + one body-request message per fixture preset: fires the
-// names-complete message, then for each slot advances the settle delay
-// (READ_SETTLE_MS — the Program-Change-then-settle handshake the GP-5
-// hardware requires) before firing the body-decode message. Assumes
-// fake timers are active.
+// message + one body-request message per fixture preset: completes the names
+// and active-preset steps, then for each slot advances the settle delay
+// (READ_SETTLE_MS after the slot selection) before firing the body-decode
+// message. Assumes fake timers are active.
 async function driveFullRead(
   pending: Promise<Preset[]>,
   inputPort: FakePort,
   slotCount: number,
 ): Promise<Preset[]> {
-  await fireMessages(inputPort, [new Uint8Array([0xa0])]); // completes the names phase
+  await completeNamesAndActive(inputPort);
   for (let slot = 0; slot < slotCount; slot++) {
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
     await fireMessages(inputPort, [new Uint8Array([0xa1])]); // decodes this slot's body
@@ -427,7 +452,7 @@ describe('WebMidiPedalConnection.readPresets / writePreset — connection guards
 });
 
 describe('WebMidiPedalConnection.readPresets — orchestration', () => {
-  test('sends the names request, then a Program Change + body request per slot, in slot order', async () => {
+  test('sends the names request, the active-preset request, then a CC0 selection + body request per slot, then restores the pre-read preset', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [
@@ -443,6 +468,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
       { kind: 'preset', preset: fixturePreset(1), isLast: false },
       { kind: 'preset', preset: fixturePreset(2), isLast: true },
     ];
+    codec.activeMatches = [1];
     const { connection, access } = await connectAndSetup(codec);
     const inputPort = [...access.inputs.values()][0];
     const outputPort = [...access.outputs.values()][0];
@@ -453,21 +479,24 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     expect(presets.map((p) => p.slot)).toEqual([0, 1, 2]);
     // Each slot is selected before its body request, since the body request
     // itself carries no slot number.
-    expect(codec.programChangeCalls).toEqual([0, 1, 2]);
+    expect(codec.selectCalls).toEqual([0, 1, 2, 1]);
+    expect(connection.restoreWarning()).toBeNull();
 
     const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
     expect(sent).toEqual([
       [0xaa, 0xaa], // names request first
-      [0xc0, 0x00], // PC slot 0
+      [0xac], // active-preset body request, no selection before it
+      [0xb0, 0x00, 0x00], // CC0 slot 0
       [0xbb, 0x00], // body request, slot 0
-      [0xc0, 0x01], // PC slot 1
+      [0xb0, 0x00, 0x01], // CC0 slot 1
       [0xbb, 0x01], // body request, slot 1
-      [0xc0, 0x02], // PC slot 2
+      [0xb0, 0x00, 0x02], // CC0 slot 2
       [0xbb, 0x02], // body request, slot 2
+      [0xb0, 0x00, 0x01], // restore: back to the slot matching the pre-read body
     ]);
   });
 
-  test('does not send any Program Change or body request until the names phase completes', async () => {
+  test('does not send the active-preset request, any selection or body request until the names phase completes', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.namesCompleteAfterCalls = 3; // names phase spans 3 incoming chunks
@@ -485,22 +514,25 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await fireMessages(inputPort, [new Uint8Array([0xa0])]);
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(1);
 
-    // Third chunk finishes the names phase — only now does the per-slot
-    // Program Change fire (sync, after waitForNamesComplete resolves).
-    // The body request itself is gated on READ_SETTLE_MS after that PC,
-    // so it hasn't gone out yet.
+    // Third chunk finishes the names phase — only now does the
+    // active-preset request go out. No slot is selected before its reply.
     await fireMessages(inputPort, [new Uint8Array([0xa0])]);
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2);
+    expect(codec.selectCalls).toEqual([]);
 
-    // Advance past the settle delay so the body request goes out.
-    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    // Active-preset reply: slot 0 is selected; its body request is gated
+    // on READ_SETTLE_MS after that selection.
+    await fireMessages(inputPort, [new Uint8Array([0xac])]);
     expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(4);
 
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
     await pending;
   });
 
-  test('waits READ_SETTLE_MS (~300ms) after the Program Change before sending the body request', async () => {
+  test('waits READ_SETTLE_MS (~300ms) after the slot selection before sending the body request', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.readMessageSets = [
@@ -515,26 +547,26 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const outputPort = [...access.outputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete
+    await completeNamesAndActive(inputPort);
 
-    // Names request + slot 0 PC fired as soon as names phase completes.
-    // Body request is gated on READ_SETTLE_MS after the PC.
-    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2);
+    // Names request + active-preset request + slot 0 selection.
+    // Body request is gated on READ_SETTLE_MS after the selection.
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
 
     // Advance just under the settle delay — body request must NOT have fired yet.
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS - 1);
-    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(2);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
 
     // Advance past the settle delay — body request fires now.
     await vi.advanceTimersByTimeAsync(1);
-    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(4);
 
-    // Drive slot 0's reply, then slot 1's PC + body with another settle.
+    // Drive slot 0's reply, then slot 1's selection + body with another settle.
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
-    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(4); // slot 1 PC fired
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(5); // slot 1 selection fired
 
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
-    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(5); // slot 1 body fired
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(6); // slot 1 body fired
 
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
     await pending;
@@ -573,7 +605,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await completeNamesAndActive(inputPort); // slot 0 selection fires
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires
     await fireMessages(inputPort, [
       new Uint8Array([0xa1]),
@@ -595,7 +627,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
 
     const pending = connection.readPresets();
     pending.catch(() => {});
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await completeNamesAndActive(inputPort); // slot 0 selection fires
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires
     await fireMessages(inputPort, [new Uint8Array([0xa1])]);
 
@@ -615,7 +647,8 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await fireMessages(inputPort, [new Uint8Array([0xa0])]);
 
     await expect(pending).rejects.toThrow('invalid_response');
-    expect(codec.programChangeCalls).toEqual([]); // never reached the body phase
+    expect(codec.activeRequestCalls).toBe(0); // never reached the body phase
+    expect(codec.selectCalls).toEqual([]);
   });
 
   test('rejects with "read_timeout" when the names phase never completes within READ_STEP_TIMEOUT_MS', async () => {
@@ -644,8 +677,8 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
 
     const pending = connection.readPresets();
     pending.catch(() => {});
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
-    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires, waitForSlotPreset armed
+    await completeNamesAndActive(inputPort); // slot 0 selection fires
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires, its wait step armed
     await fireMessages(inputPort, [new Uint8Array([0xa0])]); // advances the per-step deadline
 
     // The per-step deadline for this stalled slot fires even though the
@@ -669,7 +702,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete, PC fires
+    await completeNamesAndActive(inputPort); // slot 0 selection fires
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // body request fires
 
     // Each chunk arrives just under the per-step deadline, resetting it —
@@ -685,20 +718,119 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     await expect(pending).resolves.toEqual([fixturePreset(0)]);
   });
 
-  test('leaves the pedal on the last slot read', async () => {
-    vi.useFakeTimers();
+  function threeSlotCodec(activeMatches: number[]): FakeCodec {
     const codec = new FakeCodec();
-    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
-    codec.decodeResults = [{ kind: 'preset', preset: fixturePreset(0), isLast: true }];
+    codec.readMessageSets = [
+      [new Uint8Array([0x01]), new Uint8Array([0x02]), new Uint8Array([0x02]), new Uint8Array([0x02])],
+    ];
+    codec.decodeResults = [
+      { kind: 'preset', preset: fixturePreset(0), isLast: false },
+      { kind: 'preset', preset: fixturePreset(1), isLast: false },
+      { kind: 'preset', preset: fixturePreset(2), isLast: true },
+    ];
+    codec.activeMatches = activeMatches;
+    return codec;
+  }
+
+  test('selects slots with CC0 [0xb0, 0x00, slot], never a Program Change (the GP-5 ignores PC)', async () => {
+    vi.useFakeTimers();
+    const { connection, access } = await connectAndSetup(threeSlotCodec([0]));
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+
+    await driveFullRead(connection.readPresets(), inputPort, 3);
+
+    const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
+    expect(sent.filter((m) => (m[0] & 0xf0) === 0xc0)).toEqual([]);
+    expect(sent.filter((m) => m[0] === 0xb0)).toEqual([
+      [0xb0, 0x00, 0x00],
+      [0xb0, 0x00, 0x01],
+      [0xb0, 0x00, 0x02],
+      [0xb0, 0x00, 0x00], // restore
+    ]);
+  });
+
+  test('restores the pre-read preset with one final CC0 when exactly one slot matches it', async () => {
+    vi.useFakeTimers();
+    const codec = threeSlotCodec([2]);
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+
+    const presets = await driveFullRead(connection.readPresets(), inputPort, 3);
+
+    expect(presets.map((p) => p.slot)).toEqual([0, 1, 2]);
+    const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
+    expect(sent.at(-1)).toEqual([0xb0, 0x00, 0x02]);
+    expect(codec.selectCalls).toEqual([0, 1, 2, 2]);
+    expect(connection.restoreWarning()).toBeNull();
+  });
+
+  test('stays on the last slot read and sets restoreWarning "restore_no_match" when no slot matches', async () => {
+    vi.useFakeTimers();
+    const codec = threeSlotCodec([]);
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+
+    const presets = await driveFullRead(connection.readPresets(), inputPort, 3);
+
+    expect(presets).toHaveLength(3);
+    expect(codec.selectCalls).toEqual([0, 1, 2]); // no restore selection
+    const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
+    expect(sent.at(-1)).toEqual([0x02]); // last message is slot 2's body request
+    expect(connection.restoreWarning()).toBe('restore_no_match');
+  });
+
+  test('stays on the last slot read and sets restoreWarning "restore_ambiguous" when several slots match', async () => {
+    vi.useFakeTimers();
+    const codec = threeSlotCodec([0, 2]);
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const presets = await driveFullRead(connection.readPresets(), inputPort, 3);
+
+    expect(presets).toHaveLength(3);
+    expect(codec.selectCalls).toEqual([0, 1, 2]);
+    expect(connection.restoreWarning()).toBe('restore_ambiguous');
+  });
+
+  test('clears a previous restoreWarning when a new read starts', async () => {
+    vi.useFakeTimers();
+    const codec = threeSlotCodec([]);
+    codec.readMessageSets.push(codec.readMessageSets[0]);
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    await driveFullRead(connection.readPresets(), inputPort, 3);
+    expect(connection.restoreWarning()).toBe('restore_no_match');
+
+    codec.activeMatches = [1];
+    codec.decodeResults = [
+      { kind: 'preset', preset: fixturePreset(0), isLast: false },
+      { kind: 'preset', preset: fixturePreset(1), isLast: false },
+      { kind: 'preset', preset: fixturePreset(2), isLast: true },
+    ];
+    const second = connection.readPresets();
+    expect(connection.restoreWarning()).toBeNull();
+    await driveFullRead(second, inputPort, 3);
+    expect(connection.restoreWarning()).toBeNull();
+  });
+
+  test('rejects with "read_timeout" when the active-preset reply never arrives, without selecting any slot', async () => {
+    vi.useFakeTimers();
+    const codec = threeSlotCodec([0]);
     const { connection, access } = await connectAndSetup(codec);
     const inputPort = [...access.inputs.values()][0];
 
     const pending = connection.readPresets();
-    await driveFullRead(pending, inputPort, 1);
-    await pending;
+    pending.catch(() => {});
+    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names complete only
+    await vi.advanceTimersByTimeAsync(READ_STEP_TIMEOUT_MS + 1);
 
-    // The last slot selected is the preset the pedal is left on.
-    expect(codec.programChangeCalls).toEqual([0]);
+    await expect(pending).rejects.toThrow('read_timeout');
+    expect(codec.activeRequestCalls).toBe(1);
+    expect(codec.selectCalls).toEqual([]);
   });
 });
 
@@ -753,8 +885,19 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
         return [new Uint8Array([0x01]), ...sorted.map(() => new Uint8Array([0x02]))];
       }
 
-      encodeProgramChange(slot: number): Uint8Array {
-        return new Uint8Array([0xc0, slot & 0x7f]);
+      private awaitingActive = false;
+
+      encodeSelectPreset(slot: number): Uint8Array {
+        return new Uint8Array([0xb0, 0x00, slot & 0x7f]);
+      }
+
+      encodeActivePresetRequest(): Uint8Array {
+        this.awaitingActive = true;
+        return new Uint8Array([0x03]);
+      }
+
+      slotsMatchingActivePreset(): number[] {
+        return [];
       }
 
       isAwaitingNames(): boolean {
@@ -767,6 +910,10 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
           // transitions to the body phase, same shape as the real codec.
           this.awaitingNames = false;
           return { kind: 'ignored' };
+        }
+        if (this.awaitingActive) {
+          this.awaitingActive = false;
+          return { kind: 'activePreset' };
         }
         return this.backQueue.shift() ?? { kind: 'ignored' };
       }
@@ -794,8 +941,8 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
     await connection.writePreset(preset);
 
     const pending = connection.readPresets();
-    await fireMessages(inputPort, [new Uint8Array([0xa0])]); // names phase
-    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // PC(5) settle, body request fires
+    await completeNamesAndActive(inputPort);
+    await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // selection settle, body request fires
     await fireMessages(inputPort, [new Uint8Array([0xa1])]); // slot 5's body
 
     const presets = await pending;
@@ -811,8 +958,8 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
 // decoded[1] position (106 for the names blob, 25 for each body), and real
 // echo bytes. FakeCodec-based tests above stub decodeIncomingMessage
 // entirely, so they could not have caught this bug; this test exercises the
-// actual byte-level decode logic through the full names + 100-slot
-// Program-Change-and-settle-sequenced (feature 12) read orchestration.
+// actual byte-level decode logic through the full names + active preset +
+// 100-slot CC0-selected read orchestration.
 describe('WebMidiPedalConnection + real Gp5SysexPresetCodec — full read flow (feature 13)', () => {
   function crc8(bytes: number[]): number {
     let c = 0;
@@ -908,44 +1055,160 @@ describe('WebMidiPedalConnection + real Gp5SysexPresetCodec — full read flow (
     return frames;
   }
 
-  test('names phase + 100 body reads decode correctly end-to-end', async () => {
-    vi.useFakeTimers();
+  // Real 466-byte bodies from the live GP-5 capture
+  // progress/gp5_f24_capture_2026-09-30T17-50-31-876Z.json: slots 0-2 read
+  // with CC0 selection (runs[2]), and the preset that was active on the pedal
+  // (preset 14, runs[0]) — none of slots 0-2 match it.
+  const CAPTURED_SLOT_BODIES_HEX: readonly string[] = [
+    // slot 0 "TL DLX AMP"
+    [
+      'ff0010000100040001000000020004000a454d5100001000011004000a00000002100400080000000100100001200400',
+      '32000000022004007800000002008601013004001a00000002300a0000010209030405060708033028001b0000000000',
+      '000000000003040000070000100a36000001080000040400000b0000000c3400000f043040010000e041000000000000',
+      '000000000000000000000000000000000000000000000000004100006442000048420000204100000000000000000000',
+      '0000000000000000000000008c420000484200000000000000000000000000000000000000000000804200008a420000',
+      '0c4200006c42000070420000803f00000000000000000000484200000000000000000000000000000000000000000000',
+      '0000000000000000a04000000040000080400000a0400000803f000018420000000000000000000000410000003f0000',
+      '48420000000000000000000000000000000000000000000010410000884300002842000000000000803f000000000000',
+      '0000000000000000884100005c42000010420000803f00004842000000000000000000000000000034420000ac420000',
+      '48420000484200004842000000000000000000000000030008000000000007000000',
+    ].join(''),
+    // slot 1 "TL AC3 AMP"
+    [
+      'ff0010000100040001000000020004000a454d5100001000011004000a00000002100400080000000100100001200400',
+      '32000000022004007800000002008601013004003a00000002300a0000010209030405060708033028001b0000000000',
+      '000000000003110000070200100a36000001080000040400000b0000000c3400000f043040010000e041000000000000',
+      '000000000000000000000000000000000000000000000000004100002042000048420000204100000000000000000000',
+      '0000000000000000000000008c420000484200000000000000000000000000000000000000000000f041000048420000',
+      'd8410000803f000070420000803f00000000000000000000484200000000000000000000000000000000000000000000',
+      '0000000000000000a040000000400000004000000040000020c1000018420000000000000000000000410000003f0000',
+      '48420000000000000000000000000000000000000000000010410000884300002842000000000000803f000000000000',
+      '0000000000000000884100005c42000010420000803f00004842000000000000000000000000000034420000ac420000',
+      '48420000484200004842000000000000000000000000030008000400000007000000',
+    ].join(''),
+    // slot 2 "TL PLX AMP"
+    [
+      'ff0010000100040001000000020004000a454d5100001000011004000a00000002100400080000000100100001200400',
+      '32000000022004007800000002008601013004003a00000002300a0000010209030405060708033028001b0000000000',
+      '0000000000032f0000070100100a36000001080000040400000b0000000c3400000f043040010000e041000000000000',
+      '000000000000000000000000000000000000000000000000004100002042000048420000204100000000000000000000',
+      '0000000000000000000000008c420000484200000000000000000000000000000000000000000000803f0000a0420000',
+      'c24200002042000084420000a04200000040000000000000484200000000000000000000000000000000000000000000',
+      '000000000000000080bf000080bf000000000000a0400000803f000040420000000000000000000000410000003f0000',
+      '48420000000000000000000000000000000000000000000010410000884300002842000000000000803f000000000000',
+      '0000000000000000884100005c42000010420000803f00004842000000000000000000000000000034420000ac420000',
+      '48420000484200004842000000000000000000000000030008000400000007000000',
+    ].join(''),
+  ];
+  const CAPTURED_ACTIVE_PRESET_14_HEX = [
+      'ff0010000100040001000000020004000a454d5100001000011004000a00000002100400080000000100100001200400',
+      '45000000022004007800000002008601013004001901000002300a0000010209030405060708033028001b0000001a00',
+      '0000000000032f0000072200000a35000001000000040200000b1000000c0000000f043040010000e041000000000000',
+      '00000000000000000000000000000000000000000000000004420000803f0000803f0000000000000000000000000000',
+      '0000000000000000b442000004420000684200000000000000000000000000000000000000000000a041000048420000',
+      '86420000f041000070420000824200007042000000000000484200000000000000000000000000000000000000000000',
+      '00000000000000000000000000000000000000000000000000000000484200000000000000000000a0410000003f0000',
+      '484200000000000000000000000000000000000000000000a04100007c430000b8410000000000000000000000000000',
+      '0000000000000000a841000048420000b041000000000000b84100004842000000000000000000004842000048420000',
+      '48420000484200004842000000000000000000000000030008000200000007000000',
+  ].join('');
+  // The unsolicited frame the pedal sent ~3-50ms after every CC0 in that
+  // capture (decoded [0xe2, 0x01, 0x00, 0x06, 0x12, 0x1b, 0x01, 0x00, 0x00, 0x00]).
+  const CAPTURED_PATCH_CHANGE_NOTIFICATION = new Uint8Array([
+    0xf0, 0x0e, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x01, 0x0b, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf7,
+  ]);
 
-    const codec = new Gp5SysexPresetCodec();
-    const { connection, access } = await connectAndSetup(codec as unknown as FakeCodec);
-    const inputPort = [...access.inputs.values()][0];
+  function hexToBytes(hex: string): Uint8Array {
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return out;
+  }
 
+  // Slots 0-2 get the captured bodies; every other slot a synthetic body
+  // made distinct by stamping the slot number into the trailing padding.
+  function slotBody(slot: number): Uint8Array {
+    if (slot < CAPTURED_SLOT_BODIES_HEX.length) return hexToBytes(CAPTURED_SLOT_BODIES_HEX[slot]);
+    const body = buildBody();
+    body[GP5_BODY_LEN - 1] = slot;
+    return body;
+  }
+
+  async function driveRealRead(
+    pending: Promise<Preset[]>,
+    inputPort: FakePort,
+    activeBody: Uint8Array,
+  ): Promise<Preset[]> {
     const names = new Map<number, string>();
     for (let s = 0; s < SLOT_COUNT; s++) names.set(s, `preset${s}`);
     const namesFrames = chunkForReassembly(buildNamesBlob(names));
     // Matches the real hardware capture's names-phase chunk count exactly.
     expect(namesFrames.length).toBe(106);
 
-    const bodyFrames = chunkForReassembly(buildBodyBlob(buildBody()));
-    // Matches the real hardware capture's per-slot body chunk count exactly.
-    expect(bodyFrames.length).toBe(25);
-
-    const pending = connection.readPresets();
-
     await fireMessages(inputPort, namesFrames);
-
+    await fireMessages(inputPort, chunkForReassembly(buildBodyBlob(activeBody)));
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
-      await vi.advanceTimersByTimeAsync(READ_SETTLE_MS); // PC(slot) settle, body request fires
+      // The CC0 for this slot has just gone out; the pedal's notification
+      // arrives during the settle, before the body request.
+      await fireMessages(inputPort, [CAPTURED_PATCH_CHANGE_NOTIFICATION]);
+      await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
+      const bodyFrames = chunkForReassembly(buildBodyBlob(slotBody(slot)));
+      // Matches the real hardware capture's per-slot body chunk count exactly.
+      expect(bodyFrames.length).toBe(25);
       await fireMessages(inputPort, bodyFrames);
     }
+    return pending;
+  }
 
-    const presets = await pending;
+  test('names + active preset + 100 CC0-selected body reads decode each slot\'s own chain, then restore the active slot', async () => {
+    vi.useFakeTimers();
+
+    const codec = new Gp5SysexPresetCodec();
+    const { connection, access } = await connectAndSetup(codec as unknown as FakeCodec);
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+    for (const hex of CAPTURED_SLOT_BODIES_HEX) expect(hexToBytes(hex)).toHaveLength(GP5_BODY_LEN);
+
+    const presets = await driveRealRead(connection.readPresets(), inputPort, slotBody(1));
 
     expect(presets).toHaveLength(SLOT_COUNT);
-    expect(presets[0].slot).toBe(0);
+    expect(presets.map((p) => p.slot)).toEqual(Array.from({ length: SLOT_COUNT }, (_, i) => i));
     expect(presets[0].name).toBe('preset0');
-    expect(presets[SLOT_COUNT - 1].slot).toBe(SLOT_COUNT - 1);
     expect(presets[SLOT_COUNT - 1].name).toBe(`preset${SLOT_COUNT - 1}`);
-    // Every slot's body decoded the same fixture body — spot-check the
-    // magic-marker-derived fields came through the full stack intact.
-    for (const preset of presets) {
-      expect(preset.chain).toHaveLength(10);
-      expect(preset.chain[0].enabled).toBe(false); // bypass mask was all zeros
-    }
+    // Each captured slot decodes to its own AMP block (REC_MODELS block 3,
+    // chain position 4 after REC_ORDER [0,1,2,9,3,...]).
+    expect(presets.slice(0, 3).map((p) => p.chain[4].moduleType)).toEqual([
+      'cat7_fx4',
+      'cat7_fx11',
+      'cat7_fx2f',
+    ]);
+    for (const preset of presets) expect(preset.chain).toHaveLength(10);
+
+    const sent = outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
+    expect(sent.at(-1)).toEqual([0xb0, 0x00, 0x01]);
+    expect(connection.restoreWarning()).toBeNull();
+  }, 20000);
+
+  test('with the captured active preset 14 matching no slot, stays on slot 99 and warns "restore_no_match"', async () => {
+    vi.useFakeTimers();
+
+    const codec = new Gp5SysexPresetCodec();
+    const { connection, access } = await connectAndSetup(codec as unknown as FakeCodec);
+    const inputPort = [...access.inputs.values()][0];
+    const outputPort = [...access.outputs.values()][0];
+
+    const presets = await driveRealRead(
+      connection.readPresets(),
+      inputPort,
+      hexToBytes(CAPTURED_ACTIVE_PRESET_14_HEX),
+    );
+
+    expect(presets).toHaveLength(SLOT_COUNT);
+    const selections = outputPort.__sendSpy.mock.calls
+      .map((c) => Array.from(c[0] as Uint8Array))
+      .filter((m) => m[0] === 0xb0);
+    expect(selections).toHaveLength(SLOT_COUNT);
+    expect(selections.at(-1)).toEqual([0xb0, 0x00, 99]);
+    expect(connection.restoreWarning()).toBe('restore_no_match');
   }, 20000);
 });

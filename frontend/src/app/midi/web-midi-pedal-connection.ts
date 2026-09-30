@@ -14,18 +14,24 @@ export const GP5_NAME_PATTERN = /gp[\s-]?5/i;
 // Settle after selecting a slot before requesting its body.
 export const READ_SETTLE_MS = 300;
 
-// Deadline for ONE read step (the names phase completing, or one slot's body
+// Deadline for ONE read step (the names phase completing, or one body
 // arriving) — NOT one flat deadline for the whole 100-slot read. It resets
-// every time a chunk of progress is observed (see waitForNamesComplete /
-// waitForSlotPreset below), so a slow-but-still-responding pedal is never
-// penalized for the cumulative time a full 100-slot dump takes.
+// every time a chunk of progress is observed (see waitForStep below), so a
+// slow-but-still-responding pedal is never penalized for the cumulative time
+// a full 100-slot dump takes.
 export const READ_STEP_TIMEOUT_MS = 5000;
+
+/**
+ * Why readPresets could not put the pedal back on the preset that was active
+ * before the read: no slot's body matches it (e.g. it had unsaved edits), or
+ * several do (duplicate presets). The pedal then stays on the last slot read.
+ */
+export type PresetRestoreWarning = 'restore_no_match' | 'restore_ambiguous';
 
 type PendingRead = {
   kind: 'read';
-  // Set per read-step by whichever of waitForNamesComplete/waitForSlotPreset
-  // is currently awaiting; handleMidiMessage forwards every decoded message
-  // to it while a read is in flight.
+  // Set per read-step by waitForStep; handleMidiMessage forwards every
+  // decoded message to it while a read is in flight.
   onMessage: ((result: SysexDecodeResult) => void) | null;
 };
 
@@ -45,6 +51,10 @@ type PendingOperation = PendingRead | PendingWrite;
 export class WebMidiPedalConnection implements PedalConnection {
   private readonly stateSignal = signal<PedalConnectionState>('not-connected');
   readonly connectionState = this.stateSignal.asReadonly();
+  private readonly restoreWarningSignal = signal<PresetRestoreWarning | null>(null);
+  // Outcome of the last readPresets() call's restore step; null when the
+  // pre-read preset was restored (or no read has completed yet).
+  readonly restoreWarning = this.restoreWarningSignal.asReadonly();
 
   private readonly codec = inject<SysexPresetCodec>(SYSEX_PRESET_CODEC);
 
@@ -100,25 +110,42 @@ export class WebMidiPedalConnection implements PedalConnection {
 
     const pending: PendingRead = { kind: 'read', onMessage: null };
     this.pendingOperation = pending;
+    this.restoreWarningSignal.set(null);
 
     try {
       const [namesRequest, ...bodyRequests] = this.codec.encodeReadAllRequest();
 
       this.output.send(namesRequest);
-      await this.waitForNamesComplete(pending);
+      await this.waitForStep(pending, () => (this.codec.isAwaitingNames() ? undefined : true));
+
+      // Reading slots switches the pedal's active preset, so capture the
+      // active one first (no selection) to restore it afterwards.
+      this.output!.send(this.codec.encodeActivePresetRequest());
+      await this.waitForStep(pending, (result) => (result.kind === 'activePreset' ? true : undefined));
 
       // The body request carries no slot number — the pedal replies with
       // its active preset — so each slot is selected first and given
       // READ_SETTLE_MS to settle before its body is requested.
       const presets: Preset[] = [];
       for (let slot = 0; slot < bodyRequests.length; slot++) {
-        this.output!.send(this.codec.encodeProgramChange(slot));
+        this.output!.send(this.codec.encodeSelectPreset(slot));
         await this.delay(READ_SETTLE_MS);
         this.output!.send(bodyRequests[slot]);
-        presets.push(await this.waitForSlotPreset(pending));
+        presets.push(
+          await this.waitForStep(pending, (result) =>
+            result.kind === 'preset' ? result.preset : undefined,
+          ),
+        );
       }
 
-      // The last selection leaves the pedal on the last slot read.
+      // Restore only on an unambiguous match; otherwise the pedal stays on
+      // the last slot read and the caller is told why.
+      const matches = this.codec.slotsMatchingActivePreset();
+      if (matches.length === 1) {
+        this.output!.send(this.codec.encodeSelectPreset(matches[0]));
+      } else {
+        this.restoreWarningSignal.set(matches.length === 0 ? 'restore_no_match' : 'restore_ambiguous');
+      }
       return presets;
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));
@@ -127,12 +154,15 @@ export class WebMidiPedalConnection implements PedalConnection {
     }
   }
 
-  // Waits for the names-read phase (started by the first message from
-  // encodeReadAllRequest) to finish. The per-step deadline resets on every
-  // message processed, so a names reply spread across many chunks doesn't
-  // trip a timeout meant for stalls, not total duration.
-  private waitForNamesComplete(pending: PendingRead): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+  // Resolves with the first non-undefined value `complete` returns for a
+  // decoded message. The per-step deadline resets on every message
+  // processed, so a reply spread across many chunks doesn't trip a timeout
+  // meant for stalls, not total duration.
+  private waitForStep<T>(
+    pending: PendingRead,
+    complete: (result: SysexDecodeResult) => T | undefined,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
       let timeoutHandle: ReturnType<typeof setTimeout>;
       const armTimeout = () => {
         clearTimeout(timeoutHandle);
@@ -148,41 +178,11 @@ export class WebMidiPedalConnection implements PedalConnection {
           reject(new Error('invalid_response'));
           return;
         }
-        if (!this.codec.isAwaitingNames()) {
+        const value = complete(result);
+        if (value !== undefined) {
           clearTimeout(timeoutHandle);
           pending.onMessage = null;
-          resolve();
-          return;
-        }
-        armTimeout();
-      };
-      armTimeout();
-    });
-  }
-
-  // Waits for the body reply for the slot just requested to fully decode into
-  // a Preset. Same reset-on-progress deadline as waitForNamesComplete.
-  private waitForSlotPreset(pending: PendingRead): Promise<Preset> {
-    return new Promise<Preset>((resolve, reject) => {
-      let timeoutHandle: ReturnType<typeof setTimeout>;
-      const armTimeout = () => {
-        clearTimeout(timeoutHandle);
-        timeoutHandle = setTimeout(() => {
-          pending.onMessage = null;
-          reject(new Error('read_timeout'));
-        }, READ_STEP_TIMEOUT_MS);
-      };
-      pending.onMessage = (result) => {
-        if (result.kind === 'invalid') {
-          clearTimeout(timeoutHandle);
-          pending.onMessage = null;
-          reject(new Error('invalid_response'));
-          return;
-        }
-        if (result.kind === 'preset') {
-          clearTimeout(timeoutHandle);
-          pending.onMessage = null;
-          resolve(result.preset);
+          resolve(value);
           return;
         }
         armTimeout();

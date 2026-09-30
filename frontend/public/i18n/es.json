@@ -45,7 +45,9 @@
     "request_in_progress": "Ya hay una operación MIDI en curso.",
     "read_timeout": "La lectura de presets ha expirado.",
     "invalid_response": "Respuesta MIDI no válida.",
-    "unknown": "No se pudieron leer los presets."
+    "unknown": "No se pudieron leer los presets.",
+    "restore_no_match": "No se pudo volver al preset que tenías activo: no coincide con ningún preset guardado (quizá tenía cambios sin guardar). El pedal quedó en el último preset leído.",
+    "restore_ambiguous": "No se pudo volver al preset que tenías activo: coincide con varios presets guardados. El pedal quedó en el último preset leído."
   },
   "chainBoard": {
     "title": "Cadena de señal",
