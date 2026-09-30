@@ -15,3 +15,6 @@ Los nombres de los 100 presets se leen bien, pero al seleccionar cualquier prese
 - [ ] Al menos 3 presets distintos muestran en la app los mismos bloques que la pantalla del pedal
 - [ ] Test de regresión que falla con el comportamiento actual
 - [ ] ./init.sh verde
+
+## Notes
+- 2026-09-30T17:36:30.000Z [leader] RECONCILIATION NOTE (2026-09-30, independent review by Claude Opus): F20's closure is WRONG. Its root cause ('body request missing slot byte at payload position 2') was disproven on real hardware — the slot-byte request gets no reply (read_timeout). F23 reverted it; net production behavior is back to pre-F20. None of F20's acceptance bullets were met: the original bug (all 100 cards show preset 0's chain) is still open and now tracked in F24 (gp5_preset_read_100slot_race). Do not treat F20 as a fix.

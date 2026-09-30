@@ -140,7 +140,7 @@ function buildNamesBlob(names: Map<number, string>): Uint8Array {
   const blob = new Uint8Array(NAMES_BLOB_LEN);
   blob[0] = CATSEL;
   blob[1] = NAME_SEL;
-  const dv = new DataView(blob.buffer, 2);
+  const dv = new DataView(blob.buffer);
   let i = 2;
   for (let slot = 0; slot < SLOT_COUNT; slot++) {
     dv.setUint32(i, slot, true);
@@ -205,21 +205,9 @@ describe('Gp5SysexPresetCodec.encodeReadAllRequest', () => {
     }
   });
 
-  // F23 regression: every body request is byte-identical to
-  // `buildRequest(BODY_SEL)` — `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]` with
-  // payload[2] hardcoded to 0x00 (NO slot byte on the wire). The slot
-  // travels on the MIDI Program Change fired by
-  // WebMidiPedalConnection.readPresets before each body request, not on the
-  // SysEx.
-  //
-  // F20/F22 had asserted the opposite (each body request carries a unique
-  // slot byte at payload position 2); that hypothesis was disproven by
-  // Ricardo's 2026-09-30 hardware test of both F20 and F22 — both gave
-  // "La lectura de presets ha expirado". Ground truth is
-  // `progress/gp5_webmidi_body_read_probe.html` (lines 115-119: the body-
-  // read helper has byte 2 = 0x00; lines 340-345: the per-slot sequence is
-  // PC → 300ms → body request, with the slot carried only on the PC).
-  test('all 100 body requests are byte-identical to buildRequest(BODY_SEL), with byte 2 = 0x00 (F23 regression)', () => {
+  // Every body request is `[crc, 0x01, 0x00, 0x02, 0x12, 0x41]`: there is no
+  // slot byte on the wire, the pedal replies with its active preset.
+  test('all 100 body requests are byte-identical to buildRequest(BODY_SEL), with byte 2 = 0x00', () => {
     const codec = new Gp5SysexPresetCodec();
     const messages = codec.encodeReadAllRequest();
 
@@ -231,17 +219,13 @@ describe('Gp5SysexPresetCodec.encodeReadAllRequest', () => {
     expect(namesDecoded).toHaveLength(6);
     expect(namesDecoded[2]).toBe(0x00);
 
-    // All 100 body requests are byte-identical: payload[2] is 0x00 (NOT the
-    // slot index), and the SET of decoded payloads has exactly one unique
-    // entry. Pre-F23, F20's regression test asserted the opposite — that
-    // each body request was pairwise distinct with payload[2] = slot. That
-    // hypothesis was wrong.
+    // All 100 body requests are byte-identical, with payload[2] = 0x00.
     const seen = new Set<string>();
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
       const decoded = fromWire(messages[slot + 1]);
       expect(decoded).toHaveLength(6); // [crc, 0x01, 0x00, 0x02, 0x12, 0x41]
       expect(decoded[1]).toBe(0x01);
-      expect(decoded[2]).toBe(0x00); // NOT slot & 0xff — F20 was wrong here
+      expect(decoded[2]).toBe(0x00);
       expect(decoded[3]).toBe(0x02);
       expect(decoded[4]).toBe(CATSEL);
       expect(decoded[5]).toBe(BODY_SEL);
@@ -251,19 +235,16 @@ describe('Gp5SysexPresetCodec.encodeReadAllRequest', () => {
   });
 });
 
-describe('Gp5SysexPresetCodec.encodeProgramChange (feature 12)', () => {
-  test('returns a plain 2-byte MIDI Program Change on channel 0, not SysEx-framed', () => {
+describe('Gp5SysexPresetCodec.encodeSelectPreset (feature 24)', () => {
+  test('returns a plain 3-byte MIDI CC0 [0xb0, 0x00, slot], not a Program Change and not SysEx-framed', () => {
     const codec = new Gp5SysexPresetCodec();
-    const message = codec.encodeProgramChange(5);
-
-    expect(Array.from(message)).toEqual([0xc0, 5]);
+    expect(Array.from(codec.encodeSelectPreset(5))).toEqual([0xb0, 0x00, 5]);
+    expect(Array.from(codec.encodeSelectPreset(99))).toEqual([0xb0, 0x00, 99]);
   });
 
   test('masks the slot to 7 bits (MIDI data byte range)', () => {
     const codec = new Gp5SysexPresetCodec();
-    const message = codec.encodeProgramChange(99);
-
-    expect(Array.from(message)).toEqual([0xc0, 99]);
+    expect(Array.from(codec.encodeSelectPreset(0x80 + 3))).toEqual([0xb0, 0x00, 3]);
   });
 });
 
@@ -514,7 +495,7 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
   });
 
   test('decodeBody decodes non-zero REC_MODELS records against the captured preset 0 (R37, T17 precursor)', () => {
-    // Captured by Ricardo from the real GP-5 on 2026-09-28: 4 of the 10 blocks
+    // Captured from the real GP-5 on 2026-09-28: 4 of the 10 blocks
     // in preset 0 carry populated REC_MODELS records (the rest are zero). The
     // exact bytes below were read straight off the pedal via
     // progress/gp5_webmidi_body_read_probe.html and confirmed against the
@@ -607,6 +588,132 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
       category: 'N->S',
       fxTitle: 'Empty',
     });
+  });
+});
+
+describe('Gp5SysexPresetCodec — active preset capture and matching (feature 24)', () => {
+  function bodyWithMarker(marker: number): Uint8Array {
+    const body = buildBody();
+    body[GP5_BODY_LEN - 1] = marker;
+    return body;
+  }
+
+  function feedBody(codec: Gp5SysexPresetCodec, body: Uint8Array): SysexDecodeResult {
+    let last: SysexDecodeResult = { kind: 'ignored' };
+    for (const f of chunkForReassembly(buildBodyBlob(body))) last = codec.decodeIncomingMessage(f);
+    return last;
+  }
+
+  // Runs a full dump: names, then the active-preset body, then 100 slot
+  // bodies where slot n carries marker `slotMarker(n)`.
+  function runDump(
+    activeMarker: number,
+    slotMarker: (slot: number) => number,
+  ): { codec: Gp5SysexPresetCodec; activeResult: SysexDecodeResult; presets: Preset[] } {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+    const names = new Map<number, string>();
+    for (let s = 0; s < SLOT_COUNT; s++) names.set(s, `name${s}`);
+    for (const f of chunkForReassembly(buildNamesBlob(names))) codec.decodeIncomingMessage(f);
+
+    const request = codec.encodeActivePresetRequest();
+    expect(Array.from(fromWire(request)).slice(1)).toEqual([0x01, 0x00, 0x02, CATSEL, BODY_SEL]);
+    const activeResult = feedBody(codec, bodyWithMarker(activeMarker));
+
+    const presets: Preset[] = [];
+    for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      const result = feedBody(codec, bodyWithMarker(slotMarker(slot)));
+      if (result.kind === 'preset') presets.push(result.preset);
+    }
+    return { codec, activeResult, presets };
+  }
+
+  test('the active-preset body decodes as "activePreset" and does not shift slot numbers or names', () => {
+    const { activeResult, presets } = runDump(200, (slot) => slot);
+
+    expect(activeResult).toEqual({ kind: 'activePreset' });
+    expect(presets).toHaveLength(SLOT_COUNT);
+    expect(presets[0]).toMatchObject({ slot: 0, name: 'name0' });
+    expect(presets[SLOT_COUNT - 1]).toMatchObject({ slot: 99, name: 'name99' });
+  });
+
+  test('slotsMatchingActivePreset returns the one slot whose raw body is byte-identical', () => {
+    const { codec } = runDump(42, (slot) => slot);
+    expect(codec.slotsMatchingActivePreset()).toEqual([42]);
+  });
+
+  test('slotsMatchingActivePreset returns every matching slot when several are identical', () => {
+    const { codec } = runDump(7, (slot) => (slot === 3 || slot === 60 ? 7 : slot + 100));
+    expect(codec.slotsMatchingActivePreset()).toEqual([3, 60]);
+  });
+
+  test('slotsMatchingActivePreset is empty when no slot matches (e.g. unsaved edits on the pedal)', () => {
+    const { codec } = runDump(250, (slot) => slot);
+    expect(codec.slotsMatchingActivePreset()).toEqual([]);
+  });
+
+  test('slotsMatchingActivePreset is empty when no active-preset body was captured, and resets per dump', () => {
+    const { codec } = runDump(42, (slot) => slot);
+    expect(codec.slotsMatchingActivePreset()).toEqual([42]);
+
+    codec.encodeReadAllRequest();
+    for (const f of chunkForReassembly(buildNamesBlob(new Map()))) codec.decodeIncomingMessage(f);
+    for (let slot = 0; slot < SLOT_COUNT; slot++) feedBody(codec, bodyWithMarker(slot));
+    expect(codec.slotsMatchingActivePreset()).toEqual([]);
+  });
+});
+
+describe('Gp5SysexPresetCodec — patch-change notification filtering (feature 24)', () => {
+  // Exact wire bytes the GP-5 sent ~3-50ms after every CC0 in the live
+  // capture progress/gp5_f24_capture_2026-09-30T17-50-31-876Z.json.
+  const NOTIFICATION = new Uint8Array([
+    0xf0, 0x0e, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x01, 0x0b, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf7,
+  ]);
+
+  function bodyPhaseCodec(): Gp5SysexPresetCodec {
+    const codec = new Gp5SysexPresetCodec();
+    codec.encodeReadAllRequest();
+    for (const f of chunkForReassembly(buildNamesBlob(new Map([[0, 'clean']])))) {
+      codec.decodeIncomingMessage(f);
+    }
+    return codec;
+  }
+
+  test('the captured notification is a valid-CRC 1-chunk frame at index 0 with selector 0x1b', () => {
+    const decoded = fromWire(NOTIFICATION);
+    expect(Array.from(decoded)).toEqual([0xe2, 0x01, 0x00, 0x06, 0x12, 0x1b, 0x01, 0x00, 0x00, 0x00]);
+    expect(decoded[0]).toBe(crc8(Array.from(decoded.slice(1))));
+  });
+
+  test('is ignored in the body phase and never takes the place of body chunk 0', () => {
+    const codec = bodyPhaseCodec();
+    const frames = chunkForReassembly(buildBodyBlob(buildBody()));
+
+    expect(codec.decodeIncomingMessage(NOTIFICATION)).toEqual({ kind: 'ignored' });
+    // Also arriving mid-body, after the real chunk 0: it must not overwrite it.
+    let last: SysexDecodeResult = { kind: 'ignored' };
+    for (let i = 0; i < frames.length; i++) {
+      last = codec.decodeIncomingMessage(frames[i]);
+      if (i === 3) expect(codec.decodeIncomingMessage(NOTIFICATION)).toEqual({ kind: 'ignored' });
+    }
+
+    expect(last.kind).toBe('preset');
+    if (last.kind === 'preset') {
+      expect(last.preset).toMatchObject({ slot: 0, name: 'clean' });
+      expect(last.preset.chain.map((b) => b.moduleType)).toHaveLength(10);
+    }
+  });
+
+  test('a notification alone never completes or corrupts a body: 24 real chunks plus notifications stay "ignored"', () => {
+    const codec = bodyPhaseCodec();
+    const frames = chunkForReassembly(buildBodyBlob(buildBody()));
+    for (let i = 1; i < frames.length; i++) {
+      expect(codec.decodeIncomingMessage(frames[i]).kind).toBe('ignored');
+      expect(codec.decodeIncomingMessage(NOTIFICATION)).toEqual({ kind: 'ignored' });
+    }
+    // The real chunk 0 completes it.
+    expect(codec.decodeIncomingMessage(frames[0]).kind).toBe('preset');
   });
 });
 

@@ -45,7 +45,9 @@
     "request_in_progress": "Another MIDI operation is already in progress.",
     "read_timeout": "Reading presets timed out.",
     "invalid_response": "Invalid MIDI response.",
-    "unknown": "Could not read the presets."
+    "unknown": "Could not read the presets.",
+    "restore_no_match": "Could not return to the preset you had active: it matches no saved preset (it may have had unsaved changes). The pedal is on the last preset read.",
+    "restore_ambiguous": "Could not return to the preset you had active: it matches several saved presets. The pedal is on the last preset read."
   },
   "chainBoard": {
     "title": "Signal chain",

@@ -15,6 +15,7 @@ import {
 import { SelectedPresetStore } from '../selected-preset.service';
 import { appConfig } from '../../app.config';
 import type { PedalConnectionState } from '../../midi/pedal-connection';
+import type { PresetRestoreWarning } from '../../midi/web-midi-pedal-connection';
 import type { Preset } from '../../midi/preset';
 
 const esTranslations = {
@@ -65,6 +66,10 @@ const esTranslations = {
     read_timeout: 'La lectura de presets ha expirado.',
     invalid_response: 'Respuesta MIDI no válida.',
     unknown: 'No se pudieron leer los presets.',
+    restore_no_match:
+      'No se pudo volver al preset que tenías activo: no coincide con ningún preset guardado (quizá tenía cambios sin guardar). El pedal quedó en el último preset leído.',
+    restore_ambiguous:
+      'No se pudo volver al preset que tenías activo: coincide con varios presets guardados. El pedal quedó en el último preset leído.',
   },
   chainBoard: {
     title: 'Cadena de señal',
@@ -106,6 +111,7 @@ type ReadPresetsResult = Promise<Preset[]>;
 class FakePedal {
   private readonly state = signal<PedalConnectionState>('not-connected');
   readonly connectionState = this.state.asReadonly();
+  readonly restoreWarning = signal<PresetRestoreWarning | null>(null);
 
   isSupportedResult = true;
   // A controllable deferred promise; tests set then resolve/reject it.
@@ -673,6 +679,52 @@ describe('PresetBrowserPage', () => {
     expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
   });
 
+  for (const [warning, text] of [
+    ['restore_no_match', 'no coincide con ningún preset guardado'],
+    ['restore_ambiguous', 'coincide con varios presets guardados'],
+  ] as const) {
+    it(`shows a non-blocking "${warning}" notice alongside the loaded presets (feature 24)`, async () => {
+      const fake = new FakePedal();
+      fake.setConnectionState('connected');
+      fake.resolveWith = [{ slot: 0, name: 'A', chain: [] }];
+      fake.restoreWarning.set(warning);
+      const httpMock = setup(fake);
+
+      const component = TestBed.createComponent(PresetBrowserPage);
+      component.detectChanges();
+      flushI18n(httpMock);
+      component.detectChanges();
+      await Promise.resolve();
+      component.detectChanges();
+
+      const compiled = component.nativeElement as HTMLElement;
+      const notice = compiled.querySelector('[data-testid="restore-warning"]');
+      expect(notice).not.toBeNull();
+      expect(notice?.getAttribute('role')).toBe('status');
+      expect(notice?.textContent).toContain(text);
+      expect(compiled.querySelector('[data-testid="preset-error"]')).toBeNull();
+      expect(compiled.querySelector('[data-testid="preset-row-0"]')).not.toBeNull();
+    });
+  }
+
+  it('shows no restore notice when the pre-read preset was restored (feature 24)', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = [{ slot: 0, name: 'A', chain: [] }];
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    expect(compiled.querySelector('[data-testid="preset-row-0"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="restore-warning"]')).toBeNull();
+  });
+
   it('calls SelectedPresetStore.select(preset) when the row select button is clicked (R15)', async () => {
     const fixture: Preset[] = [
       { slot: 7, name: 'Test', chain: [] },
@@ -753,10 +805,10 @@ function fakeAccess(
 class FakeReadCodec implements SysexPresetCodec {
   readMessageSets: Uint8Array[][] = [];
   decodeResults: SysexDecodeResult[] = [];
-  programChangeCalls: number[] = [];
   namesCompleteAfterCalls = 1;
   private namesCallCount = 0;
   private awaitingNames = false;
+  private awaitingActive = false;
 
   encodeReadAllRequest(): Uint8Array[] {
     this.awaitingNames = true;
@@ -764,9 +816,17 @@ class FakeReadCodec implements SysexPresetCodec {
     return this.readMessageSets[0] ?? [];
   }
 
-  encodeProgramChange(slot: number): Uint8Array {
-    this.programChangeCalls.push(slot);
-    return new Uint8Array([0xc0, slot & 0x7f]);
+  encodeSelectPreset(slot: number): Uint8Array {
+    return new Uint8Array([0xb0, 0x00, slot & 0x7f]);
+  }
+
+  encodeActivePresetRequest(): Uint8Array {
+    this.awaitingActive = true;
+    return new Uint8Array([0xac]);
+  }
+
+  slotsMatchingActivePreset(): number[] {
+    return [0];
   }
 
   isAwaitingNames(): boolean {
@@ -785,6 +845,10 @@ class FakeReadCodec implements SysexPresetCodec {
         this.awaitingNames = false;
       }
       return { kind: 'ignored' };
+    }
+    if (this.awaitingActive) {
+      this.awaitingActive = false;
+      return { kind: 'activePreset' };
     }
     return this.decodeResults.shift() ?? { kind: 'ignored' };
   }
@@ -850,12 +914,13 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // The page's ngOnInit -> loadPresets -> readPresets() has already sent
-    // the names request. Fire the names-completion message so the loop
-    // advances; readPresets then sends a Program Change for slot 0 and
+    // the names request. Fire the names-completion message, then the reply
+    // to the active-preset request; readPresets then selects slot 0 and
     // waits READ_SETTLE_MS before sending the body request. Advance the
-    // settle timer to release the body request, then fire the body
-    // message so waitForSlotPreset can consume it.
+    // settle timer to release the body request, then fire the body message.
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa0]) } as unknown as MIDIMessageEvent);
+    await vi.advanceTimersByTimeAsync(0); // let readPresets send the active-preset request
+    inputPort.onmidimessage?.({ data: new Uint8Array([0xac]) } as unknown as MIDIMessageEvent);
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa1]) } as unknown as MIDIMessageEvent);
     // Let the readPresets() promise resolve and loadState flip to "loaded".
@@ -864,14 +929,9 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     fixture.detectChanges();
 
     // After the initial read completes, expect at least the names request
-    // + PC + body request = 3 sends. F22 restored the per-slot Program
-    // Change + READ_SETTLE_MS settle on top of buildBodyRequest's slot
-    // byte (see gp5-sysex-preset-codec.ts buildBodyRequest) — the two
-    // mechanisms are orthogonal: PC + settle is what makes the pedal
-    // reply, slot byte is what disambiguates which slot's body it
-    // returns.
+    // + active-preset request + slot selection + body request + restore = 5 sends.
     const sendCountAfterLoad = outputPort.sendSpy.mock.calls.length;
-    expect(sendCountAfterLoad).toBeGreaterThanOrEqual(3);
+    expect(sendCountAfterLoad).toBeGreaterThanOrEqual(5);
 
     // Click Select on the row to mount the board.
     const selectBtn = (fixture.nativeElement as HTMLElement).querySelector(

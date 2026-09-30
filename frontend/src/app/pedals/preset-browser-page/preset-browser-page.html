@@ -21,6 +21,15 @@
       </p>
     }
     @if (loadState() === 'loaded') {
+      @if (restoreWarning(); as warning) {
+        <p
+          class="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+          role="status"
+          data-testid="restore-warning"
+        >
+          {{ t('presetBrowser.' + warning) }}
+        </p>
+      }
       @if (presets().length === 0) {
         <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="no-presets">
           {{ t('presetBrowser.no_presets') }}

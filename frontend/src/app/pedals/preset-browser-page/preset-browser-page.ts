@@ -29,6 +29,7 @@ export class PresetBrowserPage implements OnInit {
 
   readonly supported = this.pedal.isSupported();
   readonly connectionState = this.pedal.connectionState;
+  readonly restoreWarning = this.pedal.restoreWarning;
   readonly loadState = signal<LoadState>('idle');
   readonly presets = signal<Preset[]>([]);
   readonly error = signal<string | null>(null);
