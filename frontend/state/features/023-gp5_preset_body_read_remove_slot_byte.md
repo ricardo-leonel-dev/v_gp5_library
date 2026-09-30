@@ -12,3 +12,6 @@ F20 (commit bb4c550) agregó buildBodyRequest(slot) en gp5-sysex-preset-codec.ts
 
 ## Acceptance
 - [ ] buildBodyRequest(slot) eliminado de gp5-sysex-preset-codec.ts; encodeReadAllRequest usa buildRequest(BODY_SEL) (mismo buildRequest que para nombres, solo cambia el selector); buildBodyRequest queda removido del archivo; regression test en gp5-sysex-preset-codec.spec.ts actualizado para fijar la nueva invariante: los 100 body requests son byte-idénticos a buildRequest(BODY_SEL), todos con byte 2 == 0; comentario de cabecera del codec actualizado para reflejar que el protocolo empíricamente validado es buildRequest(BODY_SEL) + PC + settle, citando explícitamente progress/gp5_webmidi_body_read_probe.html como ground truth; PC + READ_SETLE_MS en el loop de readPresets (F22) se mantienen sin cambios; no se introducen nuevos warnings de log-out; ./init.sh verde
+
+## Notes
+- 2026-09-30T20:57:56.000Z [leader] FOLLOW-UP (2026-09-30): the 'original bug remains unfixed' mentioned in the closure is resolved by F24 (commits 426cd34 + f6c8e3a). F23's revert to buildRequest(BODY_SEL) is still correct and remains in place; the Program Change it kept was replaced by CC0 in F24.
