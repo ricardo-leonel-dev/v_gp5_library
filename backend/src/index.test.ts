@@ -567,3 +567,63 @@ describe("CORS middleware end-to-end against real app (R6, R7, R10, R11, R12)", 
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(allowedOrigin);
   });
 });
+
+describe("unknown-route guard end-to-end against real app (R1, R2, R5, R6, R8, R9, R17)", () => {
+  test("GET /definitely-not-a-route with no token -> 404 JSON {error:'Not found'}", async () => {
+    const res = await app.request("/definitely-not-a-route");
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Not found" });
+  });
+
+  test("GET /definitely-not-a-route with a valid token -> 404 JSON {error:'Not found'}", async () => {
+    const db = getDb();
+    const email = `unk-guard-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const res = await app.request("/definitely-not-a-route", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Not found" });
+  });
+
+  test("PUT /songs (method mismatch on known path) with no token -> 401", async () => {
+    const res = await app.request("/songs", { method: "PUT" });
+    expect(res.status).toBe(401);
+  });
+
+  test("PUT /songs (method mismatch on known path) with a valid token -> 404 JSON {error:'Not found'}", async () => {
+    const db = getDb();
+    const email = `unk-mismatch-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const res = await app.request("/songs", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Not found" });
+  });
+
+  test("GET /songs with no token -> 401 (regression, known path still requires auth)", async () => {
+    const res = await app.request("/songs");
+    expect(res.status).toBe(401);
+  });
+
+  test("POST /auth/login with an empty JSON body and no token -> 400 (neither 401 nor 404)", async () => {
+    const res = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(400);
+    expect(res.status).not.toBe(401);
+    expect(res.status).not.toBe(404);
+  });
+});
