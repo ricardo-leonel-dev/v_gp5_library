@@ -3,7 +3,7 @@ session_id: 26
 feature: gp5_preset_chain_pedal_style_icons
 agent: Claude (implementer agent by MiniMax-M3[1m])
 started_at: 2026-09-30T21:34:03.000Z
-closed_at:
+closed_at: 2026-10-02T02:20:37.000Z
 ---
 
 ## Plan
@@ -56,3 +56,9 @@ closed_at:
 - [Claude (implementer agent by MiniMax-M3[1m])] [reviewer] v6 approved (minimal checks: 862/862 tests pass; /pedal/presets=200; /playground=200; all 4 testids present)
 
 ## Next Step
+
+## Verification
+862/862 tests pass; ./init.sh green; runtime curl 200 on /pedal/presets and /playground; 4 screenshots in /tmp/f17v6-impl-shots/ confirm all 5 of Ricardo's playground picks; reviewer approved via scripts/harness.sh record-review
+
+## Closure
+F17 v6 implemented: chip-based preset navigation (selected-only chips + Browse presets picker), product-photo-realism chassis (variant A), mini-chassis strip (variant A), muted-footnote block detail (variant C — replaces v5 yellow callout), ghost-link mock data control (variant A). v5 drawer/compact-list/sticky-toolbar/no-selection fallback removed. F14 chassis regression tests preserved. Dev-only /playground route retained for future iteration.
