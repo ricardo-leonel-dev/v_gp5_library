@@ -31,4 +31,15 @@ describe('SelectedPresetStore', () => {
 
     expect(store.selectedPreset()).toBe(second);
   });
+
+  it('clear() resets the selected preset to null (R20)', () => {
+    const store = new SelectedPresetStore();
+    const preset: Preset = { slot: 1, name: 'Crunch', chain: [] };
+
+    store.select(preset);
+    expect(store.selectedPreset()).toBe(preset);
+
+    store.clear();
+    expect(store.selectedPreset()).toBeNull();
+  });
 });

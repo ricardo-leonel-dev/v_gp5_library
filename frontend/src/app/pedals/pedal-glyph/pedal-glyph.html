@@ -1,0 +1,15 @@
+@if (glyph(); as g) {
+  <svg
+    [attr.viewBox]="'0 0 16 16'"
+    [attr.class]="svgClass()"
+    [attr.data-glyph]="'c' + categoryIndex()"
+    aria-hidden="true"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path [attr.d]="g.path" />
+  </svg>
+}

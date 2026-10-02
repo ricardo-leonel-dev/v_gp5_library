@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
+import { environment } from '../environments/environment';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'songs' },
@@ -28,4 +29,17 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pedals/preset-browser-page/preset-browser-page').then((m) => m.PresetBrowserPage),
   },
+  // F17 v6 pick surface — dev-only. The `environment.production` check is
+  // resolved at build time: production builds swap `environment.ts` for
+  // `environment.production.ts` (see angular.json `fileReplacements`),
+  // which sets `production: true` and tree-shakes this route out.
+  ...(environment.production
+    ? []
+    : [
+        {
+          path: 'playground',
+          loadComponent: () =>
+            import('./playground/playground-page').then((m) => m.PlaygroundF17V6),
+        },
+      ]),
 ];

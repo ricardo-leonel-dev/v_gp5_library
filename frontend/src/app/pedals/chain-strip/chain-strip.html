@@ -11,9 +11,91 @@
       })"
     >
       @if (block.view.kind === 'resolved') {
-        {{ displayCategoryCode(block.view.categoryCode) }}
+        <!-- v6 mini-chassis silhouette (verbatim from
+             chain-strip-variant-a). Fills the cell; the existing
+             pedal-glyph + 3-letter code overlay on top so the v5 R8/R10
+             and category-code tests stay green. -->
+        <svg
+          class="pointer-events-none absolute inset-0 z-0 h-full w-full"
+          viewBox="0 0 32 24"
+          preserveAspectRatio="xMidYMid meet"
+          aria-hidden="true"
+          data-testid="strip-chassis"
+        >
+          @switch (block.chassisKind) {
+            @case ('amp') {
+              <rect x="1" y="3" width="30" height="20" rx="2" fill="#fcd34d" stroke="#1a1a1a" stroke-width="1" />
+              <g stroke="#1a1a1a" stroke-width="0.6">
+                <line x1="4" y1="9" x2="28" y2="9" />
+                <line x1="4" y1="13" x2="28" y2="13" />
+                <line x1="4" y1="17" x2="28" y2="17" />
+              </g>
+              <circle cx="16" cy="5" r="0.7" fill="#ef4444" />
+            }
+            @case ('cabinet') {
+              <rect x="1" y="2" width="30" height="20" rx="2" fill="#1e40af" stroke="#0a0a0a" stroke-width="1" />
+              <circle cx="16" cy="12" r="7" fill="#fff" stroke="#0a0a0a" stroke-width="1" />
+              <circle cx="16" cy="12" r="5" fill="#1e3a8a" stroke="#0a0a0a" stroke-width="0.5" />
+              <circle cx="16" cy="12" r="1.6" fill="#0a0a0a" />
+            }
+            @case ('eq') {
+              <rect x="1" y="2" width="30" height="20" rx="2" fill="#10b981" stroke="#0a0a0a" stroke-width="1" />
+              <g fill="#fff" stroke="#0a0a0a" stroke-width="0.6">
+                <rect x="6" y="6" width="2" height="12" rx="1" />
+                <rect x="12" y="6" width="2" height="12" rx="1" />
+                <rect x="18" y="6" width="2" height="12" rx="1" />
+                <rect x="24" y="6" width="2" height="12" rx="1" />
+              </g>
+              <g fill="#0a0a0a">
+                <rect x="5" y="9" width="4" height="2" rx="0.4" />
+                <rect x="11" y="14" width="4" height="2" rx="0.4" />
+                <rect x="17" y="11" width="4" height="2" rx="0.4" />
+                <rect x="23" y="16" width="4" height="2" rx="0.4" />
+              </g>
+            }
+            @case ('stompbox') {
+              <!-- RVB (kind 'stompbox', 4 knobs) uses the 2×2 chassis in the
+                   playground; other stompboxes use the single-row chassis.
+                   `isRvb` is exposed by chain-strip.ts so the template can
+                   branch without `as any` casts (Angular templates forbid
+                   type assertions). -->
+              @if (block.isRvb) {
+                <rect x="1" y="2" width="30" height="20" rx="2" fill="#7c3aed" stroke="#0a0a0a" stroke-width="1" />
+                <g fill="#fbbf24" stroke="#0a0a0a" stroke-width="0.7">
+                  <circle cx="10" cy="8" r="3" />
+                  <circle cx="22" cy="8" r="3" />
+                  <circle cx="10" cy="16" r="3" />
+                  <circle cx="22" cy="16" r="3" />
+                </g>
+                <g stroke="#0a0a0a" stroke-width="0.7" stroke-linecap="round">
+                  <line x1="10" y1="8" x2="10" y2="6" />
+                  <line x1="22" y1="8" x2="23.5" y2="9.5" />
+                  <line x1="10" y1="16" x2="8.5" y2="14.5" />
+                  <line x1="22" y1="16" x2="23.5" y2="17.5" />
+                </g>
+              } @else {
+                <rect x="1" y="2" width="30" height="20" rx="3" fill="#dc2626" stroke="#0a0a0a" stroke-width="1" />
+                <g fill="#0a0a0a">
+                  <circle cx="10" cy="12" r="1.6" />
+                  <circle cx="16" cy="12" r="1.6" />
+                  <circle cx="22" cy="12" r="1.6" />
+                </g>
+              }
+            }
+          }
+        </svg>
+
+        <!-- v5 contract (R8, R10, R16): pedal glyph (so the existing R8
+             test still passes), 3-letter code (so R15/R16 still pass),
+             laid out as a foreground overlay on the chassis backdrop. -->
+        <span class="relative z-10 flex h-full flex-col items-center justify-center gap-px text-[9px] leading-none font-semibold">
+          <app-pedal-glyph [categoryIndex]="block.view.categoryIndex" svgClass="size-3" />
+          <span class="max-w-full truncate">{{ displayCategoryCode(block.view.categoryCode) }}</span>
+        </span>
       } @else {
-        {{ t('chainBoard.unknown_short') }}
+        <!-- Unknown block: empty span (R9), only the unknown_short text
+             (so R19 still passes). -->
+        <span class="text-[10px] leading-none">{{ t('chainBoard.unknown_short') }}</span>
       }
     </span>
   }
