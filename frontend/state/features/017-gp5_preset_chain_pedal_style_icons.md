@@ -2,9 +2,9 @@
 feature_number: 17
 name: gp5_preset_chain_pedal_style_icons
 title: GP-5 chain board: pedal-style FX icons + UX polish
-status: pending
+status: in_progress
 created_at: 2026-09-28T20:44:50.000Z
-updated_at: 2026-09-28T20:52:56.000Z
+updated_at: 2026-09-30T21:34:03.000Z
 ---
 
 ## Description

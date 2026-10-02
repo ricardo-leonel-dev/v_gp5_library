@@ -79,4 +79,27 @@ describe('i18n parity under chainBoard and gp5Fx (R40)', () => {
       }
     });
   }
+
+  // R41: feature 17 v6 pins the chip-navigation + footnote keys on the
+  // presetBrowser namespace. They are pin points so we cover them directly
+  // instead of relying on a leaf-set comparison.
+  for (const path of [
+    'presetBrowser.deselect',
+    'presetBrowser.export_label',
+    'presetBrowser.mark_for_export',
+    'presetBrowser.browse_presets',
+    'presetBrowser.browse_presets_aria',
+    'presetBrowser.presets_selected_count',
+    'presetBrowser.footnote_unverified',
+    'presetBrowser.load_test_presets',
+  ]) {
+    it(`${path}: en and es carry a non-empty string (R41)`, () => {
+      const enValue = getLeafValue(en, path);
+      const esValue = getLeafValue(es, path);
+      expect(typeof enValue).toBe('string');
+      expect((enValue as string).length).toBeGreaterThan(0);
+      expect(typeof esValue).toBe('string');
+      expect((esValue as string).length).toBeGreaterThan(0);
+    });
+  }
 });

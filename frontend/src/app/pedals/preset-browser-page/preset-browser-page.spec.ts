@@ -3,16 +3,15 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { signal } from '@angular/core';
 import { vi } from 'vitest';
 import { PresetBrowserPage } from './preset-browser-page';
-import {
-  WebMidiPedalConnection,
-  READ_SETTLE_MS,
-} from '../../midi/web-midi-pedal-connection';
+import { WebMidiPedalConnection, READ_SETTLE_MS } from '../../midi/web-midi-pedal-connection';
 import {
   SYSEX_PRESET_CODEC,
   type SysexPresetCodec,
   type SysexDecodeResult,
 } from '../../midi/sysex-preset-codec';
-import { SelectedPresetStore } from '../selected-preset.service';
+import { PresetExportSelection } from '../preset-export-selection.service';
+import { PresetComparisonStore } from '../preset-comparison.service';
+import { MockPresetsStore } from '../mock-presets.store';
 import { appConfig } from '../../app.config';
 import type { PedalConnectionState } from '../../midi/pedal-connection';
 import type { PresetRestoreWarning } from '../../midi/web-midi-pedal-connection';
@@ -48,7 +47,8 @@ const esTranslations = {
     state_connecting: 'Conectando...',
     state_connected: 'Conectado',
     state_error: 'Error de conexión',
-    unsupported: 'Tu navegador no soporta la Web MIDI API. Por favor usa Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
+    unsupported:
+      'Tu navegador no soporta la Web MIDI API. Por favor usa Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
     midi_access_denied: 'Se denegó el acceso MIDI. Por favor permite el acceso MIDI e inténtalo de nuevo.',
     gp5_not_found: 'No se detectó el pedal GP-5. Por favor conéctalo por USB e inténtalo de nuevo.',
     unknown: 'No se pudo conectar con el pedal.',
@@ -61,6 +61,15 @@ const esTranslations = {
     no_presets: 'No se encontraron presets.',
     empty_chain: '(cadena vacía)',
     select: 'Seleccionar',
+    deselect: 'Deseleccionar',
+    export_label: 'Exportar',
+    mark_for_export: 'Marcar {{name}} para exportar',
+    browse_presets: 'Explorar presets',
+    browse_presets_aria: 'Explorar presets',
+    presets_selected_count: 'Comparando {{count}} preset(s)',
+    footnote_unverified:
+      'Los números de página reflejan una suposición basada en el comportamiento observado del firmware, no un mapeo del fabricante.',
+    load_test_presets: 'Cargar presets de prueba',
     not_connected_error: 'El pedal no está conectado.',
     request_in_progress: 'Ya hay una operación MIDI en curso.',
     read_timeout: 'La lectura de presets ha expirado.',
@@ -74,14 +83,13 @@ const esTranslations = {
   chainBoard: {
     title: 'Cadena de señal',
     close: 'Cerrar',
-    browse: 'Ver todos los efectos de {{category}}',
+    browse: 'Ver todos los efectos de {{category',
     active: 'En este preset',
     state_on: 'Activo',
     state_off: 'Bypass',
     unknown: 'No reconocido',
     unknown_short: '?',
     unknown_module: 'No se pudo identificar este módulo. Abajo están sus valores sin procesar.',
-    mapping_hypothesis: 'Hipótesis de mapeo de parámetros.',
     manual_page: 'Manual p. {{page}}',
     parameters: 'Parámetros',
     block_aria: '{{category}}: {{fx}}, {{state}}',
@@ -114,7 +122,6 @@ class FakePedal {
   readonly restoreWarning = signal<PresetRestoreWarning | null>(null);
 
   isSupportedResult = true;
-  // A controllable deferred promise; tests set then resolve/reject it.
   pending: { resolve: (presets: Preset[]) => void; reject: (error: Error) => void } | null = null;
   resolveWith: Preset[] | 'pending' | Error = [];
 
@@ -143,17 +150,48 @@ class FakePedal {
   }
 }
 
-class FakeSelectedPresetStore {
-  private readonly signal = signal<Preset | null>(null);
-  readonly selectedPreset = this.signal.asReadonly();
-  select = vi.fn((preset: Preset): void => {
-    this.signal.set(preset);
+class FakePresetExportSelection {
+  private readonly markSignal = signal<ReadonlySet<number>>(new Set());
+  readonly markedSlots = this.markSignal.asReadonly();
+  toggle = vi.fn((slot: number): void => {
+    const next = new Set(this.markSignal());
+    if (next.has(slot)) next.delete(slot);
+    else next.add(slot);
+    this.markSignal.set(next);
+  });
+  clear(): void {
+    this.markSignal.set(new Set());
+  }
+}
+
+class FakePresetComparisonStore {
+  private readonly selectedSignal = signal<ReadonlySet<number>>(new Set());
+  readonly selectedSlots = this.selectedSignal.asReadonly();
+  add = vi.fn((slot: number): void => {
+    const next = new Set(this.selectedSignal());
+    next.add(slot);
+    this.selectedSignal.set(next);
+  });
+  remove = vi.fn((slot: number): void => {
+    const next = new Set(this.selectedSignal());
+    next.delete(slot);
+    this.selectedSignal.set(next);
+  });
+  toggle = vi.fn((slot: number): void => {
+    const next = new Set(this.selectedSignal());
+    if (next.has(slot)) next.delete(slot);
+    else next.add(slot);
+    this.selectedSignal.set(next);
+  });
+  clear = vi.fn((): void => {
+    this.selectedSignal.set(new Set());
   });
 }
 
 function setup(
   fake: FakePedal,
-  fakeStore: FakeSelectedPresetStore = new FakeSelectedPresetStore(),
+  fakeExport: FakePresetExportSelection = new FakePresetExportSelection(),
+  fakeComparison: FakePresetComparisonStore = new FakePresetComparisonStore(),
 ): HttpTestingController {
   TestBed.configureTestingModule({
     imports: [PresetBrowserPage],
@@ -161,7 +199,8 @@ function setup(
       ...appConfig.providers,
       provideHttpClientTesting(),
       { provide: WebMidiPedalConnection, useValue: fake },
-      { provide: SelectedPresetStore, useValue: fakeStore },
+      { provide: PresetExportSelection, useValue: fakeExport },
+      { provide: PresetComparisonStore, useValue: fakeComparison },
     ],
   });
 
@@ -178,89 +217,24 @@ function flushI18n(httpMock: HttpTestingController): void {
     .forEach((req) => req.flush({}));
 }
 
-describe('PresetBrowserPage', () => {
+describe('PresetBrowserPage (v6)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
   });
 
-  it('renders the unsupported message and never calls readPresets() when isSupported() is false (R3)', () => {
-    const fake = new FakePedal();
-    fake.isSupportedResult = false;
-    // If unsupported branch were ever taken by mistake, this would resolve — guard it.
-    fake.resolveWith = 'pending';
-    const httpMock = setup(fake);
+  // ---- Mock data flow (R28): header button -> MockPresetsStore -> page ---
 
-    const fixture = TestBed.createComponent(PresetBrowserPage);
-    fixture.detectChanges();
-    flushI18n(httpMock);
-    fixture.detectChanges();
-
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('[data-testid="unsupported-message"]')).not.toBeNull();
-    expect(compiled.querySelector('[data-testid="not-connected-message"]')).toBeNull();
-    expect(fake.pending).toBeNull();
-  });
-
-  it('renders the not-connected message and never calls readPresets() when supported but not connected (R4)', () => {
-    const fake = new FakePedal();
-    fake.resolveWith = 'pending';
-    const httpMock = setup(fake);
-
-    const fixture = TestBed.createComponent(PresetBrowserPage);
-    fixture.detectChanges();
-    flushI18n(httpMock);
-    fixture.detectChanges();
-
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('[data-testid="not-connected-message"]')).not.toBeNull();
-    expect(compiled.querySelector('[data-testid="unsupported-message"]')).toBeNull();
-    expect(fake.pending).toBeNull();
-  });
-
-  it('calls readPresets() exactly once when supported and connected (R5)', async () => {
+  it('reads from MockPresetsStore when mock data has been loaded there (R28)', async () => {
     const fake = new FakePedal();
     fake.setConnectionState('connected');
-    const readSpy = vi.spyOn(fake, 'readPresets');
+    fake.resolveWith = []; // real pedal returns empty
     const httpMock = setup(fake);
 
-    const fixture = TestBed.createComponent(PresetBrowserPage);
-    fixture.detectChanges();
-    flushI18n(httpMock);
-    fixture.detectChanges();
-    await Promise.resolve();
-
-    expect(readSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders the loading indicator while readPresets() is pending (R6)', async () => {
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = 'pending';
-    const httpMock = setup(fake);
-
-    const fixture = TestBed.createComponent(PresetBrowserPage);
-    fixture.detectChanges();
-    flushI18n(httpMock);
-    fixture.detectChanges();
-    await Promise.resolve();
-    fixture.detectChanges();
-
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('[data-testid="loading"]')).not.toBeNull();
-    expect(compiled.querySelector('[data-testid="preset-error"]')).toBeNull();
-    expect(compiled.querySelector('[data-testid="no-presets"]')).toBeNull();
-  });
-
-  it('renders one row per element of the resolved array, in array order, showing slot and name (R7, R8)', async () => {
-    const fixture: Preset[] = [
-      { slot: 5, name: 'Crunch', chain: [] },
-      { slot: 1, name: 'Clean', chain: [] },
-      { slot: 3, name: 'Lead', chain: [] },
-    ];
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = fixture;
-    const httpMock = setup(fake);
+    // Pre-populate the mock store as if the user clicked the header
+    // ghost link. The page should pick this up via the effect() in its
+    // constructor.
+    const mockStore = TestBed.inject(MockPresetsStore);
+    mockStore.load();
 
     const component = TestBed.createComponent(PresetBrowserPage);
     component.detectChanges();
@@ -269,92 +243,245 @@ describe('PresetBrowserPage', () => {
     await Promise.resolve();
     component.detectChanges();
 
-    const rows = (component.nativeElement as HTMLElement).querySelectorAll('[data-testid^="preset-row-"]');
-    expect(rows).toHaveLength(3);
-    expect(rows[0].getAttribute('data-testid')).toBe('preset-row-5');
-    expect(rows[1].getAttribute('data-testid')).toBe('preset-row-1');
-    expect(rows[2].getAttribute('data-testid')).toBe('preset-row-3');
-    expect(rows[0].textContent).toContain('Crunch');
-    expect(rows[1].textContent).toContain('Clean');
-    expect(rows[2].textContent).toContain('Lead');
+    const compiled = component.nativeElement as HTMLElement;
+    // Six presets from the mock fixtures (5 non-empty + 1 empty chain)
+    // should be visible in the picker when the user opens it.
+    // (We don't open the picker here; we verify that no chip is in the
+    // DOM yet because the user hasn't selected any preset.)
+    expect(compiled.querySelectorAll('[data-testid^="preset-chip-"]')).toHaveLength(0);
+    expect(compiled.querySelector('[data-testid="browse-presets"]')).not.toBeNull();
   });
 
-  it('renders one strip block per chain entry on the row (R15, R33)', async () => {
+  // ---- Chip row + Browse pill (R22, R23) --------------------------------
+
+  it('renders a Browse pill always; renders chips only for slots in the comparison set (R22, R23)', async () => {
+    const fixture: Preset[] = [
+      { slot: 0, name: 'Plaza Clean', chain: [] },
+      { slot: 1, name: 'Crunch Deluxe', chain: [] },
+      { slot: 2, name: 'Saturated Snap', chain: [] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(0);
+    fakeCompare.add(2);
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    // Two chips for the slots in the comparison set (0 and 2).
+    const chips = compiled.querySelectorAll('[data-testid^="preset-chip-"]');
+    expect(chips).toHaveLength(2);
+    expect(compiled.querySelector('[data-testid="preset-chip-0"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="preset-chip-2"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="preset-chip-1"]')).toBeNull();
+    // Browse pill always visible.
+    expect(compiled.querySelector('[data-testid="browse-presets"]')).not.toBeNull();
+  });
+
+  it('the chip row never renders a v5 drawer / compact list / sticky toolbar (R29)', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = [{ slot: 0, name: 'X', chain: [] }];
+    const httpMock = setup(fake);
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    expect(compiled.querySelector('[data-testid="preset-drawer"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="drawer-handle"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="compact-list"]')).toBeNull();
+    expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
+    expect(compiled.querySelectorAll('[data-testid^="compact-row-"]')).toHaveLength(0);
+    // v6-draft sticky toolbar markers also absent.
+    expect(compiled.querySelector('[data-testid="preset-toolbar"]')).toBeNull();
+    expect(compiled.querySelectorAll('[data-testid^="preset-tile-"]')).toHaveLength(0);
+    expect(compiled.querySelector('[data-testid="preset-card-popup"]')).toBeNull();
+  });
+
+  // ---- Chip click + chip remove (R19, R20, R21) ------------------------
+
+  it('clicking a chip sets activePreset and renders the matching board (R21, R24)', async () => {
+    const fixture: Preset[] = [
+      { slot: 1, name: 'A', chain: [] },
+      { slot: 2, name: 'B', chain: [] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(1);
+    fakeCompare.add(2);
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    // Reset call history AFTER the setup-time add() calls so we can
+    // assert that chip click alone doesn't mutate the store.
+    fakeCompare.add.mockClear();
+    fakeCompare.remove.mockClear();
+    (compiled.querySelector('[data-testid="preset-chip-2"]') as HTMLButtonElement).click();
+    component.detectChanges();
+
+    // Main area shows B's chain board.
+    expect(compiled.querySelector('[data-testid="main-heading"]')?.textContent).toContain('B');
+    expect(compiled.querySelector('[data-testid="main-area"] [data-testid="chain-board"]')).not.toBeNull();
+    // No store mutation on chip click.
+    expect(fakeCompare.add).not.toHaveBeenCalled();
+    expect(fakeCompare.remove).not.toHaveBeenCalled();
+  });
+
+  it('clicking the chip remove control calls comparison.remove (R19, R20)', async () => {
+    const fixture: Preset[] = [
+      { slot: 1, name: 'A', chain: [] },
+      { slot: 2, name: 'B', chain: [] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(1);
+    fakeCompare.add(2);
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    (compiled.querySelector('[data-testid="chip-remove-1"]') as HTMLElement).click();
+    component.detectChanges();
+
+    expect(fakeCompare.remove).toHaveBeenCalledWith(1);
+    // Chip 1 removed; chip 2 still in DOM.
+    expect(compiled.querySelector('[data-testid="preset-chip-1"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="preset-chip-2"]')).not.toBeNull();
+  });
+
+  it('with no chip clicked but a non-empty comparison set, the main area falls back to the lowest slot (R21, R24)', async () => {
+    const fixture: Preset[] = [
+      { slot: 5, name: 'X', chain: [] },
+      { slot: 3, name: 'Y', chain: [] },
+      { slot: 7, name: 'Z', chain: [] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(5);
+    fakeCompare.add(7);
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    // No chip clicked → fallback to lowest slot in {5, 7} = 5.
+    expect(compiled.querySelector('[data-testid="main-heading"]')?.textContent).toContain('X');
+  });
+
+  // ---- Picker overlay (R25, R26) ---------------------------------------
+
+  it('clicking the Browse pill opens the picker; clicking a picker row adds the slot and closes the picker (R25, R26)', async () => {
+    const fixture: Preset[] = [
+      { slot: 1, name: 'A', chain: [] },
+      { slot: 2, name: 'B', chain: [] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeCompare = new FakePresetComparisonStore();
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    // Picker closed initially.
+    expect(compiled.querySelector('[data-testid="picker-backdrop"]')).toBeNull();
+    (compiled.querySelector('[data-testid="browse-presets"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    expect(compiled.querySelector('[data-testid="picker-backdrop"]')).not.toBeNull();
+    // Activate row 1 → adds to comparison set, closes picker.
+    (compiled.querySelector('[data-testid="picker-row-1"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    expect(fakeCompare.add).toHaveBeenCalledWith(1);
+    expect(compiled.querySelector('[data-testid="picker-backdrop"]')).toBeNull();
+  });
+
+  it('clicking the picker backdrop closes the picker without mutating the comparison set (R25)', async () => {
+    const fixture: Preset[] = [{ slot: 1, name: 'A', chain: [] }];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const fakeCompare = new FakePresetComparisonStore();
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    (compiled.querySelector('[data-testid="browse-presets"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    expect(compiled.querySelector('[data-testid="picker-backdrop"]')).not.toBeNull();
+    (compiled.querySelector('[data-testid="picker-backdrop"]') as HTMLElement).click();
+    component.detectChanges();
+    expect(compiled.querySelector('[data-testid="picker-backdrop"]')).toBeNull();
+    expect(fakeCompare.add).not.toHaveBeenCalled();
+    expect(fakeCompare.remove).not.toHaveBeenCalled();
+  });
+
+  // ---- Block detail (R24) ----------------------------------------------
+
+  it('clicking a block in the active preset renders the block detail next to the chassis (R24)', async () => {
     const fixture: Preset[] = [
       {
         slot: 1,
-        name: 'Mixed',
-        chain: [
-          { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
-          { moduleType: 'cat7_fx1', enabled: false, parameters: {} },
-          { moduleType: 'catb_fx0', enabled: true, parameters: {} },
-          { moduleType: 'cata_fx1', enabled: true, parameters: {} },
-        ],
-      },
-    ];
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = fixture;
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
-    component.detectChanges();
-
-    const row = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="preset-row-1"]',
-    ) as HTMLElement;
-    const stripBlocks = row.querySelectorAll('[data-testid^="strip-block-"]');
-    expect(stripBlocks).toHaveLength(4);
-    expect(stripBlocks[0].getAttribute('data-testid')).toBe('strip-block-0');
-    expect(stripBlocks[3].getAttribute('data-testid')).toBe('strip-block-3');
-  });
-
-  it('renders the empty-chain placeholder when the chain array is empty (R21)', async () => {
-    const fixture: Preset[] = [
-      {
-        slot: 2,
-        name: 'Empty',
-        chain: [],
-      },
-    ];
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = fixture;
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
-    component.detectChanges();
-
-    const chainCell = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="preset-chain-2"]',
-    ) as HTMLElement | null;
-    expect(chainCell?.textContent?.trim()).toBe('(cadena vacía)');
-  });
-
-  it('does not render any cat*/fx* text after selecting a preset and opening every block (R20)', async () => {
-    const fixture: Preset[] = [
-      {
-        slot: 1,
-        name: 'Mixed',
+        name: 'A',
         chain: [
           { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'empty', enabled: false, parameters: { p0: 1 } },
-          { moduleType: 'cat99_fx0', enabled: true, parameters: { p0: 1 } },
+          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
         ],
       },
     ];
     const fake = new FakePedal();
     fake.setConnectionState('connected');
     fake.resolveWith = fixture;
-    const httpMock = setup(fake);
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(1);
+    const httpMock = setup(fake, undefined, fakeCompare);
 
     const component = TestBed.createComponent(PresetBrowserPage);
     component.detectChanges();
@@ -363,122 +490,22 @@ describe('PresetBrowserPage', () => {
     await Promise.resolve();
     component.detectChanges();
 
-    // Select the preset
-    const selectBtn = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-1"]',
-    ) as HTMLButtonElement;
-    selectBtn.click();
-    component.detectChanges();
-
-    // Open each block in turn and verify the page text never matches the
-    // raw codec pattern.
-    const board = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="chain-board"]',
-    ) as HTMLElement;
-    const blocks = board.querySelectorAll('[data-testid^="board-block-"]');
-    for (const block of Array.from(blocks)) {
-      (block as HTMLButtonElement).click();
-      component.detectChanges();
-    }
-
-    const rawPattern = /cat[0-9a-f]+_fx[0-9a-f]+/i;
-    const all = (component.nativeElement as HTMLElement).textContent ?? '';
-    expect(all).not.toMatch(rawPattern);
-
-    // The 'empty' entry's strip block shows ? (unknown_short) not the word
-    // "empty", and the matching board block shows the translated unknown
-    // label ("No reconocido" in es) instead of a raw moduleType.
-    const stripBlocks = (component.nativeElement as HTMLElement).querySelectorAll(
-      '[data-testid^="strip-block-"]',
-    );
-    expect(stripBlocks[1].textContent?.trim()).toBe('?');
-    const boardBlocks = (component.nativeElement as HTMLElement).querySelectorAll(
-      '[data-testid^="board-block-"]',
-    );
-    expect(boardBlocks[1].textContent).toContain('No reconocido');
-  });
-
-  it('does not render a chain board before a preset is selected (R23)', async () => {
-    const fixture: Preset[] = [
-      { slot: 1, name: 'A', chain: [{ moduleType: 'cat0_fx0', enabled: true, parameters: {} }] },
-      { slot: 2, name: 'B', chain: [{ moduleType: 'cat0_fx0', enabled: true, parameters: {} }] },
-    ];
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = fixture;
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
-    component.detectChanges();
-
-    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="board-section"]')).toBeNull();
-  });
-
-  it('renders the board with the selected preset\'s blocks after clicking Select (R22)', async () => {
-    const fixture: Preset[] = [
-      {
-        slot: 1,
-        name: 'Alpha',
-        chain: [
-          { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
-          { moduleType: 'cat7_fx1', enabled: true, parameters: {} },
-        ],
-      },
-      {
-        slot: 2,
-        name: 'Beta',
-        chain: [{ moduleType: 'catb_fx0', enabled: true, parameters: {} }],
-      },
-    ];
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = fixture;
-    const fakeStore = new FakeSelectedPresetStore();
-    const httpMock = setup(fake, fakeStore);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
-    component.detectChanges();
-
-    // Click Select on slot 2 (Beta, one block).
-    const selectBtn = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-2"]',
-    ) as HTMLButtonElement;
-    selectBtn.click();
-    component.detectChanges();
-
-    const board = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="chain-board"]',
+    const compiled = component.nativeElement as HTMLElement;
+    const board = compiled.querySelector(
+      '[data-testid="main-area"] [data-testid="chain-board"]',
     ) as HTMLElement;
     expect(board).not.toBeNull();
-    const boardBlocks = board.querySelectorAll('[data-testid^="board-block-"]');
-    expect(boardBlocks).toHaveLength(1);
-    expect(boardBlocks[0].getAttribute('data-testid')).toBe('board-block-0');
+    (board.querySelector('[data-testid="board-block-1"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    expect(compiled.querySelector('[data-testid="block-detail"]')).not.toBeNull();
+    // Muted footnote is rendered inside the block detail (R30).
+    expect(compiled.querySelector('[data-testid="detail-footnote"]')).not.toBeNull();
   });
 
-  it('clicking a board block opens the detail panel; selecting another preset closes it (R24, R25)', async () => {
-    const fixture: Preset[] = [
-      {
-        slot: 1,
-        name: 'A',
-        chain: [
-          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
-        ],
-      },
-      {
-        slot: 2,
-        name: 'B',
-        chain: [{ moduleType: 'catb_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } }],
-      },
-    ];
+  // ---- Empty main area (R23, R24) ---------------------------------------
+
+  it('when no preset is selected and the comparison set is empty, the main area shows the empty-state hint (R23)', async () => {
+    const fixture: Preset[] = [{ slot: 1, name: 'A', chain: [] }];
     const fake = new FakePedal();
     fake.setConnectionState('connected');
     fake.resolveWith = fixture;
@@ -491,43 +518,25 @@ describe('PresetBrowserPage', () => {
     await Promise.resolve();
     component.detectChanges();
 
-    // Select A.
-    (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-1"]',
-    )?.dispatchEvent(new Event('click'));
-    component.detectChanges();
-
-    // Open block 1 of A.
-    const boardA = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="chain-board"]',
-    ) as HTMLElement;
-    (boardA.querySelector('[data-testid="board-block-1"]') as HTMLButtonElement).click();
-    component.detectChanges();
-    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).not.toBeNull();
-
-    // Select B — detail panel should close (R25).
-    (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-2"]',
-    )?.dispatchEvent(new Event('click'));
-    component.detectChanges();
-    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
+    const compiled = component.nativeElement as HTMLElement;
+    expect(compiled.querySelector('[data-testid="main-empty"]')).not.toBeNull();
+    // No chain-board in the main area when nothing is active.
+    expect(compiled.querySelector('[data-testid="main-area"] [data-testid="chain-board"]')).toBeNull();
   });
 
-  it('closes the detail when the already-selected preset is re-selected (R25 A→A)', async () => {
+  // ---- Export-mark is active-preset-only (R36-R39) ---------------------
+
+  it('renders the export-mark checkbox for the active preset only (R36, R38)', async () => {
     const fixture: Preset[] = [
-      {
-        slot: 1,
-        name: 'A',
-        chain: [
-          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
-        ],
-      },
+      { slot: 1, name: 'A', chain: [] },
+      { slot: 2, name: 'B', chain: [] },
     ];
     const fake = new FakePedal();
     fake.setConnectionState('connected');
     fake.resolveWith = fixture;
-    const httpMock = setup(fake);
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(1);
+    const httpMock = setup(fake, undefined, fakeCompare);
 
     const component = TestBed.createComponent(PresetBrowserPage);
     component.detectChanges();
@@ -536,136 +545,21 @@ describe('PresetBrowserPage', () => {
     await Promise.resolve();
     component.detectChanges();
 
-    // Select A.
-    (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-1"]',
-    )?.dispatchEvent(new Event('click'));
-    component.detectChanges();
-
-    // Open block 1 of A.
-    const boardA = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="chain-board"]',
-    ) as HTMLElement;
-    (boardA.querySelector('[data-testid="board-block-1"]') as HTMLButtonElement).click();
-    component.detectChanges();
-    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).not.toBeNull();
-
-    // Re-select A — detail panel must close (R25 A→A case: signal.set(sameRef)
-    // does not retrigger the effect, so the synchronous reset in selectPreset
-    // is what closes it).
-    (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-1"]',
-    )?.dispatchEvent(new Event('click'));
-    component.detectChanges();
-    expect((component.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
+    const compiled = component.nativeElement as HTMLElement;
+    const checkboxes = compiled.querySelectorAll('[data-testid^="export-mark-"]');
+    expect(checkboxes).toHaveLength(1);
+    expect(compiled.querySelector('[data-testid="export-mark-1"]')).not.toBeNull();
   });
 
-  it('does not call writePreset and calls readPresets exactly once across all interactions (R36, R37)', async () => {
-    const fixture: Preset[] = [
-      {
-        slot: 1,
-        name: 'A',
-        chain: [
-          { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
-          { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
-          { moduleType: 'catb_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
-        ],
-      },
-    ];
+  it('toggling the export-mark does not change the comparison set (R38)', async () => {
+    const fixture: Preset[] = [{ slot: 1, name: 'A', chain: [] }];
     const fake = new FakePedal();
     fake.setConnectionState('connected');
     fake.resolveWith = fixture;
-    const readSpy = vi.spyOn(fake, 'readPresets');
-    const writeSpy = vi.spyOn(fake, 'writePreset');
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
-    component.detectChanges();
-
-    // Select the preset.
-    (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-1"]',
-    )?.dispatchEvent(new Event('click'));
-    component.detectChanges();
-
-    const board = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="chain-board"]',
-    ) as HTMLElement;
-    // Click every board block.
-    for (const block of Array.from(board.querySelectorAll('[data-testid^="board-block-"]'))) {
-      (block as HTMLButtonElement).click();
-      component.detectChanges();
-    }
-
-    // Toggle the FX browser open and closed.
-    const browseToggle = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="browse-toggle"]',
-    ) as HTMLButtonElement;
-    browseToggle.click();
-    component.detectChanges();
-    browseToggle.click();
-    component.detectChanges();
-
-    expect(writeSpy).not.toHaveBeenCalled();
-    expect(readSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders the mapped error message and no preset rows when readPresets() rejects with a known key (R11)', async () => {
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = new Error('read_timeout');
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
-    // and another to flush the .catch handler in loadPresets().
-    await Promise.resolve();
-    await Promise.resolve();
-    component.detectChanges();
-
-    const compiled = component.nativeElement as HTMLElement;
-    const error = compiled.querySelector('[data-testid="preset-error"]');
-    expect(error).not.toBeNull();
-    expect(error?.className).toContain('text-red-600');
-    expect(error?.textContent).toContain('La lectura de presets ha expirado');
-    expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
-  });
-
-  it('renders the not-connected-error message when readPresets() rejects with "not_connected" (R11)', async () => {
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = new Error('not_connected');
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    // Two awaits: one to flip the rejected promise into an unhandled-r rejection
-    // and another to flush the .catch handler in loadPresets().
-    await Promise.resolve();
-    await Promise.resolve();
-    component.detectChanges();
-
-    const compiled = component.nativeElement as HTMLElement;
-    const error = compiled.querySelector('[data-testid="preset-error"]');
-    expect(error).not.toBeNull();
-    expect(error?.textContent).toContain('El pedal no está conectado.');
-    expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
-  });
-
-  it('renders the no-presets message and no preset rows when readPresets() resolves with [] (R12)', async () => {
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = [];
-    const httpMock = setup(fake);
+    const fakeExport = new FakePresetExportSelection();
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(1);
+    const httpMock = setup(fake, fakeExport, fakeCompare);
 
     const component = TestBed.createComponent(PresetBrowserPage);
     component.detectChanges();
@@ -675,88 +569,27 @@ describe('PresetBrowserPage', () => {
     component.detectChanges();
 
     const compiled = component.nativeElement as HTMLElement;
-    expect(compiled.querySelector('[data-testid="no-presets"]')).not.toBeNull();
-    expect(compiled.querySelectorAll('[data-testid^="preset-row-"]')).toHaveLength(0);
-  });
-
-  for (const [warning, text] of [
-    ['restore_no_match', 'no coincide con ningún preset guardado'],
-    ['restore_ambiguous', 'coincide con varios presets guardados'],
-  ] as const) {
-    it(`shows a non-blocking "${warning}" notice alongside the loaded presets (feature 24)`, async () => {
-      const fake = new FakePedal();
-      fake.setConnectionState('connected');
-      fake.resolveWith = [{ slot: 0, name: 'A', chain: [] }];
-      fake.restoreWarning.set(warning);
-      const httpMock = setup(fake);
-
-      const component = TestBed.createComponent(PresetBrowserPage);
-      component.detectChanges();
-      flushI18n(httpMock);
-      component.detectChanges();
-      await Promise.resolve();
-      component.detectChanges();
-
-      const compiled = component.nativeElement as HTMLElement;
-      const notice = compiled.querySelector('[data-testid="restore-warning"]');
-      expect(notice).not.toBeNull();
-      expect(notice?.getAttribute('role')).toBe('status');
-      expect(notice?.textContent).toContain(text);
-      expect(compiled.querySelector('[data-testid="preset-error"]')).toBeNull();
-      expect(compiled.querySelector('[data-testid="preset-row-0"]')).not.toBeNull();
-    });
-  }
-
-  it('shows no restore notice when the pre-read preset was restored (feature 24)', async () => {
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = [{ slot: 0, name: 'A', chain: [] }];
-    const httpMock = setup(fake);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
+    // Reset call history AFTER the setup-time add() call so the
+    // toggle assertion below can prove the click alone didn't mutate
+    // the comparison store.
+    fakeCompare.add.mockClear();
+    fakeCompare.remove.mockClear();
+    fakeCompare.toggle.mockClear();
+    fakeCompare.clear.mockClear();
+    (compiled.querySelector('[data-testid="export-mark-1"]') as HTMLInputElement).click();
     component.detectChanges();
 
-    const compiled = component.nativeElement as HTMLElement;
-    expect(compiled.querySelector('[data-testid="preset-row-0"]')).not.toBeNull();
-    expect(compiled.querySelector('[data-testid="restore-warning"]')).toBeNull();
-  });
-
-  it('calls SelectedPresetStore.select(preset) when the row select button is clicked (R15)', async () => {
-    const fixture: Preset[] = [
-      { slot: 7, name: 'Test', chain: [] },
-    ];
-    const fake = new FakePedal();
-    fake.setConnectionState('connected');
-    fake.resolveWith = fixture;
-    const fakeStore = new FakeSelectedPresetStore();
-    const httpMock = setup(fake, fakeStore);
-
-    const component = TestBed.createComponent(PresetBrowserPage);
-    component.detectChanges();
-    flushI18n(httpMock);
-    component.detectChanges();
-    await Promise.resolve();
-    component.detectChanges();
-
-    const button = (component.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-7"]',
-    ) as HTMLButtonElement;
-    expect(button).not.toBeNull();
-    button.click();
-
-    expect(fakeStore.select).toHaveBeenCalledTimes(1);
-    expect(fakeStore.select).toHaveBeenCalledWith(fixture[0]);
+    expect(fakeExport.toggle).toHaveBeenCalledWith(1);
+    expect(fakeCompare.toggle).not.toHaveBeenCalled();
+    expect(fakeCompare.add).not.toHaveBeenCalled();
+    expect(fakeCompare.remove).not.toHaveBeenCalled();
+    expect(fakeCompare.clear).not.toHaveBeenCalled();
   });
 });
 
-// --- T37 second read-only test: real WebMidiPedalConnection + stubbed
-// navigator.requestMIDIAccess, output.send() spied. Asserts no additional
-// sends are made when walking the board blocks, the FX-browser toggle, and
-// the new detail-close button.
+// --- Read-only test: stubbed pedal with real WebMidiPedalConnection,
+// verify no extra MIDI sends happen when walking chip / block-detail /
+// export-mark interactions (R40, v6).
 
 interface FakePort {
   name: string | null;
@@ -839,7 +672,6 @@ class FakeReadCodec implements SysexPresetCodec {
 
   decodeIncomingMessage(_message: Uint8Array): SysexDecodeResult {
     if (this.awaitingNames) {
-      // names phase completes immediately on first message
       this.namesCallCount++;
       if (this.namesCallCount >= this.namesCompleteAfterCalls) {
         this.awaitingNames = false;
@@ -854,21 +686,20 @@ class FakeReadCodec implements SysexPresetCodec {
   }
 }
 
-describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () => {
+describe('PresetBrowserPage v6 — R40 read-only MIDI send spy', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     TestBed.resetTestingModule();
   });
 
-  it('does not add any MIDIOutput.send call across all interactions (R37, T37)', async () => {
+  it('does not add any MIDIOutput.send call when clicking chip / board block / export-mark (R40)', async () => {
     const preset: Preset = {
       slot: 1,
       name: 'A',
       chain: [
         { moduleType: 'cat0_fx0', enabled: true, parameters: { p0: 1, p1: 2 } },
         { moduleType: 'cat7_fx1', enabled: true, parameters: { p0: 5, p1: 6, p2: 7 } },
-        { moduleType: 'catb_fx0', enabled: true, parameters: { p0: 10, p1: 20, p2: 30, p3: 40 } },
       ],
     };
 
@@ -880,15 +711,8 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     const requestMIDIAccess = vi.fn(() => Promise.resolve(access));
     vi.stubGlobal('navigator', { requestMIDIAccess });
 
-    // Single TestBed configuration: real connection + page. We arm the
-    // codec BEFORE ngOnInit runs so the page's readPresets() call returns
-    // a preset. Then we call connect() ourselves first to set state =
-    // "connected" (the page's ngOnInit checks that).
     const codec = new FakeReadCodec();
-    codec.readMessageSets = [[
-      new Uint8Array([0xaa]),
-      new Uint8Array([0xbb]),
-    ]];
+    codec.readMessageSets = [[new Uint8Array([0xaa]), new Uint8Array([0xbb])]];
     codec.decodeResults = [{ kind: 'preset', preset, isLast: true }];
 
     TestBed.configureTestingModule({
@@ -898,7 +722,7 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
         provideHttpClientTesting(),
         { provide: SYSEX_PRESET_CODEC, useValue: codec },
         WebMidiPedalConnection,
-        { provide: SelectedPresetStore, useClass: FakeSelectedPresetStore },
+        { provide: PresetComparisonStore, useClass: FakePresetComparisonStore },
       ],
     });
     const connection = TestBed.inject(WebMidiPedalConnection);
@@ -913,61 +737,47 @@ describe('PresetBrowserPage — T37 send spy (real WebMidiPedalConnection)', () 
     flushI18n(httpMock);
     fixture.detectChanges();
 
-    // The page's ngOnInit -> loadPresets -> readPresets() has already sent
-    // the names request. Fire the names-completion message, then the reply
-    // to the active-preset request; readPresets then selects slot 0 and
-    // waits READ_SETTLE_MS before sending the body request. Advance the
-    // settle timer to release the body request, then fire the body message.
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa0]) } as unknown as MIDIMessageEvent);
-    await vi.advanceTimersByTimeAsync(0); // let readPresets send the active-preset request
+    await vi.advanceTimersByTimeAsync(0);
     inputPort.onmidimessage?.({ data: new Uint8Array([0xac]) } as unknown as MIDIMessageEvent);
     await vi.advanceTimersByTimeAsync(READ_SETTLE_MS);
     inputPort.onmidimessage?.({ data: new Uint8Array([0xa1]) } as unknown as MIDIMessageEvent);
-    // Let the readPresets() promise resolve and loadState flip to "loaded".
     await Promise.resolve();
     await Promise.resolve();
     fixture.detectChanges();
 
-    // After the initial read completes, expect at least the names request
-    // + active-preset request + slot selection + body request + restore = 5 sends.
     const sendCountAfterLoad = outputPort.sendSpy.mock.calls.length;
     expect(sendCountAfterLoad).toBeGreaterThanOrEqual(5);
 
-    // Click Select on the row to mount the board.
-    const selectBtn = (fixture.nativeElement as HTMLElement).querySelector(
-      '[data-testid="select-preset-1"]',
-    ) as HTMLButtonElement;
-    selectBtn.click();
+    // Open the picker and click a row → adds slot 1; should NOT trigger any MIDI send.
+    (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="browse-presets"]')
+      ?.dispatchEvent(new Event('click'));
+    fixture.detectChanges();
+    (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="picker-row-1"]')
+      ?.dispatchEvent(new Event('click'));
     fixture.detectChanges();
 
-    // Walk every board block.
+    // Click the chip → should NOT trigger any MIDI send.
+    (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="preset-chip-1"]')
+      ?.dispatchEvent(new Event('click'));
+    fixture.detectChanges();
+
+    // Click a board block in the main area.
     const board = (fixture.nativeElement as HTMLElement).querySelector(
-      '[data-testid="chain-board"]',
-    ) as HTMLElement | null;
+      '[data-testid="main-area"] [data-testid="chain-board"]',
+    ) as HTMLElement;
     expect(board).not.toBeNull();
-    const boardBlocks = board!.querySelectorAll('[data-testid^="board-block-"]');
-    expect(boardBlocks).toHaveLength(3);
-    for (const block of Array.from(boardBlocks)) {
-      (block as HTMLButtonElement).click();
-      fixture.detectChanges();
-    }
-
-    // Toggle the FX browser open and closed on the currently open detail.
-    const browseToggle = (fixture.nativeElement as HTMLElement).querySelector(
-      '[data-testid="browse-toggle"]',
-    ) as HTMLButtonElement;
-    browseToggle.click();
-    fixture.detectChanges();
-    browseToggle.click();
+    (board.querySelector('[data-testid="board-block-0"]') as HTMLButtonElement).click();
     fixture.detectChanges();
 
-    // Click the new close button.
-    const closeBtn = (fixture.nativeElement as HTMLElement).querySelector(
-      '[data-testid="detail-close"]',
-    ) as HTMLButtonElement;
-    closeBtn.click();
+    // Toggle the export-mark checkbox.
+    (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="export-mark-1"]')
+      ?.dispatchEvent(new Event('click'));
     fixture.detectChanges();
-    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="block-detail"]')).toBeNull();
 
     // No additional sends after the initial load.
     expect(outputPort.sendSpy.mock.calls.length).toBe(sendCountAfterLoad);

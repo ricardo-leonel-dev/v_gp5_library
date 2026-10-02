@@ -1,90 +1,156 @@
-<div *transloco="let t" class="mx-auto max-w-3xl px-4 py-10">
-  <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ t('presetBrowser.title') }}</h1>
-
+<div *transloco="let t" class="mx-auto max-w-6xl py-6">
   @if (!supported) {
-    <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="unsupported-message">
+    <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="unsupported-message">
       {{ t('pedal.unsupported') }}
     </p>
   } @else if (connectionState() !== 'connected') {
-    <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="not-connected-message">
+    <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="not-connected-message">
       {{ t('presetBrowser.not_connected') }}
     </p>
   } @else {
     @if (loadState() === 'loading') {
-      <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="loading">
+      <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="loading">
         {{ t('presetBrowser.loading') }}
       </p>
     }
     @if (loadState() === 'error') {
-      <p class="mt-4 text-sm text-red-600 dark:text-red-400" data-testid="preset-error">
+      <p class="mt-4 px-4 text-sm text-red-600 dark:text-red-400" data-testid="preset-error">
         {{ t('presetBrowser.' + error()) }}
       </p>
     }
-    @if (loadState() === 'loaded') {
-      @if (restoreWarning(); as warning) {
-        <p
-          class="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
-          role="status"
-          data-testid="restore-warning"
+    @if (loadState() === 'loaded' || loadState() === 'idle') {
+      <!-- v6: chip-based navigation. The top row holds one chip per
+           selected preset, plus a "Browse presets" pill. Below the chips
+           the main area renders the active preset's chain board (or an
+           empty-state hint that triggers the picker). No drawer, no
+           compact list, no sticky toolbar. -->
+      <div class="mt-4 flex flex-col gap-4" data-testid="preset-layout">
+        <header
+          class="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2 dark:border-slate-700"
+          data-testid="chip-row"
         >
-          {{ t('presetBrowser.' + warning) }}
-        </p>
-      }
-      @if (presets().length === 0) {
-        <p class="mt-4 text-sm text-slate-600 dark:text-slate-400" data-testid="no-presets">
-          {{ t('presetBrowser.no_presets') }}
-        </p>
-      } @else {
-        @if (selectedPreset(); as preset) {
-          <section #boardSection class="mt-6" data-testid="board-section">
-            <p class="text-xs text-slate-500">{{ t('chainBoard.title') }}</p>
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">{{ preset.name }}</h2>
-            <app-chain-board
-              [chain]="preset.chain"
-              [selectedIndex]="selectedBlockIndex()"
-              (blockSelected)="onBlockSelected($event)"
-            ></app-chain-board>
-            @if (selectedSlot(); as slot) {
-              <app-block-detail [slot]="slot" (closed)="selectedBlockIndex.set(null)"></app-block-detail>
-            }
-          </section>
-        }
-
-        <ul class="mt-4 divide-y divide-slate-200 dark:divide-slate-700">
-          @for (preset of presets(); track preset.slot) {
-            <li
-              class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between {{ selectedPreset()?.slot === preset.slot ? 'rounded-md bg-slate-100 dark:bg-slate-800/60' : '' }}"
-              [attr.data-testid]="'preset-row-' + preset.slot"
+          @if (comparisonSlots().size > 0) {
+            <p class="mr-1 text-[10px] uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              {{ t('presetBrowser.presets_selected_count', { count: comparisonSlots().size }) }}
+            </p>
+          }
+          @for (slot of chipSlots(); track slot) {
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+              [class.ring-2]="activePreset()?.slot === slot"
+              [class.ring-indigo-500]="activePreset()?.slot === slot"
+              [attr.data-testid]="'preset-chip-' + slot"
+              (click)="onChipClick(slot)"
             >
-              <div class="min-w-0 flex-1">
-                <p class="text-sm font-medium text-slate-900 dark:text-slate-100">
-                  {{ preset.slot }} — {{ preset.name }}
-                </p>
-                @if (preset.chain.length === 0) {
-                  <p
-                    class="mt-1 text-xs text-slate-500 dark:text-slate-400"
-                    [attr.data-testid]="'preset-chain-' + preset.slot"
-                  >
-                    {{ t('presetBrowser.empty_chain') }}
-                  </p>
-                } @else {
-                  <div class="mt-1" [attr.data-testid]="'preset-chain-' + preset.slot">
-                    <app-chain-strip [chain]="preset.chain"></app-chain-strip>
+              <span class="font-mono text-[10px] opacity-70">{{ slot }}</span>
+              <span class="max-w-[10rem] truncate font-medium">{{ nameFor(slot) }}</span>
+              <span
+                role="button"
+                tabindex="0"
+                class="ml-1 cursor-pointer text-base leading-none opacity-60 hover:opacity-100"
+                [attr.aria-label]="t('presetBrowser.deselect')"
+                [attr.data-testid]="'chip-remove-' + slot"
+                (click)="onChipRemove(slot, $event)"
+                (keydown.enter)="onChipRemove(slot, $event)"
+              >×</span>
+            </button>
+          }
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-full border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-900 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+            [attr.aria-label]="t('presetBrowser.browse_presets_aria')"
+            data-testid="browse-presets"
+            (click)="openPicker()"
+          >
+            <span aria-hidden="true">+</span>
+            <span>{{ t('presetBrowser.browse_presets') }}</span>
+          </button>
+        </header>
+
+        <main class="min-w-0 flex-1 px-4" data-testid="main-area">
+          @if (displayPreset(); as p) {
+            <p
+              class="mb-3 text-sm font-medium text-slate-900 dark:text-slate-100"
+              data-testid="main-heading"
+            >
+              {{ p.slot }} — {{ p.name }}
+            </p>
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-start">
+              <div class="lg:flex-[3] min-w-0">
+                <app-chain-board
+                  [chain]="p.chain"
+                  [presetName]="p.name"
+                  (blockClicked)="onBlockClicked(p.slot, $event)"
+                ></app-chain-board>
+              </div>
+              @if (selectedBlockFor(p.slot); as block) {
+                @if (block.slot) {
+                  <div class="lg:flex-[1] min-w-0" data-testid="block-detail">
+                    <app-block-detail
+                      [slot]="block.slot"
+                      (closed)="onBlockClicked(p.slot, block)"
+                    ></app-block-detail>
                   </div>
                 }
-              </div>
+              }
+            </div>
+            <!-- Active-preset-only export checkbox (R36): single checkbox
+                 per page, scoped to the active preset. -->
+            <label class="mt-3 inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+              <input
+                type="checkbox"
+                class="size-4 accent-indigo-600"
+                [checked]="markedSlots().has(p.slot)"
+                (change)="onExportMarkChange(p.slot)"
+                [attr.data-testid]="'export-mark-' + p.slot"
+                [attr.aria-label]="t('presetBrowser.mark_for_export', { name: p.name })"
+              />
+              {{ t('presetBrowser.export_label') }}
+            </label>
+          } @else {
+            <p
+              class="text-sm text-slate-500 dark:text-slate-400"
+              data-testid="main-empty"
+            >
+              {{ t('presetBrowser.browse_presets') }}
+            </p>
+          }
+        </main>
+      </div>
+    }
+  }
+
+  <!-- v6 picker overlay (R25-R27). Opens when "Browse presets" is clicked.
+       Backdrop click and Escape close it without modifying the comparison
+       set; clicking a row adds the slot and closes the picker. -->
+  @if (pickerOpen()) {
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      data-testid="picker-backdrop"
+      (click)="closePicker()"
+    >
+      <div
+        class="w-full max-w-md rounded-lg bg-white p-2 shadow-xl dark:bg-slate-800"
+        data-testid="picker-card"
+        (click)="$event.stopPropagation()"
+      >
+        <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+          @for (preset of presets(); track preset.slot) {
+            <li>
               <button
                 type="button"
-                (click)="selectPreset(preset)"
-                [attr.data-testid]="'select-preset-' + preset.slot"
-                class="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+                class="flex w-full items-center gap-3 rounded px-2 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                [attr.data-testid]="'picker-row-' + preset.slot"
+                (click)="onPickerRow(preset)"
               >
-                {{ t('presetBrowser.select') }}
+                <span class="font-mono text-xs opacity-70">{{ preset.slot }}</span>
+                <span class="font-medium">{{ preset.name }}</span>
               </button>
             </li>
           }
         </ul>
-      }
-    }
+      </div>
+    </div>
   }
 </div>

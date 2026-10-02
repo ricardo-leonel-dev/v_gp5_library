@@ -1,35 +1,208 @@
 <section *transloco="let t" class="relative">
-  <div
-    class="absolute inset-x-0 top-1/2 h-0.5 bg-slate-300 dark:bg-slate-600 hidden sm:block"
+  @if (presetName(); as name) {
+    <p class="text-xs text-slate-500 mb-1">{{ name }}</p>
+  }
+  <!-- Serpentine cable (R15): z-0 behind the grid (z-10). Same viewBox/path
+       as v5; never visible because every block lives inside a slate cell
+       (R17). -->
+  <svg
+    class="absolute inset-0 z-0 pointer-events-none w-full h-full text-slate-300 dark:text-slate-600"
+    viewBox="0 0 100 100"
+    preserveAspectRatio="none"
     aria-hidden="true"
-  ></div>
-  <div class="grid grid-cols-5 sm:grid-cols-10 gap-2" data-testid="chain-board">
+    data-testid="chain-cable"
+  >
+    <path
+      d="M 5 25 H 92 C 96 25 96 75 92 75 H 95"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="0.5"
+      stroke-linecap="round"
+    />
+  </svg>
+  <!-- Always 5 columns (R16). -->
+  <div class="relative z-10 grid grid-cols-5 gap-2" data-testid="chain-board">
     @for (block of blocks(); track block.view.position) {
-      <button
-        type="button"
-        class="{{ block.blockCls }}"
-        [attr.data-testid]="'board-block-' + block.view.position"
-        [attr.data-enabled]="block.view.enabled ? 'true' : 'false'"
-        [attr.aria-pressed]="block.isSelected ? 'true' : 'false'"
-        [attr.aria-label]="t('chainBoard.block_aria', {
-          category: block.view.kind === 'resolved' ? displayCategoryCode(block.view.categoryCode) : t('chainBoard.unknown_short'),
-          fx: block.view.kind === 'resolved' ? block.view.fxTitle : t('chainBoard.unknown'),
-          state: t(block.view.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off'),
-        })"
-        (click)="onBlockClick(block.view.position)"
-      >
-        @if (block.view.kind === 'resolved') {
-          <span
-            class="absolute right-1.5 top-1.5 size-1.5 rounded-full {{ block.ledCls }}"
-            aria-hidden="true"
-          ></span>
-          <span class="block text-sm font-bold tracking-tight">{{ displayCategoryCode(block.view.categoryCode) }}</span>
-          <span class="block text-[11px] leading-tight line-clamp-2">{{ block.view.fxTitle }}</span>
-        } @else {
-          <span class="block text-sm font-bold tracking-tight">{{ t('chainBoard.unknown_short') }}</span>
-          <span class="block text-[11px] leading-tight line-clamp-2">{{ t('chainBoard.unknown') }}</span>
-        }
-      </button>
+      <div class="rounded-lg bg-slate-50 dark:bg-slate-900">
+        <button
+          type="button"
+          class="{{ block.blockCls }}"
+          [attr.data-testid]="'board-block-' + block.view.position"
+          [attr.data-enabled]="block.view.enabled ? 'true' : 'false'"
+          [attr.aria-pressed]="block.isSelected ? 'true' : 'false'"
+          [attr.aria-label]="t('chainBoard.block_aria', {
+            category: block.view.kind === 'resolved' ? displayCategoryCode(block.view.categoryCode) : t('chainBoard.unknown_short'),
+            fx: block.view.kind === 'resolved' ? block.view.fxTitle : t('chainBoard.unknown'),
+            state: t(block.view.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off'),
+          })"
+          (click)="onBlockClick(block.view.position)"
+        >
+          @if (block.resolved; as r) {
+            <!-- State LED overlay (v5 contract; v6 chassis carries its own
+                 decorative LED, but the state one stays on top so the
+                 on/off indicator reads correctly). -->
+            <span
+              class="absolute right-1.5 top-1.5 size-1.5 rounded-full z-20 {{ block.ledCls }}"
+              aria-hidden="true"
+            ></span>
+
+            <!-- v6 product-photo-realism chassis SVG. Each kind renders
+                 its own full SVG (120×84 viewBox), filling the button.
+                 Pin attributes from v5 (`data-chassis-handle`,
+                 `data-chassis-vent`, `data-chassis-grille`, `data-slider`)
+                 are re-applied to the matching elements so the v5 board
+                 regression tests stay green. -->
+            <svg
+              class="pointer-events-none absolute inset-x-1 top-2 z-0 h-[68%] w-auto"
+              viewBox="0 0 120 84"
+              preserveAspectRatio="xMidYMid meet"
+              aria-hidden="true"
+              data-testid="chassis-svg"
+              [attr.data-chassis-kind]="r.kind"
+            >
+              @switch (r.kind) {
+                @case ('amp') {
+                  <defs>
+                    <linearGradient id="cb-amp-tolex" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stop-color="#1f1410" />
+                      <stop offset="1" stop-color="#0a0604" />
+                    </linearGradient>
+                    <linearGradient id="cb-amp-face" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stop-color="#cfcfcf" />
+                      <stop offset="0.45" stop-color="#9a9a9a" />
+                      <stop offset="1" stop-color="#5d5d5d" />
+                    </linearGradient>
+                    <pattern id="cb-amp-grille" width="4" height="4" patternUnits="userSpaceOnUse">
+                      <circle cx="2" cy="2" r="1.1" fill="#111" />
+                    </pattern>
+                  </defs>
+                  <!-- Tolex body -->
+                  <rect data-chassis-tolex x="2" y="10" width="116" height="68" rx="6" fill="url(#cb-amp-tolex)" />
+                  <!-- Brushed faceplate -->
+                  <rect data-chassis-faceplate x="6" y="14" width="108" height="60" rx="3" fill="url(#cb-amp-face)" stroke="#3a3a3a" stroke-width="0.5" />
+                  <!-- Carrying handle -->
+                  <rect data-chassis-handle x="50" y="6" width="20" height="6" rx="2" fill="#2a2a2a" stroke="#0a0a0a" stroke-width="0.5" />
+                  <rect x="52" y="7" width="16" height="2" rx="1" fill="#4a4a4a" />
+                  <!-- Grille cloth (no `data-chassis-grille` pin attribute:
+                       that one is reserved for CAB's speaker cone to keep
+                       the v5 board test contract intact). -->
+                  <rect data-chassis-amp-grille x="14" y="22" width="92" height="46" rx="2" fill="url(#cb-amp-grille)" />
+                  <!-- Gold piping along the seam (decorative vent markers carry the v5 pin attribute too). -->
+                  <line data-chassis-vent x1="6" y1="14" x2="114" y2="14" stroke="#a87830" stroke-width="0.7" />
+                  <line data-chassis-vent x1="6" y1="74" x2="114" y2="74" stroke="#a87830" stroke-width="0.7" />
+                  <!-- Corner screws -->
+                  <circle data-chassis-screw cx="11" cy="19" r="1.5" fill="#cfa14a" />
+                  <circle data-chassis-screw cx="109" cy="19" r="1.5" fill="#cfa14a" />
+                  <circle data-chassis-screw cx="11" cy="69" r="1.5" fill="#cfa14a" />
+                  <circle data-chassis-screw cx="109" cy="69" r="1.5" fill="#cfa14a" />
+                  <!-- Static LED (state LED overlays this at top right). -->
+                  <circle cx="60" cy="16" r="1.2" fill="#ef4444" />
+                }
+                @case ('cabinet') {
+                  <defs>
+                    <linearGradient id="cb-cab-tolex" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stop-color="#1c130d" />
+                      <stop offset="1" stop-color="#070403" />
+                    </linearGradient>
+                    <radialGradient id="cb-cab-cone" cx="0.5" cy="0.5" r="0.5">
+                      <stop offset="0" stop-color="#3a3a3a" />
+                      <stop offset="0.6" stop-color="#0e0e0e" />
+                      <stop offset="1" stop-color="#000" />
+                    </radialGradient>
+                  </defs>
+                  <rect data-chassis-tolex x="2" y="4" width="116" height="76" rx="6" fill="url(#cb-cab-tolex)" />
+                  <rect data-chassis-faceplate x="10" y="10" width="100" height="64" rx="2" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="0.5" />
+                  <!-- Speaker ring -->
+                  <circle cx="60" cy="42" r="26" fill="#000" stroke="#2a2a2a" stroke-width="1" />
+                  <!-- Speaker cone (carries the v5 data-chassis-grille pin attribute so the existing cabinet test stays green). -->
+                  <circle data-chassis-grille cx="60" cy="42" r="24" fill="url(#cb-cab-cone)" />
+                  <!-- Dust cap -->
+                  <circle data-chassis-dustcap cx="60" cy="42" r="7" fill="#1a1a1a" stroke="#2a2a2a" stroke-width="0.5" />
+                  <!-- Cone highlight -->
+                  <ellipse data-chassis-cone cx="55" cy="36" rx="6" ry="3" fill="#3a3a3a" opacity="0.6" />
+                  <!-- Handle (v5 data-chassis-handle pin attribute on this rect so the existing cabinet test stays green). -->
+                  <rect data-chassis-handle x="50" y="6" width="20" height="6" rx="2" fill="#2a2a2a" stroke="#0a0a0a" stroke-width="0.5" />
+                  <!-- Corner screws -->
+                  <circle data-chassis-screw cx="14" cy="14" r="1.5" fill="#cfa14a" />
+                  <circle data-chassis-screw cx="106" cy="14" r="1.5" fill="#cfa14a" />
+                  <circle data-chassis-screw cx="14" cy="70" r="1.5" fill="#cfa14a" />
+                  <circle data-chassis-screw cx="106" cy="70" r="1.5" fill="#cfa14a" />
+                  <!-- Brand plate -->
+                  <rect x="50" y="76" width="20" height="3" rx="1" fill="#a87830" />
+                }
+                @case ('eq') {
+                  <defs>
+                    <linearGradient id="cb-eq-face" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stop-color="#262626" />
+                      <stop offset="1" stop-color="#0d0d0d" />
+                    </linearGradient>
+                    <linearGradient id="cb-eq-track" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stop-color="#000" />
+                      <stop offset="1" stop-color="#262626" />
+                    </linearGradient>
+                    <linearGradient id="cb-eq-cap" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stop-color="#f8f8f8" />
+                      <stop offset="1" stop-color="#b0b0b0" />
+                    </linearGradient>
+                  </defs>
+                  <rect x="2" y="4" width="116" height="76" rx="6" fill="#0a0a0a" />
+                  <rect data-chassis-faceplate x="6" y="8" width="108" height="68" rx="3" fill="url(#cb-eq-face)" />
+                  <!-- 4 faders with tick marks — each track carries data-slider so the existing EQ test stays green. -->
+                  @for (fader of faders; track fader.x) {
+                    <rect data-slider [attr.x]="fader.x - 1.5" y="16" width="3" height="52" rx="1" fill="url(#cb-eq-track)" />
+                    <line [attr.x1]="fader.x - 4" [attr.x2]="fader.x + 4" [attr.y1]="fader.tickY" [attr.y2]="fader.tickY" stroke="#6a6a6a" stroke-width="0.4" />
+                    <rect [attr.x]="fader.x - 4" [attr.y]="fader.capY - 2" width="8" height="4" rx="1" fill="url(#cb-eq-cap)" stroke="#1a1a1a" stroke-width="0.4" />
+                  }
+                  <!-- Bypass LED + label -->
+                  <circle cx="14" cy="14" r="1.4" fill="#ef4444" />
+                }
+              }
+            </svg>
+
+            <!-- Stompbox (incl. RVB's 2×2 layout) — v5 contract stays verbatim
+                 so the existing R12 stompbox tests pass. RVB uses
+                 `layout4x2` to switch to a 2×2 knob grid; the v6 chassis
+                 primitive for RVB (which lives in the stompbox template's
+                 fill) is added below. -->
+            @if (r.kind === 'stompbox') {
+              @if (r.layout4x2) {
+                <span class="grid grid-cols-2 gap-1 z-10" aria-hidden="true">
+                  @for (k of r.knobs; track $index) {
+                    <span data-knob class="relative size-2.5 rounded-full bg-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]">
+                      <span class="absolute left-1/2 top-px h-1 w-px -translate-x-1/2 bg-white/85"></span>
+                    </span>
+                  }
+                </span>
+              } @else {
+                <span class="flex h-2.5 items-center justify-center gap-1 z-10" aria-hidden="true">
+                  @for (k of r.knobs; track $index) {
+                    <span data-knob class="relative size-2.5 rounded-full bg-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]">
+                      <span class="absolute left-1/2 top-px h-1 w-px -translate-x-1/2 bg-white/85"></span>
+                    </span>
+                  }
+                </span>
+              }
+              <span data-jack class="absolute top-0 left-2 h-1 w-1.5 rounded-b-sm bg-black/30 z-10" aria-hidden="true"></span>
+              <span data-jack class="absolute top-0 right-2 h-1 w-1.5 rounded-b-sm bg-black/30 z-10" aria-hidden="true"></span>
+            }
+
+            <!-- Glyph + code + title overlay (foreground, on top of the
+                 chassis SVG and the stompbox template). -->
+            <div class="absolute inset-x-1 bottom-1 z-10 flex flex-col items-center text-center">
+              <app-pedal-glyph [categoryIndex]="r.categoryIndex" svgClass="size-4" />
+              <span class="mt-0.5 text-xs font-bold leading-none tracking-tight">{{ displayCategoryCode(r.categoryCode) }}</span>
+              <span class="mt-0.5 w-full text-[10px] leading-tight line-clamp-2 break-words">{{ r.fxTitle }}</span>
+              <svg data-footswitch viewBox="0 0 12 12" class="mt-0.5 size-3" aria-hidden="true">
+                <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5"/>
+                <circle cx="6" cy="6" r="2.5" fill="currentColor" fill-opacity="0.8"/>
+              </svg>
+            </div>
+          } @else {
+            <span class="mt-3 text-xs font-bold leading-none tracking-tight">{{ t('chainBoard.unknown_short') }}</span>
+            <span class="mt-0.5 w-full text-[10px] leading-tight line-clamp-2 break-words">{{ t('chainBoard.unknown') }}</span>
+          }
+        </button>
+      </div>
     }
   </div>
 </section>

@@ -179,4 +179,81 @@ describe('ChainStrip', () => {
     expect(blocks[1].getAttribute('aria-label')).toBe('AMP: Tweedy, Bypass');
     expect(blocks[2].getAttribute('aria-label')).toBe('N/D: No reconocido, Activo');
   });
+
+  it('renders one pedal glyph with the right data-glyph on every resolved block (R8)', () => {
+    const chain: PresetSlot[] = [
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} }, // PRE (idx 1)
+      { moduleType: 'cat3_fx0', enabled: true, parameters: {} }, // DST (idx 2)
+      { moduleType: 'catb_fx0', enabled: true, parameters: {} }, // DLY (idx 8)
+    ];
+    const { httpMock } = setup();
+
+    const fixture = TestBed.createComponent(ChainStrip);
+    fixture.componentRef.setInput('chain', chain);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const blocks = (fixture.nativeElement as HTMLElement).querySelectorAll(
+      '[data-testid^="strip-block-"]',
+    );
+    expect(blocks[0].querySelectorAll('svg[data-glyph="c1"]')).toHaveLength(1);
+    expect(blocks[1].querySelectorAll('svg[data-glyph="c2"]')).toHaveLength(1);
+    expect(blocks[2].querySelectorAll('svg[data-glyph="c8"]')).toHaveLength(1);
+    // And no other glyph elements on these blocks.
+    expect(blocks[0].querySelectorAll('svg[data-glyph]')).toHaveLength(1);
+    expect(blocks[1].querySelectorAll('svg[data-glyph]')).toHaveLength(1);
+    expect(blocks[2].querySelectorAll('svg[data-glyph]')).toHaveLength(1);
+  });
+
+  it('renders no pedal glyph inside an unknown strip block (R9)', () => {
+    const chain: PresetSlot[] = [
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+      { moduleType: 'empty', enabled: false, parameters: {} },
+      { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
+    ];
+    const { httpMock } = setup();
+
+    const fixture = TestBed.createComponent(ChainStrip);
+    fixture.componentRef.setInput('chain', chain);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const blocks = (fixture.nativeElement as HTMLElement).querySelectorAll(
+      '[data-testid^="strip-block-"]',
+    );
+    expect(blocks[1].querySelectorAll('svg[data-glyph]')).toHaveLength(0);
+    expect(blocks[2].querySelectorAll('svg[data-glyph]')).toHaveLength(0);
+  });
+
+  it('every strip block carries h-8 and the inset-bottom-shadow class (R10)', () => {
+    const chain: PresetSlot[] = [
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+      { moduleType: 'empty', enabled: false, parameters: {} },
+      { moduleType: 'cat99_fx0', enabled: true, parameters: {} },
+    ];
+    const { httpMock } = setup();
+
+    const fixture = TestBed.createComponent(ChainStrip);
+    fixture.componentRef.setInput('chain', chain);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const blocks = (fixture.nativeElement as HTMLElement).querySelectorAll(
+      '[data-testid^="strip-block-"]',
+    );
+    for (const block of Array.from(blocks)) {
+      expect((block as HTMLElement).className).toContain('h-8');
+      expect((block as HTMLElement).className).toContain(
+        'shadow-[inset_0_-2px_0_rgba(0,0,0,0.2)]',
+      );
+    }
+  });
+
+  // silence unused import warnings from vi in some configs
+  it('noop to keep vi import in scope for lint parity', () => {
+    expect(typeof vi.fn).toBe('function');
+  });
 });

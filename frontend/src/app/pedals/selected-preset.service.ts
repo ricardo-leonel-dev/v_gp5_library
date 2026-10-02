@@ -9,4 +9,8 @@ export class SelectedPresetStore {
   select(preset: Preset): void {
     this.selectedPresetSignal.set(preset);
   }
+
+  clear(): void {
+    this.selectedPresetSignal.set(null);
+  }
 }

@@ -18,10 +18,13 @@ const esTranslations = {
     parameters: 'Parámetros',
     no_parameters: 'Este bloque no tiene parámetros guardados.',
     unknown_module: 'No se pudo identificar este módulo. Abajo están sus valores sin procesar.',
-    mapping_hypothesis: 'Hipótesis',
     browse: 'Ver todos los efectos de {{category}}',
     active: 'En este preset',
     manual_page: 'Manual p. {{page}}',
+  },
+  presetBrowser: {
+    footnote_unverified:
+      'Los números de página reflejan una suposición basada en el comportamiento observado del firmware, no un mapeo del fabricante.',
   },
   gp5Fx: {
     c4: {
@@ -117,7 +120,7 @@ describe('BlockDetail', () => {
     expect(rows[5].textContent).toContain('66');
   });
 
-  it('shows the hypothesis notice (R30) — resolved slot uses the translated chainBoard.mapping_hypothesis text', () => {
+  it('shows the v6 muted footnote at the bottom of the card — resolved slot (v6 T17, T18)', () => {
     const slot: PresetSlot = {
       moduleType: 'cat7_fx1',
       enabled: true,
@@ -131,21 +134,29 @@ describe('BlockDetail', () => {
     flushI18n(httpMock);
     fixture.detectChanges();
 
-    const notice = (fixture.nativeElement as HTMLElement).querySelector(
+    // v5 yellow callout is gone (R31).
+    const callout = (fixture.nativeElement as HTMLElement).querySelector(
       '[data-testid="mapping-hypothesis"]',
+    );
+    expect(callout).toBeNull();
+    // v6-draft quiet pill is gone (R31).
+    const pill = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="detail-unverified-pill"]',
+    );
+    expect(pill).toBeNull();
+    // v6 muted footnote is rendered (R30) — single small muted paragraph
+    // at the bottom of the card with no border / icon / color treatment.
+    const footnote = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="detail-footnote"]',
     ) as HTMLElement | null;
-    expect(notice).not.toBeNull();
-    // review2 M1: the notice must use the translated chainBoard.mapping_hypothesis
-    // (es fixture -> "Hipótesis"), not the developer string in
-    // GP5_FX_PARAMETER_MAPPING_STATUS. Asserts the *actual* text rather
-    // than a length-only check that any non-empty string would pass.
-    expect(notice?.textContent?.trim()).toBe(esTranslations.chainBoard.mapping_hypothesis);
+    expect(footnote).not.toBeNull();
+    expect(footnote?.textContent).toContain('Los números de página');
   });
 
-  it('shows the hypothesis notice (R30) — unknown slot also uses the translated chainBoard.mapping_hypothesis text', () => {
-    // review2 M1: R30 says the notice is shown WHILE the detail panel is
-    // open, with no resolved-only qualifier, so the unknown branch must
-    // also render it.
+  it('shows the v6 muted footnote for an unknown slot too (v6 T17, T18)', () => {
+    // v6: the muted footnote is shown WHILE the detail panel is open,
+    // with no resolved-only qualifier — same coverage as the v5
+    // hypothesis notice had.
     const slot: PresetSlot = {
       moduleType: 'empty',
       enabled: false,
@@ -159,11 +170,18 @@ describe('BlockDetail', () => {
     flushI18n(httpMock);
     fixture.detectChanges();
 
-    const notice = (fixture.nativeElement as HTMLElement).querySelector(
+    const callout = (fixture.nativeElement as HTMLElement).querySelector(
       '[data-testid="mapping-hypothesis"]',
-    ) as HTMLElement | null;
-    expect(notice).not.toBeNull();
-    expect(notice?.textContent?.trim()).toBe(esTranslations.chainBoard.mapping_hypothesis);
+    );
+    expect(callout).toBeNull();
+    const pill = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="detail-unverified-pill"]',
+    );
+    expect(pill).toBeNull();
+    const footnote = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="detail-footnote"]',
+    );
+    expect(footnote).not.toBeNull();
   });
 
   it('shows the unknown-module message and no browse control for an unresolved entry (R31, R32)', () => {
