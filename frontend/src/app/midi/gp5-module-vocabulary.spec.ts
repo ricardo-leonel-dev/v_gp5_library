@@ -176,7 +176,10 @@ describe('describeModuleType against every capture (R10)', () => {
   it.each(GP5_HARDWARE_CAPTURES.map((row) => [`${row.source} block ${row.blockIndex}`, row] as const))(
     '%s',
     (_label, row) => {
-      expect(describeModuleType(row.moduleType)).toEqual({
+      // `displayTitle` / `slotNumber` are set by `decodeModule` for user-slot codes (CAB and
+      // N->S); for every other code they stay absent. `toMatchObject` lets the resolved case
+      // carry those extra optional fields without breaking the canonical-name contract.
+      expect(describeModuleType(row.moduleType)).toMatchObject({
         kind: 'resolved',
         category: row.pedalCategory,
         fxTitle: row.pedalFxTitle,
@@ -193,6 +196,8 @@ describe('decodeModule (R11, R12)', () => {
       kind: 'resolved',
       category: 'CAB',
       fxTitle: 'User IR 1-20',
+      displayTitle: 'User IR 1',
+      slotNumber: 1,
     });
   });
 
@@ -203,6 +208,8 @@ describe('decodeModule (R11, R12)', () => {
       kind: 'resolved',
       category: 'N->S',
       fxTitle: 'User SnapTone',
+      displayTitle: 'User SnapTone 1',
+      slotNumber: 1,
     });
   });
 
@@ -212,8 +219,12 @@ describe('decodeModule (R11, R12)', () => {
     expect(decodeModule(9, 9)).toEqual({ kind: 'raw', cat: 9, fxlow: 9 });
   });
 
-  it('R12: an uncaptured N->S user slot (the unnamed [63,0,0,15]) is raw', () => {
-    expect(decodeModule(0xf, 63)).toEqual({ kind: 'raw', cat: 0xf, fxlow: 63 });
+  it('R12: an N->S code outside both the table and the user-SnapTone range stays raw', () => {
+    // [70, 0, 0, 15] is one past the user-SnapTone range (50..69) and has no capture. It used
+    // to be the boundary case that caught the `catf_fx33` / `catf_fx34` "Empty" reads; the
+    // named NAM ("B5150 3", [50, 0, 0, 15]) still resolves through `GP5_HARDWARE_MODULE_CODES`
+    // and the empty slots [51, 0, 0, 15] / [52, 0, 0, 15] still resolve to N->S / Empty.
+    expect(decodeModule(0xf, 70)).toEqual({ kind: 'raw', cat: 0xf, fxlow: 70 });
   });
 
   it('R12: out-of-table, negative and non-integer inputs are raw without throwing', () => {
@@ -221,6 +232,131 @@ describe('decodeModule (R11, R12)', () => {
     expect(decodeModule(1, 999)).toEqual({ kind: 'raw', cat: 1, fxlow: 999 });
     expect(decodeModule(1, -1)).toEqual({ kind: 'raw', cat: 1, fxlow: -1 });
     expect(decodeModule(7, 4.5)).toEqual({ kind: 'raw', cat: 7, fxlow: 4.5 });
+  });
+});
+
+// Feature 21 — every CAB user-IR code renders the 1-based slot label and `fxTitle` keeps the
+// canonical "User IR 1-20" used by `GP5_FX_CATALOG` and the FX browser (R21.x).
+describe('decodeModule CAB user-IR slots (feature 21)', () => {
+  it.each(
+    Array.from({ length: 20 }, (_, i) => {
+      const slot = i + 1;
+      return [
+          `cata_fx${(0x100000 + i).toString(16)} -> User IR ${slot}`,
+          0xa,
+          0x100000 + i,
+          slot,
+        ] as const;
+    }),
+  )('%s', (_label, cat, fxlow, slot) => {
+    expect(decodeModule(cat, fxlow)).toEqual({
+      kind: 'resolved',
+      category: 'CAB',
+      fxTitle: 'User IR 1-20',
+      displayTitle: `User IR ${slot}`,
+      slotNumber: slot,
+    });
+  });
+});
+
+// Feature 21 — every N->S user-SnapTone code renders the 1-based slot label. The captured
+// slot (`catf_fx32`, fxlow 50) was the only table entry in feature 19; the other 19 codes
+// resolve via `decodeUserSlot` so all 20 user slots show "User SnapTone N" instead of raw.
+// `toMatchObject` lets the test tolerate the table's `catf_fx33` / `catf_fx34` "Empty"
+// overrides (the pedal shows "Empty" for empty user slots, so the table maps those two to
+// fxIndex 0). The slot-label contract is the `displayTitle` + `slotNumber` pair.
+describe('decodeModule N->S user-SnapTone slots (feature 21)', () => {
+  it.each(
+    Array.from({ length: 20 }, (_, i) => {
+      const slot = i + 1;
+      return [
+          `catf_fx${(0x32 + i).toString(16)} -> User SnapTone ${slot}`,
+          0xf,
+          0x32 + i,
+          slot,
+        ] as const;
+    }),
+  )('%s', (_label, cat, fxlow, slot) => {
+    expect(decodeModule(cat, fxlow)).toMatchObject({
+      kind: 'resolved',
+      category: 'N->S',
+      displayTitle: `User SnapTone ${slot}`,
+      slotNumber: slot,
+    });
+  });
+
+  it('captured empty user slots (catf_fx33, catf_fx34) keep the table "Empty" fxTitle', () => {
+    expect(decodeModule(0xf, 0x33)).toMatchObject({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'Empty',
+      displayTitle: 'User SnapTone 2',
+      slotNumber: 2,
+    });
+    expect(decodeModule(0xf, 0x34)).toMatchObject({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'Empty',
+      displayTitle: 'User SnapTone 3',
+      slotNumber: 3,
+    });
+  });
+});
+
+describe('decodeModule user-slot field absence (R21)', () => {
+  it('resolved non-user-slot entries do not carry displayTitle or slotNumber', () => {
+    const result = decodeModule(0, 0);
+    expect(result).toEqual({ kind: 'resolved', category: 'PRE', fxTitle: 'COMP' });
+    expect(result).not.toHaveProperty('displayTitle');
+    expect(result).not.toHaveProperty('slotNumber');
+  });
+
+  it('resolveModuleIndices still returns the canonical pair for user-slot codes', () => {
+    // fxIndex lookup must stay stable: every CAB user-IR slot keeps fxIndex 20, the captured
+    // N->S NAM (`catf_fx32`) keeps fxIndex 51.
+    expect(resolveModuleIndices('cata_fx100005')).toEqual({ categoryIndex: 5, fxIndex: 20 });
+    expect(resolveModuleIndices('catf_fx32')).toEqual({ categoryIndex: 3, fxIndex: 51 });
+    // `catf_fx35..catf_fx45` have no entry in the table — `resolveModuleIndices` only returns
+    // canonical pairs for codes with a table entry.
+    expect(resolveModuleIndices('catf_fx35')).toBeNull();
+  });
+
+  it('describeModuleType propagates displayTitle for user-slot codes', () => {
+    expect(describeModuleType('cata_fx100005')).toEqual({
+      kind: 'resolved',
+      category: 'CAB',
+      fxTitle: 'User IR 1-20',
+      displayTitle: 'User IR 6',
+      slotNumber: 6,
+    });
+    // Captured NAM slot 1 keeps the canonical "User SnapTone" fxTitle.
+    expect(describeModuleType('catf_fx32')).toEqual({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'User SnapTone',
+      displayTitle: 'User SnapTone 1',
+      slotNumber: 1,
+    });
+    // `catf_fx33` is in the table mapping to "Empty" (the pedal's display for an empty
+    // user-slot). The user-slot range still adds `displayTitle` + `slotNumber` so the chain
+    // board / detail panel render the slot label; `fxTitle` stays canonical for the FX
+    // browser lookup.
+    expect(describeModuleType('catf_fx33')).toEqual({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'Empty',
+      displayTitle: 'User SnapTone 2',
+      slotNumber: 2,
+    });
+    // Uncaptured N->S user-slot ranges (no table mapping) still resolve via the user-slot
+    // range so the UI can show the slot number for a NAM the user might import later.
+    expect(describeModuleType('catf_fx35')).toEqual({
+      kind: 'resolved',
+      category: 'N->S',
+      fxTitle: 'User SnapTone',
+      displayTitle: 'User SnapTone 4',
+      slotNumber: 4,
+    });
   });
 });
 

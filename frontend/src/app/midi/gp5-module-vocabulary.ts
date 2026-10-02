@@ -441,18 +441,97 @@ export const GP5_UNCAPTURABLE_FX: readonly (CanonicalModuleIndices & { readonly 
 
 // --- decodeModule ------------------------------------------------------------------------------------
 // Discriminated-union result, mirroring `SysexDecodeResult` in `sysex-preset-codec.ts`.
+//
+// `slotNumber` + `displayTitle` are set for the CAB `[n, 0, 16, 10]` user-IR range and the N->S
+// `[50+n, 0, 0, 15]` user-SnapTone range (feature 21). `fxTitle` stays the canonical index used
+// for `GP5_FX_CATALOG` lookups and the FX browser; `displayTitle` is the English string the UI
+// renders (templates translate it via the `chainBoard.userIrSlot` / `chainBoard.userSnapToneSlot`
+// i18n keys when needed). For everything outside the user-slot ranges, `displayTitle` and
+// `slotNumber` are undefined and the UI falls back to `fxTitle`.
 export type ModuleDescription =
-  | { kind: 'resolved'; category: string; fxTitle: string }
+  | {
+      kind: 'resolved';
+      category: string;
+      fxTitle: string;
+      displayTitle?: string;
+      slotNumber?: number;
+    }
   | { kind: 'raw'; cat: number; fxlow: number };
+
+// CAB user-IR slots: cat = 0xa, fxlow in [0x100000, 0x100013] → slots 1..20. The table carries
+// all 20 entries (each mapped to fxIndex 20 / "User IR 1-20") and `decodeUserSlot` re-derives
+// the 1-based slot number from `fxlow` so `slotNumber` is consistent with the `displayTitle`
+// the chain board and detail panel render.
+const CAB_USER_IR_CAT = 0xa;
+const CAB_USER_IR_FXLOW_MIN = 0x100000;
+const CAB_USER_IR_FXLOW_MAX = 0x100013;
+
+// N->S user-SnapTone slots: cat = 0xf, fxlow in [0x32, 0x45] → slots 1..20. The table only
+// carries the captured slot (`catf_fx32`, fxIndex 51 / "User SnapTone"); the other 19 codes
+// resolve here via `decodeUserSlot` so all 20 user slots get a slot number, not just the one
+// NAM'd file ("B5150 3") captured at feature 19.
+const N_S_USER_SNAPTONE_CAT = 0xf;
+const N_S_USER_SNAPTONE_FXLOW_MIN = 0x32;
+const N_S_USER_SNAPTONE_FXLOW_MAX = 0x45;
+
+interface UserSlotDescription {
+  readonly category: string;
+  readonly fxTitle: string;
+  readonly displayTitle: string;
+  readonly slotNumber: number;
+}
+
+function decodeUserSlot(cat: number, fxlow: number): UserSlotDescription | null {
+  if (cat === CAB_USER_IR_CAT && fxlow >= CAB_USER_IR_FXLOW_MIN && fxlow <= CAB_USER_IR_FXLOW_MAX) {
+    const slotNumber = fxlow - CAB_USER_IR_FXLOW_MIN + 1;
+    return {
+      category: 'CAB',
+      fxTitle: 'User IR 1-20',
+      displayTitle: `User IR ${slotNumber}`,
+      slotNumber,
+    };
+  }
+  if (
+    cat === N_S_USER_SNAPTONE_CAT &&
+    fxlow >= N_S_USER_SNAPTONE_FXLOW_MIN &&
+    fxlow <= N_S_USER_SNAPTONE_FXLOW_MAX
+  ) {
+    const slotNumber = fxlow - N_S_USER_SNAPTONE_FXLOW_MIN + 1;
+    return {
+      category: 'N->S',
+      fxTitle: 'User SnapTone',
+      displayTitle: `User SnapTone ${slotNumber}`,
+      slotNumber,
+    };
+  }
+  return null;
+}
 
 export function decodeModule(cat: number, fxlow: number): ModuleDescription {
   const indices = GP5_HARDWARE_MODULE_CODES.get(`cat${cat.toString(16)}_fx${fxlow.toString(16)}`);
-  if (!indices) return { kind: 'raw', cat, fxlow };
-  return {
-    kind: 'resolved',
-    category: GP5_MODULE_CATEGORIES[indices.categoryIndex],
-    fxTitle: GP5_MODULE_FX_TITLES[indices.categoryIndex][indices.fxIndex],
-  };
+  if (indices) {
+    const userSlot = decodeUserSlot(cat, fxlow);
+    return {
+      kind: 'resolved',
+      category: GP5_MODULE_CATEGORIES[indices.categoryIndex],
+      fxTitle: GP5_MODULE_FX_TITLES[indices.categoryIndex][indices.fxIndex],
+      ...(userSlot ? { displayTitle: userSlot.displayTitle, slotNumber: userSlot.slotNumber } : {}),
+    };
+  }
+  // Codes outside `GP5_HARDWARE_MODULE_CODES` but inside a user-slot range (e.g. uncaptured
+  // N->S user-SnapTone slots) still resolve to the user-slot display so the UI can show the
+  // slot number. Codes outside both fall through to the existing raw fallback.
+  const userSlot = decodeUserSlot(cat, fxlow);
+  if (userSlot) {
+    return {
+      kind: 'resolved',
+      category: userSlot.category,
+      fxTitle: userSlot.fxTitle,
+      displayTitle: userSlot.displayTitle,
+      slotNumber: userSlot.slotNumber,
+    };
+  }
+  return { kind: 'raw', cat, fxlow };
 }
 
 // --- parseModuleType -----------------------------------------------------------------------------
@@ -485,9 +564,17 @@ export function resolveModuleIndices(moduleType: string): CanonicalModuleIndices
 
 // --- describeModuleType --------------------------------------------------------------------------
 // `parseModuleType` + `decodeModule`. Both failure paths (unparseable string, or a code with no table
-// entry) return the original string so callers need only one fallback branch.
+// entry) return the original string so callers need only one fallback branch. Resolved entries
+// propagate `displayTitle` + `slotNumber` so user-slot codes (`cata_fx10000x`, `catf_fx3[2-9a-f]`)
+// reach the UI with the right slot label without re-deriving it from `moduleType`.
 export type DescribedModuleType =
-  | { kind: 'resolved'; category: string; fxTitle: string }
+  | {
+      kind: 'resolved';
+      category: string;
+      fxTitle: string;
+      displayTitle?: string;
+      slotNumber?: number;
+    }
   | { kind: 'raw'; moduleType: string };
 
 export function describeModuleType(moduleType: string): DescribedModuleType {

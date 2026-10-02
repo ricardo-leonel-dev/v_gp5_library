@@ -31,6 +31,7 @@ interface ResolvedDetail {
   categoryIndex: number;
   fxIndex: number;
   fxTitle: string;
+  slotNumber?: number;
   blockStyle: string;
   parameters: ReturnType<typeof describeParameters>;
   showBrowser: boolean;
@@ -81,6 +82,7 @@ export class BlockDetail {
         categoryIndex,
         fxIndex,
         fxTitle: desc.fxTitle,
+        ...(desc.slotNumber !== undefined ? { slotNumber: desc.slotNumber } : {}),
         blockStyle: categoryStyle(categoryIndex),
         parameters,
         showBrowser: categoryIndex >= 0 && fxIndex >= 0,

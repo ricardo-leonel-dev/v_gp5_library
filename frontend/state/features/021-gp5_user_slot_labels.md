@@ -2,9 +2,9 @@
 feature_number: 21
 name: gp5_user_slot_labels
 title: Mostrar el número de slot en User IR y User SnapTone
-status: pending
+status: done
 created_at: 2026-09-30T06:50:40.000Z
-updated_at: 2026-09-30T06:50:51.000Z
+updated_at: 2026-10-02T17:56:19.000Z
 ---
 
 ## Description

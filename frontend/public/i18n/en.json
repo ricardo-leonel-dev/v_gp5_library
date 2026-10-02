@@ -67,6 +67,8 @@
     "unknown": "Unrecognized",
     "unknown_short": "?",
     "unknown_module": "This module couldn't be identified. Its raw values are shown below.",
+    "userIrSlot": "User IR {{slot}}",
+    "userSnapToneSlot": "User SnapTone {{slot}}",
     "mapping_hypothesis": "Parameter names come from the manual and haven't been checked on the pedal yet, so they may not match its knobs.",
     "manual_page": "Manual p. {{page}}",
     "parameters": "Parameters",

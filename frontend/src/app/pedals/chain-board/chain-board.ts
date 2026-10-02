@@ -87,6 +87,7 @@ export class ChainBoard {
               categoryIndex: view.categoryIndex,
               categoryCode: view.categoryCode,
               fxTitle: view.fxTitle,
+              ...(view.slotNumber !== undefined ? { slotNumber: view.slotNumber } : {}),
             }
           : null;
       return { view, isSelected, blockCls, ledCls, resolved };

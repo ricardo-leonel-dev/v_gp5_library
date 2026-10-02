@@ -133,3 +133,49 @@ describe('toChainBlockView (R16, R19)', () => {
     expect(view.enabled).toBe(true);
   });
 });
+
+describe('toChainBlockView slot number (feature 21)', () => {
+  it('propagates slotNumber for a CAB user-IR slot (cata_fx100005 = slot 6)', () => {
+    const view = toChainBlockView(
+      { moduleType: 'cata_fx100005', enabled: true, parameters: {} },
+      0,
+    );
+    expect(view.kind).toBe('resolved');
+    if (view.kind !== 'resolved') return;
+    expect(view.fxTitle).toBe('User IR 1-20');
+    expect(view.slotNumber).toBe(6);
+  });
+
+  it('propagates slotNumber for the captured N->S user-SnapTone slot (catf_fx32 = slot 1)', () => {
+    const view = toChainBlockView(
+      { moduleType: 'catf_fx32', enabled: true, parameters: {} },
+      0,
+    );
+    expect(view.kind).toBe('resolved');
+    if (view.kind !== 'resolved') return;
+    expect(view.fxTitle).toBe('User SnapTone');
+    expect(view.slotNumber).toBe(1);
+  });
+
+  it('propagates slotNumber for an uncaptured N->S user-SnapTone slot (catf_fx35 = slot 4)', () => {
+    const view = toChainBlockView(
+      { moduleType: 'catf_fx35', enabled: true, parameters: {} },
+      0,
+    );
+    expect(view.kind).toBe('resolved');
+    if (view.kind !== 'resolved') return;
+    expect(view.fxTitle).toBe('User SnapTone');
+    expect(view.slotNumber).toBe(4);
+  });
+
+  it('leaves slotNumber absent for non-user-slot resolved entries', () => {
+    const view = toChainBlockView(
+      { moduleType: 'cat0_fx0', enabled: true, parameters: {} },
+      0,
+    );
+    expect(view.kind).toBe('resolved');
+    if (view.kind !== 'resolved') return;
+    expect(view.slotNumber).toBeUndefined();
+    expect(view.fxTitle).toBe('COMP');
+  });
+});

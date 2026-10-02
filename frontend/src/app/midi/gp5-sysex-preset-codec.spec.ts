@@ -583,7 +583,7 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
       category: 'MOD',
       fxTitle: 'Bias Trem',
     });
-    expect(describeModuleType(chain[3].moduleType)).toEqual({
+    expect(describeModuleType(chain[3].moduleType)).toMatchObject({
       kind: 'resolved',
       category: 'N->S',
       fxTitle: 'Empty',
