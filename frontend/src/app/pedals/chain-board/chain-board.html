@@ -32,7 +32,13 @@
           [attr.aria-pressed]="block.isSelected ? 'true' : 'false'"
           [attr.aria-label]="t('chainBoard.block_aria', {
             category: block.view.kind === 'resolved' ? displayCategoryCode(block.view.categoryCode) : t('chainBoard.unknown_short'),
-            fx: block.view.kind === 'resolved' ? block.view.fxTitle : t('chainBoard.unknown'),
+            fx: block.view.kind === 'resolved'
+              ? (block.view.slotNumber !== undefined
+                  ? (block.view.categoryCode === 'CAB'
+                      ? t('chainBoard.userIrSlot', { slot: block.view.slotNumber })
+                      : t('chainBoard.userSnapToneSlot', { slot: block.view.slotNumber }))
+                  : block.view.fxTitle)
+              : t('chainBoard.unknown'),
             state: t(block.view.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off'),
           })"
           (click)="onBlockClick(block.view.position)"
@@ -191,7 +197,7 @@
             <div class="absolute inset-x-1 bottom-1 z-10 flex flex-col items-center text-center">
               <app-pedal-glyph [categoryIndex]="r.categoryIndex" svgClass="size-4" />
               <span class="mt-0.5 text-xs font-bold leading-none tracking-tight">{{ displayCategoryCode(r.categoryCode) }}</span>
-              <span class="mt-0.5 w-full text-[10px] leading-tight line-clamp-2 break-words">{{ r.fxTitle }}</span>
+              <span class="mt-0.5 w-full text-[10px] leading-tight line-clamp-2 break-words">{{ r.slotNumber !== undefined ? (r.categoryCode === 'CAB' ? t('chainBoard.userIrSlot', { slot: r.slotNumber }) : t('chainBoard.userSnapToneSlot', { slot: r.slotNumber })) : r.fxTitle }}</span>
               <svg data-footswitch viewBox="0 0 12 12" class="mt-0.5 size-3" aria-hidden="true">
                 <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5"/>
                 <circle cx="6" cy="6" r="2.5" fill="currentColor" fill-opacity="0.8"/>

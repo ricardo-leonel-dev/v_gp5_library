@@ -67,6 +67,8 @@
     "unknown": "No reconocido",
     "unknown_short": "?",
     "unknown_module": "No se pudo identificar este módulo. Abajo están sus valores sin procesar.",
+    "userIrSlot": "IR de usuario {{slot}}",
+    "userSnapToneSlot": "SnapTone de usuario {{slot}}",
     "mapping_hypothesis": "Los nombres de los parámetros vienen del manual y aún no se han comprobado en el pedal, así que podrían no coincidir con sus perillas.",
     "manual_page": "Manual p. {{page}}",
     "parameters": "Parámetros",

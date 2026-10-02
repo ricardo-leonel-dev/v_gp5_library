@@ -18,6 +18,7 @@ export type ChainBlockView =
       categoryCode: string;
       fxIndex: number;
       fxTitle: string;
+      slotNumber?: number;
       enabled: boolean;
       style: string;
     }
@@ -40,6 +41,7 @@ export function toChainBlockView(slot: PresetSlot, position: number): ChainBlock
       categoryCode: description.category,
       fxIndex,
       fxTitle: description.fxTitle,
+      ...(description.slotNumber !== undefined ? { slotNumber: description.slotNumber } : {}),
       enabled: slot.enabled,
       style: categoryStyle(categoryIndex),
     };

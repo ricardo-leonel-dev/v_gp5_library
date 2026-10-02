@@ -16,7 +16,7 @@
       @if (resolved(); as v) {
         <div class="min-w-0 flex-1">
           <p class="text-base font-semibold text-slate-900 dark:text-slate-100">
-            {{ v.fxTitle }}
+            {{ v.slotNumber !== undefined ? (v.category === 'CAB' ? t('chainBoard.userIrSlot', { slot: v.slotNumber }) : t('chainBoard.userSnapToneSlot', { slot: v.slotNumber })) : v.fxTitle }}
           </p>
           <p class="text-sm text-slate-500">{{ t('chainBoard.categories.c' + v.categoryIndex) }}</p>
         </div>
