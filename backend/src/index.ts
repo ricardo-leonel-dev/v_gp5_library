@@ -3,6 +3,8 @@ import { getDb } from "./db/client";
 import { type AuthVariables } from "./middleware/require-auth";
 import { protectedRouter } from "./middleware/protected-router";
 import { createCorsMiddleware } from "./middleware/cors";
+import { jsonNotFound } from "./middleware/not-found";
+import { createUnknownRouteGuard } from "./middleware/unknown-route-guard";
 import { resolveAllowedOrigins } from "./config/stage";
 import { register, login, getMe, AuthError } from "./auth/user-service";
 import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
@@ -18,6 +20,8 @@ import {
 
 const app = new Hono<{ Variables: AuthVariables }>();
 app.use("*", createCorsMiddleware(resolveAllowedOrigins()));
+app.use("*", createUnknownRouteGuard(() => app.routes));
+app.notFound(jsonNotFound);
 
 app.get("/health", async (c) => {
   try {
