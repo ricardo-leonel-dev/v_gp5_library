@@ -2,9 +2,9 @@
 feature_number: 16
 name: plan_management_admin
 title: Plan management: admin role and plan change endpoint
-status: pending
+status: done
 created_at: 2026-10-03T21:05:52.000Z
-updated_at: 2026-10-03T21:05:54.000Z
+updated_at: 2026-10-03T21:56:08.000Z
 ---
 
 ## Description
