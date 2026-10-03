@@ -21,6 +21,8 @@ untouched so a soft-deleted song could still be restored. A future purge/hard-de
 one, would be the place to actually reclaim that space.
 
 ## R1
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** `POST /songs` now accepts 1..N `preset` files instead of exactly one.
+
 WHEN an authenticated `POST /songs` request includes a `name` field and exactly one `preset` file, the
 system SHALL create a `songs` row owned by `c.get('userId')`, a `song_files` row of `kind = 'preset'`
 referencing it, and SHALL respond with HTTP 201 containing the created song and its files.
@@ -30,6 +32,8 @@ IF a `POST /songs` request omits the `name` field or the field is an empty strin
 respond with HTTP 400 and SHALL NOT create any `songs` or `song_files` row.
 
 ## R3
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** the 400 now applies only when no `preset` file is sent.
+
 IF a `POST /songs` request does not include exactly one `preset` file THEN the system SHALL respond
 with HTTP 400 and SHALL NOT create any `songs` or `song_files` row.
 
@@ -65,10 +69,14 @@ WHEN a `POST /songs` request omits the `extra_config` field, the system SHALL st
 object (`{}`) as the created song's `extra_config`.
 
 ## R11
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** `pedal_preset_name` is no longer a form field (it is ignored if sent) and the song-level column is removed; each preset's name is read from its `.prst` bytes and stored on the preset row. `artist` is unchanged. See `specs/multiple_presets_per_song/`.
+
 WHERE a `POST /songs` request includes an `artist` and/or `pedal_preset_name` field, the system SHALL
 store each provided value on the corresponding column of the created song.
 
 ## R12
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** `pedal_preset_name` no longer applies (song-level column removed); only `artist` is stored as NULL when omitted.
+
 WHEN a `POST /songs` request omits the `artist` and/or `pedal_preset_name` field, the system SHALL
 store NULL for each omitted column.
 
@@ -86,6 +94,8 @@ WHEN `GET /songs` is requested, the system SHALL respond with HTTP 200 and a JSO
 `songs` rows where `user_id = c.get('userId')` and `deleted_at IS NULL`.
 
 ## R16
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** preset rows are no longer listed in `files` (which keeps ir/nam/cover); presets are returned in the new `presets` array ordered by `sort_order`.
+
 WHEN `GET /songs/:id` is requested for an existing, non-soft-deleted song owned by the requester, the
 system SHALL respond with HTTP 200 with that song's fields and its non-soft-deleted `song_files` rows
 ordered by `kind` then `sort_order`.

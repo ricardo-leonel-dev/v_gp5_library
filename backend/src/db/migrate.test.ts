@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getDb } from "./client";
 import { migrate } from "./migrate";
+
+async function insertSong(db: ReturnType<typeof getDb>): Promise<{ id: string }> {
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const [user] = await db<{ id: string }[]>`
+    INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+  `;
+  const [song] = await db<{ id: string }[]>`
+    INSERT INTO songs (user_id, name) VALUES (${user.id}, 'Test Song') RETURNING id
+  `;
+  return song;
+}
 
 describe("migrate", () => {
   test("running migrate twice is a no-op the second time (R2, R3, R4)", async () => {
@@ -14,6 +25,7 @@ describe("migrate", () => {
       "0001_init.sql",
       "0002_audit_columns.sql",
       "0003_song_files_ordering.sql",
+      "0004_multiple_presets_per_song.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -59,18 +71,85 @@ describe("migrate", () => {
     expect(col.column_default).toContain("0");
   });
 
-  test("a second active preset song_files row for the same song is rejected (R10, R11)", async () => {
+  test("songs has no pedal_preset_name column after migration 0004 (multiple_presets_per_song R1)", async () => {
     const db = getDb();
-    const email = `test-${crypto.randomUUID()}@example.com`;
-    const [user] = await db<{ id: string }[]>`
-      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    const rows = await db<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'songs' AND column_name = 'pedal_preset_name'
     `;
-    const [song] = await db<{ id: string }[]>`
-      INSERT INTO songs (user_id, name) VALUES (${user.id}, 'Test Song') RETURNING id
+    expect(rows).toHaveLength(0);
+  });
+
+  test("song_files.pedal_preset_name is a nullable VARCHAR(255) with no default (multiple_presets_per_song R2)", async () => {
+    const db = getDb();
+    const [col] = await db<
+      {
+        data_type: string;
+        character_maximum_length: number;
+        is_nullable: string;
+        column_default: string | null;
+      }[]
+    >`
+      SELECT data_type, character_maximum_length, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_name = 'song_files' AND column_name = 'pedal_preset_name'
+    `;
+    expect(col.data_type).toBe("character varying");
+    expect(col.character_maximum_length).toBe(255);
+    expect(col.is_nullable).toBe("YES");
+    expect(col.column_default).toBeNull();
+  });
+
+  test("re-executing the 0004 SQL on an already-migrated database does not throw (multiple_presets_per_song R3)", async () => {
+    const db = getDb();
+    const sql = await readFile(
+      path.join(import.meta.dir, "migrations", "0004_multiple_presets_per_song.sql"),
+      "utf8",
+    );
+    await db.unsafe(sql);
+    await db.unsafe(sql);
+
+    const [idx] = await db<{ indexname: string }[]>`
+      SELECT indexname FROM pg_indexes
+      WHERE tablename = 'song_files' AND indexname = 'idx_song_files_preset_sort_order'
+    `;
+    expect(idx.indexname).toBe("idx_song_files_preset_sort_order");
+    const old = await db<{ indexname: string }[]>`
+      SELECT indexname FROM pg_indexes
+      WHERE tablename = 'song_files' AND indexname = 'idx_song_files_one_preset_per_song'
+    `;
+    expect(old).toHaveLength(0);
+  });
+
+  test("two active preset rows with different sort_order for the same song are accepted (multiple_presets_per_song R4)", async () => {
+    const db = getDb();
+    const song = await insertSong(db);
+    await db`
+      INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size, sort_order, pedal_preset_name)
+      VALUES (${song.id}, 'preset', 'k1', 'a.prst', 'application/octet-stream', 10, 0, 'A')
     `;
     await db`
-      INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size)
-      VALUES (${song.id}, 'preset', 'k1', 'a.syx', 'application/octet-stream', 10)
+      INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size, sort_order, pedal_preset_name)
+      VALUES (${song.id}, 'preset', 'k2', 'b.prst', 'application/octet-stream', 10, 1, 'B')
+    `;
+
+    const rows = await db<{ sort_order: number; pedal_preset_name: string }[]>`
+      SELECT sort_order, pedal_preset_name FROM song_files
+      WHERE song_id = ${song.id} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order ASC
+    `;
+    expect(rows.map((r) => [r.sort_order, r.pedal_preset_name])).toEqual([
+      [0, "A"],
+      [1, "B"],
+    ]);
+  });
+
+  test("a second active preset row with the same sort_order is rejected (multiple_presets_per_song R5; supersedes songs_schema_migrations R10, R11)", async () => {
+    const db = getDb();
+    const song = await insertSong(db);
+    await db`
+      INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size, sort_order)
+      VALUES (${song.id}, 'preset', 'k1', 'a.prst', 'application/octet-stream', 10, 0)
     `;
 
     // Bun.sql's tagged-template result is a `Query` thenable; bun:test's
@@ -80,10 +159,32 @@ describe("migrate", () => {
     await expect(
       Promise.resolve(
         db`
-          INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size)
-          VALUES (${song.id}, 'preset', 'k2', 'b.syx', 'application/octet-stream', 10)
+          INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size, sort_order)
+          VALUES (${song.id}, 'preset', 'k2', 'b.prst', 'application/octet-stream', 10, 0)
         `,
       ),
+    ).rejects.toThrow();
+  });
+
+  test("a non-preset row with a non-NULL pedal_preset_name is rejected on INSERT and UPDATE (multiple_presets_per_song R6)", async () => {
+    const db = getDb();
+    const song = await insertSong(db);
+
+    await expect(
+      Promise.resolve(
+        db`
+          INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size, pedal_preset_name)
+          VALUES (${song.id}, 'ir', 'k1', 'a.wav', 'audio/wav', 10, 'Nope')
+        `,
+      ),
+    ).rejects.toThrow();
+
+    const [ir] = await db<{ id: string }[]>`
+      INSERT INTO song_files (song_id, kind, storage_key, original_filename, mime_type, byte_size)
+      VALUES (${song.id}, 'ir', 'k2', 'b.wav', 'audio/wav', 10) RETURNING id
+    `;
+    await expect(
+      Promise.resolve(db`UPDATE song_files SET pedal_preset_name = 'Nope' WHERE id = ${ir.id}`),
     ).rejects.toThrow();
   });
 
