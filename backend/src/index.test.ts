@@ -975,10 +975,10 @@ describe("PATCH /admin/users/:id/plan (plan_management_admin)", () => {
     const res = await patchPlan(admin.token, unknown, JSON.stringify({ plan: "basic" }));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "user not found" });
-    const [{ c }] = await getDb()<{ c: number }[]>`
+    const [row] = await getDb()<{ c: number }[]>`
       SELECT COUNT(*)::int AS c FROM plan_changes WHERE user_id = ${unknown}
     `;
-    expect(c).toBe(0);
+    expect(row!.c).toBe(0);
 
     const target = await makeUserToken("admin-deleted", "free");
     await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${target.userId}`;

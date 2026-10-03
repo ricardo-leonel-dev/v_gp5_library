@@ -12,7 +12,7 @@ export interface PublicUser {
   role: Role;
 }
 
-type UserRow = { id: string; email: string; plan: string; role: string };
+export type UserRow = { id: string; email: string; plan: string; role: string };
 
 export class AuthError extends Error {
   constructor(message: string, public readonly status: 400 | 401 | 409) {

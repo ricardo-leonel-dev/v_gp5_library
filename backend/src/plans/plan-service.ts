@@ -1,5 +1,5 @@
 import type { SQL } from "bun";
-import { toPublicUser, type PublicUser } from "../auth/user-service";
+import { toPublicUser, type PublicUser, type UserRow } from "../auth/user-service";
 import { getDb } from "../db/client";
 import { isUuid } from "../db/uuid";
 
@@ -97,8 +97,6 @@ export async function getPlanSummary(userId: string): Promise<PlanSummaryDto> {
     usage: { songs: await countLiveSongs(db, userId) },
   };
 }
-
-type UserRow = { id: string; email: string; plan: string; role: string };
 
 // The only code that writes users.plan. The plan change and its audit row are
 // one transaction; FOR UPDATE makes old_plan exact under concurrent changes.
