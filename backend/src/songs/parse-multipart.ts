@@ -24,7 +24,6 @@ export async function parseCreateSongMultipart(
   return {
     name: toStringField(body.name),
     artist: toStringField(body.artist),
-    pedalPresetName: toStringField(body.pedal_preset_name),
     extraConfig: toStringField(body.extra_config),
     preset: await toUploadedFiles(body.preset),
     ir: await toUploadedFiles(body.ir),

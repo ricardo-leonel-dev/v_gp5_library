@@ -2,6 +2,7 @@ import { getDb } from "../db/client";
 import type { SQL } from "bun";
 import { getStorage } from "../storage";
 import type { StorageAdapter } from "../storage/adapter";
+import { readPresetName } from "./prst-name";
 
 export class SongError extends Error {
   constructor(message: string, public readonly status: 400 | 402 | 404) {
@@ -18,7 +19,6 @@ export interface UploadedFile {
 export interface CreateSongInput {
   name?: string;
   artist?: string;
-  pedalPresetName?: string;
   extraConfig?: string;
   preset: UploadedFile[];
   ir: UploadedFile[];
@@ -36,14 +36,24 @@ export interface SongFileDto {
   createdAt: string;
 }
 
+export interface SongPresetDto {
+  id: string;
+  sortOrder: number;
+  name: string;
+  originalFilename: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+}
+
 export interface SongDto {
   id: string;
   name: string;
   artist: string | null;
-  pedalPresetName: string | null;
   extraConfig: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  presets: SongPresetDto[];
 }
 
 export interface SongWithFilesDto extends SongDto {
@@ -94,23 +104,46 @@ function parseExtraConfig(raw: unknown): Record<string, unknown> {
   return {};
 }
 
-function toSongDto(row: {
+interface SongRow {
   id: string;
   name: string;
   artist: string | null;
-  pedal_preset_name: string | null;
   extra_config: unknown;
   created_at: string | Date;
   updated_at: string | Date;
-}): SongDto {
+}
+
+interface SongPresetRow {
+  id: string;
+  sort_order: number;
+  pedal_preset_name: string;
+  original_filename: string;
+  mime_type: string;
+  byte_size: number;
+  created_at: string | Date;
+}
+
+function toSongDto(row: SongRow, presets: SongPresetDto[]): SongDto {
   return {
     id: row.id,
     name: row.name,
     artist: row.artist,
-    pedalPresetName: row.pedal_preset_name,
     extraConfig: parseExtraConfig(row.extra_config),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    presets,
+  };
+}
+
+function toSongPresetDto(row: SongPresetRow): SongPresetDto {
+  return {
+    id: row.id,
+    sortOrder: row.sort_order,
+    name: row.pedal_preset_name,
+    originalFilename: row.original_filename,
+    mimeType: row.mime_type,
+    byteSize: row.byte_size,
+    createdAt: String(row.created_at),
   };
 }
 
@@ -142,8 +175,8 @@ export async function createSong(
   if (!input.name || input.name.trim() === "") {
     throw new SongError("name is required", 400);
   }
-  if (input.preset.length !== 1) {
-    throw new SongError("exactly one preset file is required", 400);
+  if (input.preset.length === 0) {
+    throw new SongError("at least one preset file is required", 400);
   }
   if (input.cover.length > 1) {
     throw new SongError("at most one cover file is allowed", 400);
@@ -173,6 +206,15 @@ export async function createSong(
     extraConfig = parsed as Record<string, unknown>;
   }
 
+  const namedPresets: { source: UploadedFile; name: string }[] = [];
+  for (const [i, preset] of input.preset.entries()) {
+    const name = readPresetName(preset.bytes);
+    if (name === null) {
+      throw new SongError(`preset file at position ${i} has no readable GP-5 preset name`, 400);
+    }
+    namedPresets.push({ source: preset, name });
+  }
+
   const db: SQL = getDb();
 
   const [userRow] = await db<{ plan: string }[]>`SELECT plan FROM users WHERE id = ${userId}`;
@@ -198,20 +240,23 @@ export async function createSong(
     kind: "preset" | "ir" | "nam" | "cover";
     source: UploadedFile;
     sortOrder: number;
+    pedalPresetName: string | null;
   }[] = [
-    {
+    ...namedPresets.map((p, i) => ({
       fileId: crypto.randomUUID(),
       storageKey: `songs/${songId}/${crypto.randomUUID()}`,
-      kind: "preset",
-      source: input.preset[0],
-      sortOrder: 0,
-    },
+      kind: "preset" as const,
+      source: p.source,
+      sortOrder: i,
+      pedalPresetName: p.name,
+    })),
     ...input.ir.map((f, i) => ({
       fileId: crypto.randomUUID(),
       storageKey: `songs/${songId}/${crypto.randomUUID()}`,
       kind: "ir" as const,
       source: f,
       sortOrder: i,
+      pedalPresetName: null,
     })),
     ...input.nam.map((f, i) => ({
       fileId: crypto.randomUUID(),
@@ -219,6 +264,7 @@ export async function createSong(
       kind: "nam" as const,
       source: f,
       sortOrder: i,
+      pedalPresetName: null,
     })),
     ...(input.cover[0]
       ? [
@@ -228,6 +274,7 @@ export async function createSong(
             kind: "cover" as const,
             source: input.cover[0],
             sortOrder: 0,
+            pedalPresetName: null,
           },
         ]
       : []),
@@ -237,16 +284,15 @@ export async function createSong(
 
   const result = await db.begin(async (tx) => {
     const [songRow] = await tx`
-      INSERT INTO songs (id, user_id, name, artist, pedal_preset_name, extra_config)
+      INSERT INTO songs (id, user_id, name, artist, extra_config)
       VALUES (
         ${songId},
         ${userId},
         ${input.name},
         ${input.artist ?? null},
-        ${input.pedalPresetName ?? null},
         ${JSON.stringify(extraConfig)}::jsonb
       )
-      RETURNING id, name, artist, pedal_preset_name, extra_config, created_at, updated_at
+      RETURNING id, name, artist, extra_config, created_at, updated_at
     `;
 
     const fileRows: Array<{
@@ -256,11 +302,15 @@ export async function createSong(
       mime_type: string;
       byte_size: number;
       sort_order: number;
+      pedal_preset_name: string | null;
       created_at: string;
     }> = [];
     for (const f of filesToCreate) {
       const [fileRow] = await tx`
-        INSERT INTO song_files (id, song_id, kind, storage_key, original_filename, mime_type, byte_size, sort_order)
+        INSERT INTO song_files (
+          id, song_id, kind, storage_key, original_filename, mime_type, byte_size, sort_order,
+          pedal_preset_name
+        )
         VALUES (
           ${f.fileId},
           ${songId},
@@ -269,9 +319,11 @@ export async function createSong(
           ${f.source.filename},
           ${f.source.mimeType},
           ${f.source.bytes.byteLength},
-          ${f.sortOrder}
+          ${f.sortOrder},
+          ${f.pedalPresetName}
         )
-        RETURNING id, kind, original_filename, mime_type, byte_size, sort_order, created_at
+        RETURNING id, kind, original_filename, mime_type, byte_size, sort_order, pedal_preset_name,
+          created_at
       `;
       fileRows.push(fileRow as (typeof fileRows)[number]);
     }
@@ -279,19 +331,38 @@ export async function createSong(
     return { songRow, fileRows };
   });
 
-  const songDto = toSongDto(result.songRow as Parameters<typeof toSongDto>[0]);
-  const files = (result.fileRows as Parameters<typeof toSongFileDto>[0][]).map(toSongFileDto);
+  const presets = result.fileRows
+    .filter((r) => r.kind === "preset")
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((r) => toSongPresetDto(r as SongPresetRow));
+  const files = result.fileRows.filter((r) => r.kind !== "preset").map(toSongFileDto);
 
-  return { ...songDto, files };
+  return { ...toSongDto(result.songRow as SongRow, presets), files };
 }
 
 export async function listSongs(userId: string): Promise<SongDto[]> {
   const db: SQL = getDb();
-  const rows = await db<Parameters<typeof toSongDto>[0][]>`SELECT id, name, artist, pedal_preset_name, extra_config, created_at, updated_at
+  const rows = await db<SongRow[]>`SELECT id, name, artist, extra_config, created_at, updated_at
     FROM songs
     WHERE user_id = ${userId} AND deleted_at IS NULL
     ORDER BY created_at DESC`;
-  return rows.map((r) => toSongDto(r as Parameters<typeof toSongDto>[0]));
+
+  const presetRows = await db<(SongPresetRow & { song_id: string })[]>`
+    SELECT sf.song_id, sf.id, sf.sort_order, sf.pedal_preset_name, sf.original_filename,
+           sf.mime_type, sf.byte_size, sf.created_at
+    FROM song_files sf JOIN songs s ON s.id = sf.song_id
+    WHERE s.user_id = ${userId} AND s.deleted_at IS NULL
+      AND sf.kind = 'preset' AND sf.deleted_at IS NULL
+    ORDER BY sf.song_id, sf.sort_order ASC`;
+
+  const presetsBySong = new Map<string, SongPresetDto[]>();
+  for (const row of presetRows) {
+    const list = presetsBySong.get(row.song_id) ?? [];
+    list.push(toSongPresetDto(row));
+    presetsBySong.set(row.song_id, list);
+  }
+
+  return rows.map((r) => toSongDto(r, presetsBySong.get(r.id) ?? []));
 }
 
 export async function getSongById(
@@ -303,7 +374,7 @@ export async function getSongById(
   }
 
   const db: SQL = getDb();
-  const songRows = await db<Parameters<typeof toSongDto>[0][]>`SELECT id, name, artist, pedal_preset_name, extra_config, created_at, updated_at
+  const songRows = await db<SongRow[]>`SELECT id, name, artist, extra_config, created_at, updated_at
     FROM songs
     WHERE id = ${songId} AND user_id = ${userId} AND deleted_at IS NULL`;
 
@@ -311,12 +382,17 @@ export async function getSongById(
     throw new SongError("song not found", 404);
   }
 
+  const presetRows = await db<SongPresetRow[]>`SELECT id, sort_order, pedal_preset_name, original_filename, mime_type, byte_size, created_at
+    FROM song_files
+    WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+    ORDER BY sort_order ASC`;
+
   const fileRows = await db<Parameters<typeof toSongFileDto>[0][]>`SELECT id, kind, original_filename, mime_type, byte_size, sort_order, created_at
     FROM song_files
-    WHERE song_id = ${songId} AND deleted_at IS NULL
+    WHERE song_id = ${songId} AND kind <> 'preset' AND deleted_at IS NULL
     ORDER BY kind ASC, sort_order ASC`;
 
-  const song = toSongDto(songRows[0] as Parameters<typeof toSongDto>[0]);
+  const song = toSongDto(songRows[0] as SongRow, presetRows.map(toSongPresetDto));
   const files = fileRows.map((r) => toSongFileDto(r as Parameters<typeof toSongFileDto>[0]));
   return { ...song, files };
 }

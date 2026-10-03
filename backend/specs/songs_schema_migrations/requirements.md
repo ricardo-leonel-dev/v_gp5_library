@@ -57,11 +57,15 @@ The system SHALL add a `sort_order` column (`INTEGER NOT NULL DEFAULT 0`) to `so
 file's position within a song's signal chain.
 
 ## R10
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** a song may now have several active presets; the constraint becomes "active preset `sort_order` is unique per `song_id`" (migration `0004`).
+
 The system SHALL enforce, via a database constraint, that a given `song_id` has at most one
 `song_files` row with `kind = 'preset'` AND `deleted_at IS NULL` — i.e. the constraint applies only to
 non-soft-deleted rows, so a soft-deleted preset row never blocks inserting its replacement (R8).
 
 ## R11
+> **Superseded in part by `multiple_presets_per_song` (feature 15):** inserting a second active preset is now allowed; only a duplicate active preset `sort_order` for the same `song_id` is rejected.
+
 IF an INSERT attempts to add a second non-soft-deleted `song_files` row with `kind = 'preset'` for a
 `song_id` that already has one non-soft-deleted `kind = 'preset'` row THEN the system SHALL reject the
 insert with a constraint-violation error.

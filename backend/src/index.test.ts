@@ -2,10 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { getDb } from "./db/client";
 import { issueToken } from "./auth/jwt";
 import { MAX_EXTRA_CONFIG_BYTES } from "./songs/song-service";
+import { loadFixture, PRESET_FIXTURES } from "./songs/fixtures";
 import { resolveAllowedOrigins } from "./config/stage";
 import app from "./index";
 
 const allowedOrigin = resolveAllowedOrigins()[0];
+
+const fixtureBytes = await Promise.all(PRESET_FIXTURES.map((f) => loadFixture(f.file)));
+
+function presetPart(index = 0, filename = "p.prst"): File {
+  return new File([new Uint8Array(fixtureBytes[index]!)], filename, {
+    type: "application/octet-stream",
+  });
+}
 
 describe("GET /health", () => {
   test("reports ok when the DB is reachable", async () => {
@@ -25,7 +34,7 @@ describe("GET /songs/:id/files/:kind (R1, R2, R3, R4)", () => {
     `;
     const token = await issueToken(user.id, "free");
 
-    const presetBytes = new Uint8Array([42, 43, 44, 45]);
+    const presetBytes = new Uint8Array(fixtureBytes[0]!);
     const irZeroBytes = new Uint8Array([100, 101]);
     const irOneBytes = new Uint8Array([200, 201, 202]);
 
@@ -413,10 +422,7 @@ describe("POST /songs then GET /songs/:id extra_config round-trip (R2)", () => {
     const fd = new FormData();
     fd.append("name", "Round trip E2E");
     fd.append("extra_config", JSON.stringify(original));
-    fd.append(
-      "preset",
-      new File([new Uint8Array([4, 5, 6])], "p.syx", { type: "application/octet-stream" }),
-    );
+    fd.append("preset", presetPart());
 
     const createRes = await app.request("/songs", {
       method: "POST",
@@ -449,10 +455,7 @@ describe("POST /songs free-plan over-limit -> 402 (R2, R3)", () => {
     for (let i = 0; i < 10; i++) {
       const fd = new FormData();
       fd.append("name", `Cap Song ${i}`);
-      fd.append(
-        "preset",
-        new File([new Uint8Array([1, 2, 3])], `p${i}.syx`, { type: "application/octet-stream" }),
-      );
+      fd.append("preset", presetPart(0, `p${i}.prst`));
       const res = await app.request("/songs", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -463,10 +466,7 @@ describe("POST /songs free-plan over-limit -> 402 (R2, R3)", () => {
 
     const overFd = new FormData();
     overFd.append("name", "Over the cap");
-    overFd.append(
-      "preset",
-      new File([new Uint8Array([4, 5, 6])], "over.syx", { type: "application/octet-stream" }),
-    );
+    overFd.append("preset", presetPart(0, "over.prst"));
     const overRes = await app.request("/songs", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -492,10 +492,7 @@ describe("POST /songs plan from token claim is ignored — DB governs (R6)", () 
     for (let i = 0; i < 10; i++) {
       const fd = new FormData();
       fd.append("name", `Stale Song ${i}`);
-      fd.append(
-        "preset",
-        new File([new Uint8Array([1])], `s${i}.syx`, { type: "application/octet-stream" }),
-      );
+      fd.append("preset", presetPart(0, `s${i}.prst`));
       const res = await app.request("/songs", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -506,10 +503,7 @@ describe("POST /songs plan from token claim is ignored — DB governs (R6)", () 
 
     const overFd = new FormData();
     overFd.append("name", "Over the stale cap");
-    overFd.append(
-      "preset",
-      new File([new Uint8Array([9])], "over.syx", { type: "application/octet-stream" }),
-    );
+    overFd.append("preset", presetPart(0, "over.prst"));
     const overRes = await app.request("/songs", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -625,5 +619,179 @@ describe("unknown-route guard end-to-end against real app (R1, R2, R5, R6, R8, R
     expect(res.status).toBe(400);
     expect(res.status).not.toBe(401);
     expect(res.status).not.toBe(404);
+  });
+});
+
+async function makeUserToken(prefix: string): Promise<{ userId: string; token: string }> {
+  const db = getDb();
+  const email = `${prefix}-${crypto.randomUUID()}@example.com`;
+  const [user] = await db<{ id: string }[]>`
+    INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+  `;
+  return { userId: user!.id, token: await issueToken(user!.id, "free") };
+}
+
+interface PresetBody {
+  id: string;
+  sortOrder: number;
+  name: string;
+  originalFilename: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+}
+
+interface SongBody {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  files: Array<{ kind: string }>;
+  presets: PresetBody[];
+}
+
+async function postSong(token: string, fd: FormData): Promise<Response> {
+  return app.request("/songs", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: fd,
+  });
+}
+
+async function createThreePresetSong(token: string, sendOrder = [0, 1, 2]): Promise<SongBody> {
+  const fd = new FormData();
+  fd.append("name", "Three presets");
+  for (const i of sendOrder) fd.append("preset", presetPart(i, PRESET_FIXTURES[i]!.file));
+  const res = await postSong(token, fd);
+  expect(res.status).toBe(201);
+  return (await res.json()) as SongBody;
+}
+
+describe("POST /songs ignores pedal_preset_name parts (multiple_presets_per_song R18)", () => {
+  test("a pedal_preset_name=Bogus part -> 201, name read from bytes, same stored rows/body as without it", async () => {
+    const { token } = await makeUserToken("mpps-r18");
+    const db = getDb();
+
+    const build = (withBogus: boolean): FormData => {
+      const fd = new FormData();
+      fd.append("name", "Ignored field");
+      fd.append("artist", "Someone");
+      fd.append("preset", presetPart(1, "one.prst"));
+      if (withBogus) {
+        fd.append("pedal_preset_name", "Bogus");
+        fd.append("pedal_preset_name", "Bogus 2");
+      }
+      return fd;
+    };
+
+    const withRes = await postSong(token, build(true));
+    expect(withRes.status).toBe(201);
+    const withBody = (await withRes.json()) as SongBody & Record<string, unknown>;
+    expect(withBody.presets[0]!.name).toBe(PRESET_FIXTURES[1].name);
+    expect(withBody).not.toHaveProperty("pedalPresetName");
+
+    const [row] = await db<{ pedal_preset_name: string }[]>`
+      SELECT pedal_preset_name FROM song_files
+      WHERE song_id = ${withBody.id} AND kind = 'preset' AND deleted_at IS NULL
+    `;
+    expect(row!.pedal_preset_name).toBe(PRESET_FIXTURES[1].name);
+
+    const withoutRes = await postSong(token, build(false));
+    expect(withoutRes.status).toBe(201);
+    const withoutBody = (await withoutRes.json()) as SongBody;
+
+    const normalize = (b: SongBody) => ({
+      ...b,
+      id: undefined,
+      createdAt: undefined,
+      updatedAt: undefined,
+      presets: b.presets.map((p) => ({ ...p, id: undefined, createdAt: undefined })),
+    });
+    expect(normalize(withBody)).toEqual(normalize(withoutBody));
+  });
+});
+
+describe("POST /songs with 3 repeated preset parts (multiple_presets_per_song R12, R13, R19)", () => {
+  test("the 201 body's presets order and names match the send order", async () => {
+    const { token } = await makeUserToken("mpps-r13");
+    const sendOrder = [2, 0, 1];
+    const body = await createThreePresetSong(token, sendOrder);
+
+    expect(body.files).toEqual([]);
+    expect(body.presets.map((p) => [p.sortOrder, p.name, p.originalFilename])).toEqual(
+      sendOrder.map((i, pos) => [pos, PRESET_FIXTURES[i]!.name, PRESET_FIXTURES[i]!.file]),
+    );
+
+    const listRes = await app.request("/songs", { headers: { Authorization: `Bearer ${token}` } });
+    const list = (await listRes.json()) as SongBody[];
+    expect(list.find((s) => s.id === body.id)!.presets.map((p) => p.name)).toEqual(
+      sendOrder.map((i) => PRESET_FIXTURES[i]!.name),
+    );
+  });
+});
+
+describe("GET /songs/:id/files/preset with several presets (multiple_presets_per_song R26, R27, R28)", () => {
+  test("sort_order=0|1|2 returns each fixture's bytes, omitted -> preset 0, sort_order=3 -> 404", async () => {
+    const { token } = await makeUserToken("mpps-export");
+    const song = await createThreePresetSong(token);
+    const auth = { Authorization: `Bearer ${token}` };
+
+    for (const [i, f] of PRESET_FIXTURES.entries()) {
+      const res = await app.request(`/songs/${song.id}/files/preset?sort_order=${i}`, { headers: auth });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Disposition")).toBe(`attachment; filename="${f.file}"`);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(fixtureBytes[i]);
+    }
+
+    const dflt = await app.request(`/songs/${song.id}/files/preset`, { headers: auth });
+    expect(dflt.status).toBe(200);
+    expect(new Uint8Array(await dflt.arrayBuffer())).toEqual(fixtureBytes[0]);
+
+    const missing = await app.request(`/songs/${song.id}/files/preset?sort_order=3`, { headers: auth });
+    expect(missing.status).toBe(404);
+  });
+});
+
+describe("no mutation of an existing song's presets (multiple_presets_per_song R29)", () => {
+  test("PUT/PATCH /songs/:id and POST/PUT/PATCH/DELETE /songs/:id/files/preset -> 404, presets unchanged", async () => {
+    const { token } = await makeUserToken("mpps-r29");
+    const song = await createThreePresetSong(token);
+    const db = getDb();
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const snapshot = async () =>
+      db<{ id: string; sort_order: number; pedal_preset_name: string; storage_key: string }[]>`
+        SELECT id, sort_order, pedal_preset_name, storage_key FROM song_files
+        WHERE song_id = ${song.id} AND kind = 'preset' AND deleted_at IS NULL
+        ORDER BY sort_order
+      `;
+    const before = await snapshot();
+    expect(before).toHaveLength(3);
+
+    const attempts: Array<[string, string]> = [
+      ["PUT", `/songs/${song.id}`],
+      ["PATCH", `/songs/${song.id}`],
+      ["POST", `/songs/${song.id}/files/preset`],
+      ["PUT", `/songs/${song.id}/files/preset`],
+      ["PATCH", `/songs/${song.id}/files/preset`],
+      ["DELETE", `/songs/${song.id}/files/preset`],
+    ];
+    for (const [method, url] of attempts) {
+      const fd = new FormData();
+      fd.append("name", "Mutated");
+      fd.append("preset", presetPart(2, "replacement.prst"));
+      const res = await app.request(url, { method, headers: auth, body: fd });
+      expect([method, url, res.status]).toEqual([method, url, 404]);
+    }
+
+    expect(await snapshot()).toEqual(before);
+    for (const [i] of PRESET_FIXTURES.entries()) {
+      const res = await app.request(`/songs/${song.id}/files/preset?sort_order=${i}`, { headers: auth });
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(fixtureBytes[i]);
+    }
+    const getRes = await app.request(`/songs/${song.id}`, { headers: auth });
+    const fetched = (await getRes.json()) as SongBody;
+    expect(fetched.name).toBe("Three presets");
+    expect(fetched.presets.map((p) => p.id)).toEqual(song.presets.map((p) => p.id));
   });
 });
