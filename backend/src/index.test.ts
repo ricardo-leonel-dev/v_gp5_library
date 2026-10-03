@@ -869,3 +869,252 @@ describe("over-limit data stays readable after a downgrade (plan_tiers R27, R28,
     }
   });
 });
+
+async function makeAdminToken(): Promise<{ userId: string; token: string }> {
+  const email = `admin-${crypto.randomUUID()}@example.com`;
+  const [user] = await getDb()<{ id: string }[]>`
+    INSERT INTO users (email, password_hash, plan, role)
+    VALUES (${email}, 'x', 'free', 'admin') RETURNING id
+  `;
+  return { userId: user!.id, token: await issueToken(user!.id, "free") };
+}
+
+async function patchPlan(token: string, id: string, body: string): Promise<Response> {
+  return app.request(`/admin/users/${id}/plan`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body,
+  });
+}
+
+async function targetState(userId: string): Promise<{ plan: string; role: string; audits: number }> {
+  const [row] = await getDb()<{ plan: string; role: string; audits: number }[]>`
+    SELECT plan, role,
+           (SELECT COUNT(*)::int FROM plan_changes WHERE user_id = ${userId}) AS audits
+    FROM users WHERE id = ${userId}
+  `;
+  return row!;
+}
+
+async function dbClock(): Promise<Date> {
+  const [row] = await getDb()<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+  return new Date(row!.now);
+}
+
+describe("PATCH /admin/users/:id/plan (plan_management_admin)", () => {
+  test("admin changes a free user to premium -> 200 user body + one audit row (R5, R11, R12, R13, R14)", async () => {
+    const admin = await makeAdminToken();
+    const target = await makeUserToken("admin-target", "free");
+
+    const before = await dbClock();
+    const res = await patchPlan(admin.token, target.userId, JSON.stringify({ plan: "premium" }));
+    const after = await dbClock();
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["email", "id", "plan", "role"]);
+    expect(body.id).toBe(target.userId);
+    expect(body.plan).toBe("premium");
+    expect(body.role).toBe("user");
+    expect((await targetState(target.userId)).plan).toBe("premium");
+
+    const rows = await getDb()<
+      { old_plan: string; new_plan: string; changed_by: string; created_at: Date }[]
+    >`SELECT old_plan, new_plan, changed_by, created_at FROM plan_changes WHERE user_id = ${target.userId}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.old_plan).toBe("free");
+    expect(rows[0]!.new_plan).toBe("premium");
+    expect(rows[0]!.changed_by).toBe(admin.userId);
+    const createdAt = new Date(rows[0]!.created_at).getTime();
+    expect(createdAt).toBeGreaterThanOrEqual(before.getTime());
+    expect(createdAt).toBeLessThanOrEqual(after.getTime());
+  });
+
+  test("same plan -> 200 user body, no audit row (R12, R15)", async () => {
+    const admin = await makeAdminToken();
+    const target = await makeUserToken("admin-same", "basic");
+
+    const res = await patchPlan(admin.token, target.userId, JSON.stringify({ plan: "basic" }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["email", "id", "plan", "role"]);
+    expect(body.plan).toBe("basic");
+    expect(await targetState(target.userId)).toEqual({ plan: "basic", role: "user", audits: 0 });
+  });
+
+  test("invalid bodies -> 400 with the documented errors, target untouched (R16, R17, R18, R19)", async () => {
+    const admin = await makeAdminToken();
+    const target = await makeUserToken("admin-badbody", "free");
+    const cases: [string, string][] = [
+      ["{not json", "invalid JSON body"],
+      ["[]", "invalid JSON body"],
+      ['"basic"', "invalid JSON body"],
+      ["null", "invalid JSON body"],
+      ["{}", "plan is required"],
+      ['{"plan": 1}', "plan is required"],
+      ['{"plan": "gold"}', "invalid plan"],
+    ];
+    for (const [raw, error] of cases) {
+      const res = await patchPlan(admin.token, target.userId, raw);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error });
+      expect(await targetState(target.userId)).toEqual({ plan: "free", role: "user", audits: 0 });
+    }
+  });
+
+  test("non-UUID id -> 404 (R20)", async () => {
+    const admin = await makeAdminToken();
+    const res = await patchPlan(admin.token, "abc", JSON.stringify({ plan: "basic" }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "user not found" });
+  });
+
+  test("unknown UUID and soft-deleted user -> 404, soft-deleted target untouched (R21, R19)", async () => {
+    const admin = await makeAdminToken();
+    const unknown = crypto.randomUUID();
+    const res = await patchPlan(admin.token, unknown, JSON.stringify({ plan: "basic" }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "user not found" });
+    const [{ c }] = await getDb()<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM plan_changes WHERE user_id = ${unknown}
+    `;
+    expect(c).toBe(0);
+
+    const target = await makeUserToken("admin-deleted", "free");
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${target.userId}`;
+    const res2 = await patchPlan(admin.token, target.userId, JSON.stringify({ plan: "basic" }));
+    expect(res2.status).toBe(404);
+    expect(await targetState(target.userId)).toEqual({ plan: "free", role: "user", audits: 0 });
+  });
+
+  test("invalid body on an unknown id -> 400, not 404 (R22)", async () => {
+    const admin = await makeAdminToken();
+    const res = await patchPlan(admin.token, crypto.randomUUID(), JSON.stringify({ plan: "gold" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid plan" });
+  });
+
+  test("non-admin caller on a real target -> 403, target untouched (R6, R19)", async () => {
+    const caller = await makeUserToken("admin-nonadmin", "premium");
+    const target = await makeUserToken("admin-nonadmin-target", "free");
+    const res = await patchPlan(caller.token, target.userId, JSON.stringify({ plan: "premium" }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "admin role required" });
+    expect(await targetState(target.userId)).toEqual({ plan: "free", role: "user", audits: 0 });
+  });
+
+  test("no token -> 401 (R7)", async () => {
+    const res = await app.request(`/admin/users/${crypto.randomUUID()}/plan`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: "basic" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("role in the body is ignored (R29)", async () => {
+    const admin = await makeAdminToken();
+    const target = await makeUserToken("admin-role-body", "free");
+    const res = await patchPlan(
+      admin.token,
+      target.userId,
+      JSON.stringify({ plan: "basic", role: "admin" }),
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { role: string }).role).toBe("user");
+    expect(await targetState(target.userId)).toEqual({ plan: "basic", role: "user", audits: 1 });
+  });
+});
+
+describe("plan change takes effect immediately (plan_management_admin R23, R24)", () => {
+  test("free user with 1 song is upgraded to basic; the old token sees basic and can add a song", async () => {
+    const admin = await makeAdminToken();
+    const target = await makeUserToken("admin-effect", "free");
+    expect((await postSong(target.token, songForm("First"))).status).toBe(201);
+    expect((await postSong(target.token, songForm("Blocked"))).status).toBe(402);
+
+    const patch = await patchPlan(admin.token, target.userId, JSON.stringify({ plan: "basic" }));
+    expect(patch.status).toBe(200);
+
+    const plan = await app.request("/me/plan", {
+      headers: { Authorization: `Bearer ${target.token}` },
+    });
+    expect(((await plan.json()) as { plan: string }).plan).toBe("basic");
+    expect((await postSong(target.token, songForm("Second"))).status).toBe(201);
+  });
+});
+
+describe("GET /admin/users?email= (plan_management_admin R35, R36, R37)", () => {
+  async function lookup(token: string, query: string): Promise<Response> {
+    return app.request(`/admin/users${query}`, { headers: { Authorization: `Bearer ${token}` } });
+  }
+
+  test("existing email -> 200 user body (R35)", async () => {
+    const admin = await makeAdminToken();
+    const email = `lookup-${crypto.randomUUID()}@example.com`;
+    const [user] = await getDb()<{ id: string }[]>`
+      INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', 'basic') RETURNING id
+    `;
+    const res = await lookup(admin.token, `?email=${encodeURIComponent(email)}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: user!.id, email, plan: "basic", role: "user" });
+  });
+
+  test("unknown, upper-cased and soft-deleted emails -> 404 (R36)", async () => {
+    const admin = await makeAdminToken();
+    const email = `lookup-${crypto.randomUUID()}@example.com`;
+    await getDb()`INSERT INTO users (email, password_hash) VALUES (${email}, 'x')`;
+    const deleted = `lookup-del-${crypto.randomUUID()}@example.com`;
+    await getDb()`
+      INSERT INTO users (email, password_hash, deleted_at) VALUES (${deleted}, 'x', NOW())
+    `;
+    for (const candidate of [
+      `nobody-${crypto.randomUUID()}@example.com`,
+      email.toUpperCase(),
+      deleted,
+    ]) {
+      const res = await lookup(admin.token, `?email=${encodeURIComponent(candidate)}`);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "user not found" });
+    }
+  });
+
+  test("missing or empty email -> 400 (R37)", async () => {
+    const admin = await makeAdminToken();
+    for (const query of ["", "?email="]) {
+      const res = await lookup(admin.token, query);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "email is required" });
+    }
+  });
+
+  test("non-admin caller -> 403 (R6)", async () => {
+    const caller = await makeUserToken("lookup-nonadmin", "free");
+    const res = await lookup(caller.token, "?email=someone%40example.com");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "admin role required" });
+  });
+});
+
+describe("no role-changing endpoint (plan_management_admin R28, R30)", () => {
+  test("exactly two admin routes are registered (R28)", () => {
+    const adminRoutes = app.routes
+      .filter((r) => r.method !== "ALL" && r.path.startsWith("/admin/"))
+      .map((r) => `${r.method} ${r.path}`)
+      .sort();
+    expect(adminRoutes).toEqual(["GET /admin/users", "PATCH /admin/users/:id/plan"]);
+  });
+
+  test("PATCH/PUT/POST /admin/users/:id/role with an admin token -> 404 (R30)", async () => {
+    const admin = await makeAdminToken();
+    for (const method of ["PATCH", "PUT", "POST"]) {
+      const res = await app.request(`/admin/users/${crypto.randomUUID()}/role`, {
+        method,
+        headers: { Authorization: `Bearer ${admin.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "admin" }),
+      });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "Not found" });
+    }
+  });
+});

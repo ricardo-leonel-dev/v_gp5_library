@@ -2,9 +2,9 @@
 feature_number: 14
 name: plan_tiers_songs_and_presets_per_song_limits
 title: Plan tiers: songs and presets-per-song limits
-status: in_progress
+status: done
 created_at: 2026-10-02T21:05:47.000Z
-updated_at: 2026-10-03T21:06:00.000Z
+updated_at: 2026-10-03T21:12:54.000Z
 ---
 
 ## Description

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { decodeJwt } from "jose";
+import { getDb } from "../db/client";
 import app from "../index";
 import { issueToken } from "./jwt";
 
@@ -125,5 +127,65 @@ describe("auth round-trip", () => {
     const me = (await res.json()) as { email: string; id: string };
     expect(me.email).toBe(email);
     expect(me.id).not.toBe(spoofedUserId);
+  });
+});
+
+async function postJson(path: string, body: unknown): Promise<Response> {
+  return app.request(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("role exposure (plan_management_admin)", () => {
+  test("register returns a user body with role 'user' and a token without a role claim (R33, R10)", async () => {
+    const email = randomEmail();
+    const res = await postJson("/auth/register", { email, password: "pw-123456" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { token: string; user: Record<string, unknown> };
+    expect(Object.keys(body.user).sort()).toEqual(["email", "id", "plan", "role"]);
+    expect(body.user.email).toBe(email);
+    expect(body.user.role).toBe("user");
+    expect(decodeJwt(body.token)).not.toHaveProperty("role");
+  });
+
+  test("register with role 'admin' in the body still creates a 'user' (R31)", async () => {
+    const email = randomEmail();
+    const res = await postJson("/auth/register", { email, password: "pw-123456", role: "admin" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: { role: string } };
+    expect(body.user.role).toBe("user");
+    const [row] = await getDb()<{ role: string }[]>`SELECT role FROM users WHERE email = ${email}`;
+    expect(row!.role).toBe("user");
+  });
+
+  test("login returns a user body and a token without a role claim (R34, R10)", async () => {
+    const email = randomEmail();
+    await postJson("/auth/register", { email, password: "pw-123456" });
+    await getDb()`UPDATE users SET role = 'admin' WHERE email = ${email}`;
+
+    const res = await postJson("/auth/login", { email, password: "pw-123456" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string; user: Record<string, unknown> };
+    expect(Object.keys(body.user).sort()).toEqual(["email", "id", "plan", "role"]);
+    expect(body.user.role).toBe("admin");
+    expect(decodeJwt(body.token)).not.toHaveProperty("role");
+  });
+
+  test("/auth/me returns the role read from the DB on each request (R32)", async () => {
+    const email = randomEmail();
+    const reg = await postJson("/auth/register", { email, password: "pw-123456" });
+    const { token } = (await reg.json()) as { token: string };
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const before = await app.request("/auth/me", { headers });
+    const beforeBody = (await before.json()) as Record<string, unknown>;
+    expect(Object.keys(beforeBody).sort()).toEqual(["email", "id", "plan", "role"]);
+    expect(beforeBody.role).toBe("user");
+
+    await getDb()`UPDATE users SET role = 'admin' WHERE email = ${email}`;
+    const after = await app.request("/auth/me", { headers });
+    expect(((await after.json()) as { role: string }).role).toBe("admin");
   });
 });

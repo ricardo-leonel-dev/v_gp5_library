@@ -27,6 +27,7 @@ describe("migrate", () => {
       "0003_song_files_ordering.sql",
       "0004_multiple_presets_per_song.sql",
       "0005_plan_tiers.sql",
+      "0006_user_roles_and_plan_changes.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -325,6 +326,67 @@ describe("migrate", () => {
     const sql = await readFile(path.join(import.meta.dir, "migrations", "0005_plan_tiers.sql"), "utf8");
     await db.unsafe(sql);
     await db.unsafe(sql);
+  });
+
+  test("a user inserted without role gets role 'user' (plan_management_admin R1)", async () => {
+    const db = getDb();
+    const [user] = await db<{ role: string }[]>`
+      INSERT INTO users (email, password_hash)
+      VALUES (${`role-${crypto.randomUUID()}@example.com`}, 'x') RETURNING role
+    `;
+    expect(user!.role).toBe("user");
+  });
+
+  test("users.role rejects a non-role value and accepts user/admin (plan_management_admin R2)", async () => {
+    const db = getDb();
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash)
+      VALUES (${`role-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+    `;
+    await expect(
+      Promise.resolve(db`UPDATE users SET role = 'owner' WHERE id = ${user!.id}`),
+    ).rejects.toThrow();
+    await expect(
+      Promise.resolve(
+        db`INSERT INTO users (email, password_hash, role)
+           VALUES (${`role-${crypto.randomUUID()}@example.com`}, 'x', 'root')`,
+      ),
+    ).rejects.toThrow();
+    for (const role of ["admin", "user"]) {
+      await db`UPDATE users SET role = ${role} WHERE id = ${user!.id}`;
+      const [row] = await db<{ role: string }[]>`SELECT role FROM users WHERE id = ${user!.id}`;
+      expect(row!.role).toBe(role);
+    }
+  });
+
+  test("plan_changes has exactly the audit columns (plan_management_admin R3)", async () => {
+    const db = getDb();
+    const rows = await db<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'plan_changes' ORDER BY ordinal_position
+    `;
+    expect(rows.map((r) => r.column_name)).toEqual([
+      "id",
+      "user_id",
+      "old_plan",
+      "new_plan",
+      "changed_by",
+      "created_at",
+    ]);
+  });
+
+  test("re-executing the 0006 SQL on an already-migrated database does not throw (plan_management_admin R4)", async () => {
+    const db = getDb();
+    const sql = await readFile(
+      path.join(import.meta.dir, "migrations", "0006_user_roles_and_plan_changes.sql"),
+      "utf8",
+    );
+    await db.unsafe(sql);
+    await db.unsafe(sql);
+    const [constraint] = await db<{ conname: string }[]>`
+      SELECT conname FROM pg_constraint WHERE conname = 'users_role_valid'
+    `;
+    expect(constraint!.conname).toBe("users_role_valid");
   });
 
   test("a failing migration file is not recorded as applied (R5)", async () => {

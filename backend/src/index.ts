@@ -2,15 +2,16 @@ import { Hono } from "hono";
 import { getDb } from "./db/client";
 import { type AuthVariables } from "./middleware/require-auth";
 import { protectedRouter } from "./middleware/protected-router";
+import { requireAdmin } from "./middleware/require-admin";
 import { createCorsMiddleware } from "./middleware/cors";
 import { jsonNotFound } from "./middleware/not-found";
 import { createUnknownRouteGuard } from "./middleware/unknown-route-guard";
 import { resolveAllowedOrigins } from "./config/stage";
-import { register, login, getMe, AuthError } from "./auth/user-service";
+import { register, login, getMe, findUserByEmail, AuthError } from "./auth/user-service";
 import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
 import { parseCreateSongMultipart } from "./songs/parse-multipart";
 import { createPedal, listPedals, PedalError } from "./pedals/pedal-service";
-import { getPlanSummary, PlanError, PlanLimitError } from "./plans/plan-service";
+import { getPlanSummary, setUserPlan, PlanError, PlanLimitError } from "./plans/plan-service";
 import { parseCreatePedalMultipart } from "./pedals/parse-multipart";
 import {
   createSongPedalConfig,
@@ -190,6 +191,37 @@ protectedRouter.delete("/songs/:id/pedals/:configId", async (c) => {
     if (err instanceof SongPedalConfigError) return c.json({ error: err.message }, err.status);
     throw err;
   }
+});
+
+protectedRouter.use("/admin/*", requireAdmin);
+
+protectedRouter.patch("/admin/users/:id/plan", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  const plan = (body as Record<string, unknown>).plan;
+  if (typeof plan !== "string") return c.json({ error: "plan is required" }, 400);
+  try {
+    const { user } = await setUserPlan(c.req.param("id"), plan, c.get("userId"));
+    return c.json(user);
+  } catch (err) {
+    if (err instanceof PlanError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.get("/admin/users", async (c) => {
+  const email = c.req.query("email");
+  if (!email) return c.json({ error: "email is required" }, 400);
+  const user = await findUserByEmail(email);
+  if (!user) return c.json({ error: "user not found" }, 404);
+  return c.json(user);
 });
 
 app.route("/", protectedRouter);

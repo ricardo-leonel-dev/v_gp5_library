@@ -1,5 +1,6 @@
 import type { SQL } from "bun";
 import { getDb } from "../db/client";
+import { isUuid } from "../db/uuid";
 import { PLAN_LIMITS, checkPlanLimits, countLiveSongs, getUserPlan } from "../plans/plan-service";
 import { getStorage } from "../storage";
 import type { StorageAdapter } from "../storage/adapter";
@@ -61,14 +62,9 @@ export interface SongWithFilesDto extends SongDto {
   files: SongFileDto[];
 }
 
-export const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export { UUID_RE, isUuid } from "../db/uuid";
 
 export const MAX_EXTRA_CONFIG_BYTES = 32768; // 32 KiB — R3
-
-export function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
 
 const SONG_FILE_KINDS = ["preset", "ir", "nam", "cover"] as const;
 type SongFileKind = (typeof SONG_FILE_KINDS)[number];
