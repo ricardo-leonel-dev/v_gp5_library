@@ -6,6 +6,8 @@ import {
   PlanLimitError,
   checkPlanLimits,
   getPlanSummary,
+  isPlan,
+  setUserPlan,
   type Plan,
   type PlanLimitCode,
 } from "./plan-service";
@@ -102,5 +104,130 @@ describe("getPlanSummary", () => {
     }
     expect(caught).toBeInstanceOf(PlanError);
     expect((caught as PlanError).status).toBe(404);
+  });
+});
+
+async function insertUser(plan: Plan = "free"): Promise<string> {
+  const [row] = await getDb()<{ id: string }[]>`
+    INSERT INTO users (email, password_hash, plan)
+    VALUES (${`setplan-${crypto.randomUUID()}@example.com`}, 'x', ${plan}) RETURNING id
+  `;
+  return row!.id;
+}
+
+async function auditRows(userId: string) {
+  return getDb()<
+    { old_plan: string; new_plan: string; changed_by: string | null; created_at: Date }[]
+  >`SELECT old_plan, new_plan, changed_by, created_at FROM plan_changes WHERE user_id = ${userId}`;
+}
+
+async function dbPlan(userId: string): Promise<string> {
+  const [row] = await getDb()<{ plan: string }[]>`SELECT plan FROM users WHERE id = ${userId}`;
+  return row!.plan;
+}
+
+async function expectPlanError(promise: Promise<unknown>, status: 400 | 404, message: string) {
+  let caught: unknown;
+  try {
+    await promise;
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(PlanError);
+  expect((caught as PlanError).status).toBe(status);
+  expect((caught as PlanError).message).toBe(message);
+}
+
+describe("isPlan (plan_management_admin R26)", () => {
+  test("accepts exactly the PLAN_LIMITS keys", () => {
+    for (const plan of Object.keys(PLAN_LIMITS)) expect(isPlan(plan)).toBe(true);
+    for (const bad of ["gold", "Premium", "", "toString", "__proto__", "constructor"]) {
+      expect(isPlan(bad)).toBe(false);
+    }
+  });
+});
+
+describe("setUserPlan (plan_management_admin)", () => {
+  test("free -> basic with changedBy null writes the plan and one audit row with NULL changed_by (R11, R13, R25)", async () => {
+    const userId = await insertUser("free");
+    const result = await setUserPlan(userId, "basic", null);
+
+    expect(result.changed).toBe(true);
+    expect(result.user).toEqual({
+      id: userId,
+      email: expect.any(String),
+      plan: "basic",
+      role: "user",
+    });
+    expect(await dbPlan(userId)).toBe("basic");
+    const rows = await auditRows(userId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.old_plan).toBe("free");
+    expect(rows[0]!.new_plan).toBe("basic");
+    expect(rows[0]!.changed_by).toBeNull();
+  });
+
+  test("changedBy set to an existing user id is recorded (R13)", async () => {
+    const adminId = await insertUser("premium");
+    const userId = await insertUser("basic");
+    await setUserPlan(userId, "premium", adminId);
+    const rows = await auditRows(userId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.changed_by).toBe(adminId);
+  });
+
+  test("same plan is a no-op: changed false, no audit row, updated_at untouched (R15)", async () => {
+    const userId = await insertUser("basic");
+    const [before] = await getDb()<{ updated_at: Date }[]>`
+      SELECT updated_at FROM users WHERE id = ${userId}
+    `;
+    const result = await setUserPlan(userId, "basic", null);
+    expect(result.changed).toBe(false);
+    expect(result.user.plan).toBe("basic");
+    expect(await auditRows(userId)).toHaveLength(0);
+    const [after] = await getDb()<{ updated_at: Date }[]>`
+      SELECT updated_at FROM users WHERE id = ${userId}
+    `;
+    expect(after!.updated_at).toEqual(before!.updated_at);
+  });
+
+  test("invalid plan -> PlanError 400, nothing written (R18, R26)", async () => {
+    const userId = await insertUser("free");
+    await expectPlanError(setUserPlan(userId, "gold", null), 400, "invalid plan");
+    await expectPlanError(setUserPlan(userId, "toString", null), 400, "invalid plan");
+    expect(await dbPlan(userId)).toBe("free");
+    expect(await auditRows(userId)).toHaveLength(0);
+  });
+
+  test("invalid plan wins over an unknown user (R18)", async () => {
+    await expectPlanError(setUserPlan(crypto.randomUUID(), "gold", null), 400, "invalid plan");
+  });
+
+  test("non-UUID user id -> PlanError 404 (R20)", async () => {
+    await expectPlanError(setUserPlan("not-a-uuid", "basic", null), 404, "user not found");
+  });
+
+  test("unknown UUID and soft-deleted user -> PlanError 404 (R21)", async () => {
+    await expectPlanError(setUserPlan(crypto.randomUUID(), "basic", null), 404, "user not found");
+
+    const userId = await insertUser("free");
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${userId}`;
+    await expectPlanError(setUserPlan(userId, "basic", null), 404, "user not found");
+    expect(await dbPlan(userId)).toBe("free");
+    expect(await auditRows(userId)).toHaveLength(0);
+  });
+
+  test("audit insert failure rolls the plan back (R27)", async () => {
+    const userId = await insertUser("free");
+    let caught: unknown;
+    try {
+      await setUserPlan(userId, "premium", crypto.randomUUID());
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught).not.toBeInstanceOf(PlanError);
+    expect(await dbPlan(userId)).toBe("free");
+    expect(await auditRows(userId)).toHaveLength(0);
   });
 });
