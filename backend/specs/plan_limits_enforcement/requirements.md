@@ -15,21 +15,33 @@ Per `docs/conventions.md`'s soft-delete convention, every requirement below that
 counts a song means a `songs` row with `deleted_at IS NULL`.
 
 ## R1
+
+> **Superseded** by `plan_tiers_songs_and_presets_per_song_limits` (feature 14) — see `specs/plan_tiers_songs_and_presets_per_song_limits/requirements.md`.
+
 WHEN an authenticated `POST /songs` request's caller has `plan = 'free'`, owns fewer than 10 live
 `songs` rows, and the request is otherwise valid, the system SHALL create the song and respond with
 HTTP 201.
 
 ## R2
+
+> **Superseded** by `plan_tiers_songs_and_presets_per_song_limits` (feature 14) — see `specs/plan_tiers_songs_and_presets_per_song_limits/requirements.md`.
+
 IF an authenticated `POST /songs` request's caller has `plan = 'free'` and already owns 10 or more live
 `songs` rows THEN the system SHALL respond with HTTP 402 and SHALL NOT create any new `songs` or
 `song_files` row.
 
 ## R3
+
+> **Superseded** by `plan_tiers_songs_and_presets_per_song_limits` (feature 14) — see `specs/plan_tiers_songs_and_presets_per_song_limits/requirements.md`.
+
 WHEN the system rejects a `POST /songs` request per R2, the system SHALL respond with a JSON body whose
 `error` field is a string containing both the caller's plan name and the numeral of that plan's song
 limit.
 
 ## R4
+
+> **Superseded** by `plan_tiers_songs_and_presets_per_song_limits` (feature 14) — see `specs/plan_tiers_songs_and_presets_per_song_limits/requirements.md`.
+
 WHERE an authenticated `POST /songs` request's caller has a `plan` value other than `free`, the system
 SHALL NOT reject the request on song-count grounds, regardless of how many live songs that caller
 already owns.

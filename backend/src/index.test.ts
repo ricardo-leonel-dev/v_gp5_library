@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { getDb } from "./db/client";
 import { issueToken } from "./auth/jwt";
 import { MAX_EXTRA_CONFIG_BYTES } from "./songs/song-service";
+import type { Plan } from "./plans/plan-service";
 import { loadFixture, PRESET_FIXTURES } from "./songs/fixtures";
 import { resolveAllowedOrigins } from "./config/stage";
 import app from "./index";
@@ -443,79 +444,6 @@ describe("POST /songs then GET /songs/:id extra_config round-trip (R2)", () => {
   });
 });
 
-describe("POST /songs free-plan over-limit -> 402 (R2, R3)", () => {
-  test("free-plan user's 11th POST /songs (after 10 successes) returns 402 with error naming the limit", async () => {
-    const db = getDb();
-    const email = `plan-cap-${crypto.randomUUID()}@example.com`;
-    const [user] = await db<{ id: string }[]>`
-      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
-    `;
-    const token = await issueToken(user.id, "free");
-
-    for (let i = 0; i < 10; i++) {
-      const fd = new FormData();
-      fd.append("name", `Cap Song ${i}`);
-      fd.append("preset", presetPart(0, `p${i}.prst`));
-      const res = await app.request("/songs", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      expect(res.status).toBe(201);
-    }
-
-    const overFd = new FormData();
-    overFd.append("name", "Over the cap");
-    overFd.append("preset", presetPart(0, "over.prst"));
-    const overRes = await app.request("/songs", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: overFd,
-    });
-    expect(overRes.status).toBe(402);
-    const body = (await overRes.json()) as { error: string };
-    expect(body.error).toContain("free");
-    expect(body.error).toContain("10");
-  });
-});
-
-describe("POST /songs plan from token claim is ignored — DB governs (R6)", () => {
-  test("token issued as 'paid' for a user whose users.plan is 'free' is still capped at 10 songs", async () => {
-    const db = getDb();
-    const email = `plan-stale-${crypto.randomUUID()}@example.com`;
-    const [user] = await db<{ id: string }[]>`
-      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
-    `;
-    // Stale token claim: token says paid, but users.plan is free (default).
-    const token = await issueToken(user.id, "paid");
-
-    for (let i = 0; i < 10; i++) {
-      const fd = new FormData();
-      fd.append("name", `Stale Song ${i}`);
-      fd.append("preset", presetPart(0, `s${i}.prst`));
-      const res = await app.request("/songs", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      expect(res.status).toBe(201);
-    }
-
-    const overFd = new FormData();
-    overFd.append("name", "Over the stale cap");
-    overFd.append("preset", presetPart(0, "over.prst"));
-    const overRes = await app.request("/songs", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: overFd,
-    });
-    expect(overRes.status).toBe(402);
-    const body = (await overRes.json()) as { error: string };
-    expect(body.error).toContain("free");
-    expect(body.error).toContain("10");
-  });
-});
-
 describe("CORS middleware end-to-end against real app (R6, R7, R10, R11, R12)", () => {
   test("preflight OPTIONS /auth/register from allowed origin -> 204 with Allow-Origin", async () => {
     const res = await app.request("/auth/register", {
@@ -622,13 +550,16 @@ describe("unknown-route guard end-to-end against real app (R1, R2, R5, R6, R8, R
   });
 });
 
-async function makeUserToken(prefix: string): Promise<{ userId: string; token: string }> {
+async function makeUserToken(
+  prefix: string,
+  plan: Plan = "premium",
+): Promise<{ userId: string; token: string }> {
   const db = getDb();
   const email = `${prefix}-${crypto.randomUUID()}@example.com`;
   const [user] = await db<{ id: string }[]>`
-    INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', ${plan}) RETURNING id
   `;
-  return { userId: user!.id, token: await issueToken(user!.id, "free") };
+  return { userId: user!.id, token: await issueToken(user!.id, plan) };
 }
 
 interface PresetBody {
@@ -793,5 +724,148 @@ describe("no mutation of an existing song's presets (multiple_presets_per_song R
     const fetched = (await getRes.json()) as SongBody;
     expect(fetched.name).toBe("Three presets");
     expect(fetched.presets.map((p) => p.id)).toEqual(song.presets.map((p) => p.id));
+  });
+});
+
+function songForm(name: string, presetCount = 1): FormData {
+  const fd = new FormData();
+  fd.append("name", name);
+  for (let i = 0; i < presetCount; i++) {
+    fd.append("preset", presetPart(i % fixtureBytes.length, `p${i}.prst`));
+  }
+  return fd;
+}
+
+describe("POST /songs plan-tier limits over HTTP (plan_tiers R7, R11, R14, R15, R16, R19)", () => {
+  test("free user: first POST /songs -> 201, second -> 402 plan_song_limit, GET /songs still 1 song", async () => {
+    const { token } = await makeUserToken("tier-http", "free");
+
+    expect((await postSong(token, songForm("First"))).status).toBe(201);
+
+    const over = await postSong(token, songForm("Second"));
+    expect(over.status).toBe(402);
+    const body = (await over.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["code", "error", "limit", "plan"]);
+    expect(typeof body.error).toBe("string");
+    expect((body.error as string).length).toBeGreaterThan(0);
+    expect(body.code).toBe("plan_song_limit");
+    expect(body.plan).toBe("free");
+    expect(body.limit).toBe(1);
+
+    const list = await app.request("/songs", { headers: { Authorization: `Bearer ${token}` } });
+    expect(((await list.json()) as SongBody[]).map((s) => s.name)).toEqual(["First"]);
+  });
+
+  test("free user: first POST /songs with 2 presets -> 402 plan_preset_limit, limit 1, nothing persisted", async () => {
+    const { userId, token } = await makeUserToken("tier-http", "free");
+
+    const res = await postSong(token, songForm("Two presets", 2));
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["code", "error", "limit", "plan"]);
+    expect(body.code).toBe("plan_preset_limit");
+    expect(body.plan).toBe("free");
+    expect(body.limit).toBe(1);
+
+    const [{ c }] = await getDb()<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}
+    `;
+    expect(c).toBe(0);
+  });
+
+  test("stale claim: token issued as 'premium' for a 'free' DB user is capped at 1 song (R19)", async () => {
+    const { userId } = await makeUserToken("tier-stale", "free");
+    const token = await issueToken(userId, "premium");
+
+    expect((await postSong(token, songForm("First"))).status).toBe(201);
+    const over = await postSong(token, songForm("Second"));
+    expect(over.status).toBe(402);
+    expect(((await over.json()) as { code: string }).code).toBe("plan_song_limit");
+  });
+});
+
+describe("GET /me/plan (plan_tiers R18-R26)", () => {
+  async function getPlan(token: string): Promise<Response> {
+    return app.request("/me/plan", { headers: { Authorization: `Bearer ${token}` } });
+  }
+
+  test("free user with 0 songs -> 200 with free limits and usage 0 (R20, R21, R24)", async () => {
+    const { token } = await makeUserToken("me-plan", "free");
+    const res = await getPlan(token);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      plan: "free",
+      limits: { songs: 1, presetsPerSong: 1 },
+      usage: { songs: 0 },
+    });
+  });
+
+  test("basic user -> limits { songs: 2, presetsPerSong: 2 } (R22)", async () => {
+    const { token } = await makeUserToken("me-plan", "basic");
+    const body = (await (await getPlan(token)).json()) as { plan: string; limits: unknown };
+    expect(body.plan).toBe("basic");
+    expect(body.limits).toEqual({ songs: 2, presetsPerSong: 2 });
+  });
+
+  test("premium user with 3 live songs and 1 soft-deleted -> unlimited, usage.songs 3 (R23, R24, R18)", async () => {
+    const { userId, token } = await makeUserToken("me-plan", "premium");
+    const db = getDb();
+    for (let i = 0; i < 3; i++) {
+      await db`INSERT INTO songs (user_id, name) VALUES (${userId}, ${`Live ${i}`})`;
+    }
+    await db`INSERT INTO songs (user_id, name, deleted_at) VALUES (${userId}, 'Gone', NOW())`;
+
+    expect(await (await getPlan(token)).json()).toEqual({
+      plan: "premium",
+      limits: { songs: null, presetsPerSong: null },
+      usage: { songs: 3 },
+    });
+  });
+
+  test("plan changed in the DB is reflected with the same token (R19)", async () => {
+    const { userId, token } = await makeUserToken("me-plan", "free");
+    expect(((await (await getPlan(token)).json()) as { plan: string }).plan).toBe("free");
+    await getDb()`UPDATE users SET plan = 'basic' WHERE id = ${userId}`;
+    expect(((await (await getPlan(token)).json()) as { plan: string }).plan).toBe("basic");
+  });
+
+  test("no token -> 401 (R25)", async () => {
+    const res = await app.request("/me/plan");
+    expect(res.status).toBe(401);
+  });
+
+  test("valid token for a user with no users row -> 404 (R26)", async () => {
+    const token = await issueToken(crypto.randomUUID(), "free");
+    const res = await getPlan(token);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "user not found" });
+  });
+});
+
+describe("over-limit data stays readable after a downgrade (plan_tiers R27, R28, R29)", () => {
+  test("premium user with 3 songs (one with 3 presets) downgraded to free keeps full read access", async () => {
+    const { userId, token } = await makeUserToken("tier-downgrade", "premium");
+    const auth = { Authorization: `Bearer ${token}` };
+    const threePreset = await createThreePresetSong(token);
+    expect((await postSong(token, songForm("Second"))).status).toBe(201);
+    expect((await postSong(token, songForm("Third"))).status).toBe(201);
+
+    await getDb()`UPDATE users SET plan = 'free' WHERE id = ${userId}`;
+
+    const list = await app.request("/songs", { headers: auth });
+    expect(list.status).toBe(200);
+    expect((await list.json()) as SongBody[]).toHaveLength(3);
+
+    const detail = await app.request(`/songs/${threePreset.id}`, { headers: auth });
+    expect(detail.status).toBe(200);
+    expect(((await detail.json()) as SongBody).presets).toHaveLength(3);
+
+    for (const i of [0, 1, 2]) {
+      const res = await app.request(`/songs/${threePreset.id}/files/preset?sort_order=${i}`, {
+        headers: auth,
+      });
+      expect(res.status).toBe(200);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(fixtureBytes[i]);
+    }
   });
 });
