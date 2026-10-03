@@ -164,5 +164,8 @@ IF an authenticated request uses `PUT` or `PATCH` on `/songs/:id`, or uses `POST
 ## Plan limits unchanged
 
 ## R30
+
+> **Superseded** by `plan_tiers_songs_and_presets_per_song_limits` (feature 14) — see `specs/plan_tiers_songs_and_presets_per_song_limits/requirements.md`.
+
 WHEN an authenticated `free`-plan caller who owns 9 live songs sends an otherwise valid `POST /songs`
 with 3 `preset` file parts, the system SHALL create the song and respond with HTTP 201.

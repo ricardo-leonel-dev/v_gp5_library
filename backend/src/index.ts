@@ -10,6 +10,7 @@ import { register, login, getMe, AuthError } from "./auth/user-service";
 import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
 import { parseCreateSongMultipart } from "./songs/parse-multipart";
 import { createPedal, listPedals, PedalError } from "./pedals/pedal-service";
+import { getPlanSummary, PlanError, PlanLimitError } from "./plans/plan-service";
 import { parseCreatePedalMultipart } from "./pedals/parse-multipart";
 import {
   createSongPedalConfig,
@@ -74,6 +75,15 @@ protectedRouter.get("/auth/me", async (c) => {
   }
 });
 
+protectedRouter.get("/me/plan", async (c) => {
+  try {
+    return c.json(await getPlanSummary(c.get("userId")));
+  } catch (err) {
+    if (err instanceof PlanError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
 protectedRouter.post("/songs", async (c) => {
   const body = await c.req.parseBody({ all: true });
   const input = await parseCreateSongMultipart(body as Record<string, string | File | (string | File)[] | undefined>);
@@ -81,6 +91,9 @@ protectedRouter.post("/songs", async (c) => {
     const song = await createSong(c.get("userId"), input);
     return c.json(song, 201);
   } catch (err) {
+    if (err instanceof PlanLimitError) {
+      return c.json({ error: err.message, code: err.code, plan: err.plan, limit: err.limit }, 402);
+    }
     if (err instanceof SongError) return c.json({ error: err.message }, err.status);
     throw err;
   }

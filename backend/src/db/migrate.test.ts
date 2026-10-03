@@ -26,6 +26,7 @@ describe("migrate", () => {
       "0002_audit_columns.sql",
       "0003_song_files_ordering.sql",
       "0004_multiple_presets_per_song.sql",
+      "0005_plan_tiers.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -247,6 +248,83 @@ describe("migrate", () => {
       WHERE tablename = 'song_files' AND indexname = 'idx_song_files_song_id_kind_sort_order'
     `;
     expect(idx.indexname).toBe("idx_song_files_song_id_kind_sort_order");
+  });
+
+  test("users.plan rejects a non-tier value and accepts free/basic/premium (plan_tiers R1)", async () => {
+    const db = getDb();
+    const email = `tier-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    await expect(
+      Promise.resolve(db`UPDATE users SET plan = 'gold' WHERE id = ${user!.id}`),
+    ).rejects.toThrow();
+    await expect(
+      Promise.resolve(
+        db`INSERT INTO users (email, password_hash, plan)
+           VALUES (${`tier-${crypto.randomUUID()}@example.com`}, 'x', 'paid')`,
+      ),
+    ).rejects.toThrow();
+    for (const plan of ["free", "basic", "premium"]) {
+      await db`UPDATE users SET plan = ${plan} WHERE id = ${user!.id}`;
+      const [row] = await db<{ plan: string }[]>`SELECT plan FROM users WHERE id = ${user!.id}`;
+      expect(row!.plan).toBe(plan);
+    }
+  });
+
+  test("0005 maps legacy plan values to premium, keeps tier values and row counts, restores the CHECK (plan_tiers R2, R3, R4)", async () => {
+    const db = getDb();
+    const sql = await readFile(path.join(import.meta.dir, "migrations", "0005_plan_tiers.sql"), "utf8");
+    const ids: Record<string, string> = {};
+    for (const plan of ["free", "basic", "premium"]) {
+      const [u] = await db<{ id: string }[]>`
+        INSERT INTO users (email, password_hash, plan)
+        VALUES (${`tier-${crypto.randomUUID()}@example.com`}, 'x', ${plan}) RETURNING id
+      `;
+      ids[plan] = u!.id;
+    }
+    const [legacy] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash)
+      VALUES (${`tier-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+    `;
+
+    await db`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_plan_tier`;
+    try {
+      await db`UPDATE users SET plan = 'paid' WHERE id = ${legacy!.id}`;
+      const countRows = async () => {
+        const [r] = await db<{ users: number; songs: number; files: number }[]>`
+          SELECT (SELECT COUNT(*)::int FROM users) AS users,
+                 (SELECT COUNT(*)::int FROM songs) AS songs,
+                 (SELECT COUNT(*)::int FROM song_files) AS files
+        `;
+        return r!;
+      };
+      const before = await countRows();
+
+      await db.unsafe(sql);
+
+      expect(await countRows()).toEqual(before);
+    } finally {
+      await db.unsafe(sql);
+    }
+
+    const [legacyRow] = await db<{ plan: string }[]>`SELECT plan FROM users WHERE id = ${legacy!.id}`;
+    expect(legacyRow!.plan).toBe("premium");
+    for (const [plan, id] of Object.entries(ids)) {
+      const [row] = await db<{ plan: string }[]>`SELECT plan FROM users WHERE id = ${id}`;
+      expect(row!.plan).toBe(plan);
+    }
+    const [constraint] = await db<{ conname: string }[]>`
+      SELECT conname FROM pg_constraint WHERE conname = 'users_plan_tier'
+    `;
+    expect(constraint!.conname).toBe("users_plan_tier");
+  });
+
+  test("re-executing the 0005 SQL on an already-migrated database does not throw (plan_tiers R5)", async () => {
+    const db = getDb();
+    const sql = await readFile(path.join(import.meta.dir, "migrations", "0005_plan_tiers.sql"), "utf8");
+    await db.unsafe(sql);
+    await db.unsafe(sql);
   });
 
   test("a failing migration file is not recorded as applied (R5)", async () => {

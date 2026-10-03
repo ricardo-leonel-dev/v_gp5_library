@@ -18,6 +18,7 @@ import {
   type UploadedFile,
 } from "./song-service";
 import { loadFixture, PRESET_FIXTURES } from "./fixtures";
+import { PlanLimitError, type Plan, type PlanLimitCode } from "../plans/plan-service";
 import app from "../index";
 
 const fixtureBytes = await Promise.all(PRESET_FIXTURES.map((f) => loadFixture(f.file)));
@@ -49,14 +50,14 @@ const presetDtoKeys = [
   "sortOrder",
 ];
 
-async function makeUser(emailPrefix = "song-cru"):
+async function makeUser(emailPrefix = "song-cru", plan: Plan = "premium"):
   Promise<{ userId: string; token: string }> {
   const db = getDb();
   const email = `${emailPrefix}-${crypto.randomUUID()}@example.com`;
   const [user] = await db<{ id: string }[]>`
-    INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', ${plan}) RETURNING id
   `;
-  const token = await issueToken(user.id, "free");
+  const token = await issueToken(user.id, plan);
   return { userId: user.id, token };
 }
 
@@ -453,123 +454,6 @@ describe("song-service", () => {
       );
 
       expect(result.extraConfig).toEqual({ note: padding });
-    });
-
-    test("free-plan user with 9 existing songs successfully creates a 10th (R1)", async () => {
-      const { userId } = await makeUser();
-      for (let i = 0; i < 9; i++) {
-        await seedSong(userId, { name: `Song ${i}` });
-      }
-
-      const result = await createSong(
-        userId,
-        {
-          name: "The Tenth",
-          preset: [presetFile()],
-          ir: [],
-          nam: [],
-          cover: [],
-        },
-        storage,
-      );
-
-      expect(result.name).toBe("The Tenth");
-    });
-
-    test("free-plan user with 10 existing songs: 11th createSong throws SongError(402) with 'free' and '10' in message, no new rows (R2, R3)", async () => {
-      const { userId } = await makeUser();
-      for (let i = 0; i < 10; i++) {
-        await seedSong(userId, { name: `Song ${i}` });
-      }
-      const db = getDb();
-      const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}`;
-      const beforeFiles = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_files sf
-        JOIN songs s ON s.id = sf.song_id
-        WHERE s.user_id = ${userId}`;
-
-      let caught: unknown;
-      try {
-        await createSong(
-          userId,
-          {
-            name: "Over limit",
-            preset: [presetFile()],
-            ir: [],
-            nam: [],
-            cover: [],
-          },
-          storage,
-        );
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).toBeInstanceOf(SongError);
-      expect((caught as SongError).status).toBe(402);
-      expect((caught as SongError).message).toContain("free");
-      expect((caught as SongError).message).toContain("10");
-
-      const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}`;
-      const afterFiles = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_files sf
-        JOIN songs s ON s.id = sf.song_id
-        WHERE s.user_id = ${userId}`;
-      expect(after[0].c).toBe(before[0].c);
-      expect(afterFiles[0].c).toBe(beforeFiles[0].c);
-    });
-
-    test("paid-plan user can create 11+ songs without rejection (R4)", async () => {
-      const { userId } = await makeUser();
-      const db = getDb();
-      await db`UPDATE users SET plan = 'paid' WHERE id = ${userId}`;
-
-      for (let i = 0; i < 11; i++) {
-        const result = await createSong(
-          userId,
-          {
-            name: `Paid Song ${i}`,
-            preset: [presetFile()],
-            ir: [],
-            nam: [],
-            cover: [],
-          },
-          storage,
-        );
-        expect(result.name).toBe(`Paid Song ${i}`);
-      }
-
-      const [{ c }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM songs WHERE user_id = ${userId}`;
-      expect(c).toBe(11);
-    });
-
-    test("free-plan user with 10 songs, one soft-deleted, can create an 11th successfully (R5)", async () => {
-      const { userId } = await makeUser();
-      const db = getDb();
-      const seeded: string[] = [];
-      for (let i = 0; i < 10; i++) {
-        const { songId } = await seedSong(userId, { name: `Song ${i}` });
-        seeded.push(songId);
-      }
-
-      // Soft-delete the first song, mirroring deleteSong's UPDATE.
-      await db`UPDATE songs SET deleted_at = NOW() WHERE id = ${seeded[0]}`;
-
-      const result = await createSong(
-        userId,
-        {
-          name: "Eleventh (live count was 9)",
-          preset: [presetFile()],
-          ir: [],
-          nam: [],
-          cover: [],
-        },
-        storage,
-      );
-
-      expect(result.name).toBe("Eleventh (live count was 9)");
-
-      const [{ live }] = await db<{ live: number }[]>`
-        SELECT COUNT(*)::int AS live FROM songs WHERE user_id = ${userId} AND deleted_at IS NULL
-      `;
-      expect(live).toBe(10);
     });
 
     test("createSong with userId that has no matching users row -> SongError(404) (R7)", async () => {
@@ -1190,13 +1074,164 @@ describe("multiple presets per song (multiple_presets_per_song)", () => {
     expect(caught).toBeInstanceOf(SongError);
     expect((caught as SongError).status).toBe(404);
   });
+});
 
-  test("free-plan user with 9 live songs creates a 10th with 3 presets (R30)", async () => {
-    const { userId } = await makeUser("multi");
-    for (let i = 0; i < 9; i++) {
-      await seedSong(userId, { name: `Song ${i}` });
+describe("createSong plan tiers (plan_tiers_songs_and_presets_per_song_limits)", () => {
+  let dir: string;
+  let storage: LocalFsStorageAdapter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "plan-tier-"));
+    storage = new LocalFsStorageAdapter(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function insertLiveSongs(userId: string, count: number): Promise<string[]> {
+    const db = getDb();
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const [row] = await db<{ id: string }[]>`
+        INSERT INTO songs (user_id, name) VALUES (${userId}, ${`Existing ${i}`}) RETURNING id
+      `;
+      ids.push(row!.id);
     }
-    const result = await createSong(userId, threePresetInput("Tenth with 3 presets"), storage);
+    return ids;
+  }
+
+  function inputWithPresets(name: string, presetCount: number): CreateSongInput {
+    return {
+      name,
+      preset: Array.from({ length: presetCount }, (_, i) =>
+        presetFile(i % fixtureBytes.length, `p${i}.prst`),
+      ),
+      ir: [],
+      nam: [],
+      cover: [],
+    };
+  }
+
+  async function countUserRows(userId: string): Promise<{ songs: number; files: number }> {
+    const db = getDb();
+    const [r] = await db<{ songs: number; files: number }[]>`
+      SELECT (SELECT COUNT(*)::int FROM songs WHERE user_id = ${userId}) AS songs,
+             (SELECT COUNT(*)::int FROM song_files sf JOIN songs s ON s.id = sf.song_id
+              WHERE s.user_id = ${userId}) AS files
+    `;
+    return r!;
+  }
+
+  async function expectRejected(
+    userId: string,
+    input: CreateSongInput,
+    code: PlanLimitCode,
+    plan: Plan,
+    limit: number,
+  ): Promise<void> {
+    const before = await countUserRows(userId);
+    let caught: unknown;
+    try {
+      await createSong(userId, input, storage);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(PlanLimitError);
+    const err = caught as PlanLimitError;
+    expect(err.code).toBe(code);
+    expect(err.plan).toBe(plan);
+    expect(err.limit).toBe(limit);
+    expect(err.status).toBe(402);
+    // R16: nothing persisted
+    expect(await countUserRows(userId)).toEqual(before);
+    expect(await countStoredObjects(dir)).toBe(0);
+  }
+
+  test("free: 0 live songs + 1 preset -> created (R6)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    const result = await createSong(userId, inputWithPresets("First", 1), storage);
+    expect(result.presets).toHaveLength(1);
+  });
+
+  test("free: 1 live song -> plan_song_limit, limit 1, nothing persisted (R7, R16)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    await insertLiveSongs(userId, 1);
+    await expectRejected(userId, inputWithPresets("Second", 1), "plan_song_limit", "free", 1);
+  });
+
+  test("free: 0 live songs + 2 presets -> plan_preset_limit, limit 1, nothing persisted (R11, R16)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    await expectRejected(userId, inputWithPresets("Two presets", 2), "plan_preset_limit", "free", 1);
+  });
+
+  test("free: 1 live song + 2 presets -> plan_song_limit wins (R13)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    await insertLiveSongs(userId, 1);
+    await expectRejected(userId, inputWithPresets("Both", 2), "plan_song_limit", "free", 1);
+  });
+
+  test("basic: 1 live song + 2 presets -> created (R8)", async () => {
+    const { userId } = await makeUser("tier-basic", "basic");
+    await insertLiveSongs(userId, 1);
+    const result = await createSong(userId, inputWithPresets("Second", 2), storage);
+    expect(result.presets).toHaveLength(2);
+  });
+
+  test("basic: 2 live songs -> plan_song_limit, limit 2, nothing persisted (R9, R16)", async () => {
+    const { userId } = await makeUser("tier-basic", "basic");
+    await insertLiveSongs(userId, 2);
+    await expectRejected(userId, inputWithPresets("Third", 1), "plan_song_limit", "basic", 2);
+  });
+
+  test("basic: 1 live song + 3 presets -> plan_preset_limit, limit 2, nothing persisted (R12, R16)", async () => {
+    const { userId } = await makeUser("tier-basic", "basic");
+    await insertLiveSongs(userId, 1);
+    await expectRejected(userId, inputWithPresets("Three", 3), "plan_preset_limit", "basic", 2);
+  });
+
+  test("premium: 3 live songs + 3 presets -> created (R10)", async () => {
+    const { userId } = await makeUser("tier-premium", "premium");
+    await insertLiveSongs(userId, 3);
+    const result = await createSong(userId, inputWithPresets("Fourth", 3), storage);
     expect(result.presets).toHaveLength(3);
+  });
+
+  test("free: 1 soft-deleted song and 0 live songs -> created (R18)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    const [songId] = await insertLiveSongs(userId, 1);
+    await getDb()`UPDATE songs SET deleted_at = NOW() WHERE id = ${songId!}`;
+    const result = await createSong(userId, inputWithPresets("After delete", 1), storage);
+    expect(result.name).toBe("After delete");
+  });
+
+  test("free: 1 live song + empty name -> SongError 400, not 402 (R17)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    await insertLiveSongs(userId, 1);
+    let caught: unknown;
+    try {
+      await createSong(userId, inputWithPresets("", 2), storage);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+  });
+
+  test("free: 1 live song + unreadable preset -> SongError 400, not 402 (R17)", async () => {
+    const { userId } = await makeUser("tier-free", "free");
+    await insertLiveSongs(userId, 1);
+    let caught: unknown;
+    try {
+      await createSong(
+        userId,
+        { name: "Bad", preset: [file("bad.prst", [1, 2, 3])], ir: [], nam: [], cover: [] },
+        storage,
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
   });
 });
