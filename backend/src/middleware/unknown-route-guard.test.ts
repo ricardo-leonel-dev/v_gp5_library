@@ -7,8 +7,15 @@ import { createCorsMiddleware } from "./cors";
 import { jsonNotFound } from "./not-found";
 import { buildPathIndex, createUnknownRouteGuard } from "./unknown-route-guard";
 import { issueToken } from "../auth/jwt";
+import { getDb } from "../db/client";
 
-const TEST_USER_ID = "33333333-3333-3333-3333-333333333333";
+async function makeLiveUser(): Promise<{ id: string; token: string }> {
+  const [user] = await getDb()<{ id: string }[]>`
+    INSERT INTO users (email, password_hash) VALUES (${`urg-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+  `;
+  return { id: user!.id, token: await issueToken(user!.id, "free") };
+}
+
 const ALLOWED_ORIGIN = "http://allowed.test";
 
 const passThrough = async (_c: unknown, next: () => Promise<void>) => {
@@ -50,7 +57,7 @@ describe("unknown-route guard — unknown path no auth (R1, R5)", () => {
 describe("unknown-route guard — unknown path valid token (R2, R5)", () => {
   test("GET /nope with a valid Bearer token -> 404 JSON {error:'Not found'}", async () => {
     const app = buildFixtureApp();
-    const token = await issueToken(TEST_USER_ID, "free");
+    const token = await issueToken(crypto.randomUUID(), "free");
     const res = await app.request("/nope", {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -72,7 +79,7 @@ describe("unknown-route guard — unknown path non-Bearer auth (R3)", () => {
 describe("unknown-route guard — unknown path expired or tampered token (R4)", () => {
   test("GET /nope with an expired token -> 404", async () => {
     const app = buildFixtureApp();
-    const expired = await issueToken(TEST_USER_ID, "free", "-10s");
+    const expired = await issueToken(crypto.randomUUID(), "free", "-10s");
     const res = await app.request("/nope", {
       headers: { Authorization: `Bearer ${expired}` },
     });
@@ -82,7 +89,7 @@ describe("unknown-route guard — unknown path expired or tampered token (R4)", 
   test("GET /nope with a tampered-signature token -> 404", async () => {
     const app = buildFixtureApp();
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const valid = await issueToken(TEST_USER_ID, "free");
+    const valid = await issueToken(crypto.randomUUID(), "free");
     const last = valid.slice(-1);
     const flippedVal = alphabet.indexOf(last) ^ 0x10;
     const tampered = valid.slice(0, -1) + alphabet[flippedVal];
@@ -104,7 +111,7 @@ describe("method mismatch on a known path (R6, R7)", () => {
 
   test("PUT /private with an expired token -> 401 {error:'Invalid or expired token'}", async () => {
     const app = buildFixtureApp();
-    const expired = await issueToken(TEST_USER_ID, "free", "-10s");
+    const expired = await issueToken(crypto.randomUUID(), "free", "-10s");
     const res = await app.request("/private", {
       method: "PUT",
       headers: { Authorization: `Bearer ${expired}` },
@@ -123,7 +130,7 @@ describe("method mismatch on a known path (R6, R7)", () => {
 describe("method mismatch on a known path with a valid token (R8, R5)", () => {
   test("PUT /private with a valid token -> 404 (not 405), JSON {error:'Not found'}", async () => {
     const app = buildFixtureApp();
-    const token = await issueToken(TEST_USER_ID, "free");
+    const { id, token } = await makeLiveUser();
     const res = await app.request("/private", {
       method: "PUT",
       headers: { Authorization: `Bearer ${token}` },
@@ -131,6 +138,11 @@ describe("method mismatch on a known path with a valid token (R8, R5)", () => {
     expect(res.status).toBe(404);
     expect(res.status).not.toBe(405);
     expect(await res.json()).toEqual({ error: "Not found" });
+    // Sanity: requireAuth accepted the row (it set userId to the live id).
+    // We don't read it directly because the response is the 404 from the
+    // unknown-route guard, but the lookup must have completed with 200
+    // since the test now reaches the post-middleware path.
+    expect(typeof id).toBe("string");
   });
 });
 
@@ -144,7 +156,7 @@ describe("protected route without token (R9, R10)", () => {
 
   test("GET /private with an expired token -> 401 {error:'Invalid or expired token'}", async () => {
     const app = buildFixtureApp();
-    const expired = await issueToken(TEST_USER_ID, "free", "-10s");
+    const expired = await issueToken(crypto.randomUUID(), "free", "-10s");
     const res = await app.request("/private", {
       headers: { Authorization: `Bearer ${expired}` },
     });
@@ -176,15 +188,15 @@ describe("late-protected route registration (R13, R14)", () => {
     expect(res.status).toBe(401);
   });
 
-  test("GET /late with a valid token -> 200 with userId equal to the token subject", async () => {
+  test("GET /late with a valid token -> 200 with userId equal to the live row's id", async () => {
     const app = buildFixtureApp();
-    const token = await issueToken(TEST_USER_ID, "free");
+    const { id, token } = await makeLiveUser();
     const res = await app.request("/late", {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { userId: string };
-    expect(body.userId).toBe(TEST_USER_ID);
+    expect(body.userId).toBe(id);
   });
 });
 

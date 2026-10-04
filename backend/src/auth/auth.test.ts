@@ -3,6 +3,7 @@ import { decodeJwt } from "jose";
 import { getDb } from "../db/client";
 import app from "../index";
 import { issueToken } from "./jwt";
+import { getMe, AuthError } from "./user-service";
 
 function randomEmail(): string {
   return `test-${crypto.randomUUID()}@example.com`;
@@ -267,5 +268,110 @@ describe("email normalization (email_lowercase_normalization)", () => {
       `;
       expect(row!.n).toBe(1);
     }
+  });
+});
+
+describe("block_soft_deleted_users_auth — login (R1, R2)", () => {
+  async function makeSoftDeletedUser(): Promise<{ email: string; password: string; id: string }> {
+    const email = `softlogin-${crypto.randomUUID()}@example.com`;
+    const password = "the-real-password";
+    const reg = await postJson("/auth/register", { email, password });
+    expect(reg.status).toBe(201);
+    const { user } = (await reg.json()) as { user: { id: string } };
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${user.id}`;
+    return { email, password, id: user.id };
+  }
+
+  test("soft-deleted user with the correct password -> 401 Invalid credentials (R1)", async () => {
+    const { email, password } = await makeSoftDeletedUser();
+    const res = await postJson("/auth/login", { email, password });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid credentials" });
+  });
+
+  test("soft-deleted user with a wrong password -> 401 Invalid credentials (R1)", async () => {
+    const { email } = await makeSoftDeletedUser();
+    const res = await postJson("/auth/login", { email, password: "wrong-password" });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid credentials" });
+  });
+
+  test("soft-deleted user, upper-cased/padded email, correct password -> 401 Invalid credentials (R1)", async () => {
+    const { email, password } = await makeSoftDeletedUser();
+    const res = await postJson("/auth/login", {
+      email: `  ${email.toUpperCase()}  `,
+      password,
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid credentials" });
+  });
+
+  test("live user login -> 200, sub equals the user's id (R2)", async () => {
+    const email = `livelogin-${crypto.randomUUID()}@example.com`;
+    const password = "the-real-password";
+    const reg = await postJson("/auth/register", { email, password });
+    const { user } = (await reg.json()) as { user: { id: string } };
+
+    const res = await postJson("/auth/login", { email, password });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string; user: { id: string } };
+    expect(decodeJwt(body.token).sub).toBe(user.id);
+    expect(body.user.id).toBe(user.id);
+  });
+});
+
+describe("block_soft_deleted_users_auth — /auth/me (R12, R13, R14)", () => {
+  test("token issued, then user soft-deleted -> /auth/me 401 Invalid or expired token (R12)", async () => {
+    const email = `me-r12-${crypto.randomUUID()}@example.com`;
+    const reg = await postJson("/auth/register", { email, password: "pw-123456" });
+    const { token, user } = (await reg.json()) as { token: string; user: { id: string } };
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${user.id}`;
+
+    const res = await app.request("/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid or expired token" });
+  });
+
+  test("token for a random UUID with no users row -> /auth/me 401 Invalid or expired token (R13)", async () => {
+    const token = await issueToken(crypto.randomUUID(), "free");
+    const res = await app.request("/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid or expired token" });
+  });
+
+  test("getMe(softDeletedId) throws AuthError with status 401 (R14)", async () => {
+    const email = `me-r14-${crypto.randomUUID()}@example.com`;
+    const reg = await postJson("/auth/register", { email, password: "pw-123456" });
+    const { user } = (await reg.json()) as { user: { id: string } };
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${user.id}`;
+
+    let caught: unknown;
+    try {
+      await getMe(user.id);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AuthError);
+    expect((caught as AuthError).status).toBe(401);
+  });
+});
+
+describe("block_soft_deleted_users_auth — register soft-deleted email (R15)", () => {
+  test("register with the upper-cased email of a soft-deleted row -> 409 Email is already registered (R15)", async () => {
+    const email = `r15-${crypto.randomUUID()}@example.com`;
+    await getDb()`
+      INSERT INTO users (email, password_hash, deleted_at)
+      VALUES (${email}, 'x', NOW())
+    `;
+    const res = await postJson("/auth/register", {
+      email: `  ${email.toUpperCase()}  `,
+      password: "pw-123456",
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "Email is already registered" });
   });
 });

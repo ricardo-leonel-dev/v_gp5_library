@@ -71,7 +71,8 @@ export async function login(email: string, password: string): Promise<{ token: s
   }
   const db = getDb();
   const [row] = await db`
-    SELECT id, email, plan, role, password_hash FROM users WHERE lower(email) = ${normalized}
+    SELECT id, email, plan, role, password_hash FROM users
+    WHERE lower(email) = ${normalized} AND deleted_at IS NULL
   `;
   if (!row) {
     throw new AuthError("Invalid credentials", 401);
@@ -89,7 +90,9 @@ export async function login(email: string, password: string): Promise<{ token: s
 
 export async function getMe(userId: string): Promise<PublicUser> {
   const db = getDb();
-  const [row] = await db`SELECT id, email, plan, role FROM users WHERE id = ${userId}`;
+  const [row] = await db`
+    SELECT id, email, plan, role FROM users WHERE id = ${userId} AND deleted_at IS NULL
+  `;
   if (!row) {
     throw new AuthError("User not found", 401);
   }
