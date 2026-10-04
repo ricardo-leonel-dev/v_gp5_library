@@ -16,6 +16,23 @@ async function insertSong(db: ReturnType<typeof getDb>): Promise<{ id: string }>
   return song;
 }
 
+function read0007(): Promise<string> {
+  return readFile(path.join(import.meta.dir, "migrations", "0007_email_lowercase.sql"), "utf8");
+}
+
+async function captureError(query: PromiseLike<unknown>): Promise<unknown> {
+  try {
+    await query;
+  } catch (err) {
+    return err;
+  }
+  throw new Error("expected the query to fail");
+}
+
+function sqlState(err: unknown): unknown {
+  return (err as { errno?: unknown }).errno;
+}
+
 describe("migrate", () => {
   test("running migrate twice is a no-op the second time (R2, R3, R4)", async () => {
     await migrate();
@@ -28,6 +45,7 @@ describe("migrate", () => {
       "0004_multiple_presets_per_song.sql",
       "0005_plan_tiers.sql",
       "0006_user_roles_and_plan_changes.sql",
+      "0007_email_lowercase.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -387,6 +405,139 @@ describe("migrate", () => {
       SELECT conname FROM pg_constraint WHERE conname = 'users_role_valid'
     `;
     expect(constraint!.conname).toBe("users_role_valid");
+  });
+
+  test("0007 normalizes emails and bumps updated_at only on changed rows (email_lowercase_normalization R15, R16, R17)", async () => {
+    const db = getDb();
+    const sql = await read0007();
+    const id = crypto.randomUUID();
+    const mixed = `  MiXed-${id}@Example.COM `;
+    const clean = `clean-${id}@example.com`;
+    const rollbackSentinel = new Error("rollback");
+    await expect(
+      db.begin(async (tx) => {
+        const [a] = await tx<{ id: string }[]>`
+          INSERT INTO users (email, password_hash, updated_at)
+          VALUES (${mixed}, 'x', '2000-01-01T00:00:00Z') RETURNING id
+        `;
+        const [b] = await tx<{ id: string }[]>`
+          INSERT INTO users (email, password_hash, updated_at)
+          VALUES (${clean}, 'x', '2000-01-01T00:00:00Z') RETURNING id
+        `;
+
+        await tx.unsafe(sql);
+
+        const [rowA] = await tx<{ email: string; updated_at: Date }[]>`
+          SELECT email, updated_at FROM users WHERE id = ${a!.id}
+        `;
+        const [rowB] = await tx<{ email: string; updated_at: Date }[]>`
+          SELECT email, updated_at FROM users WHERE id = ${b!.id}
+        `;
+        expect(rowA!.email).toBe(`mixed-${id}@example.com`);
+        expect(rowA!.updated_at.getTime()).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
+        expect(rowB!.email).toBe(clean);
+        expect(rowB!.updated_at.getTime()).toBe(Date.parse("2000-01-01T00:00:00Z"));
+        throw rollbackSentinel;
+      }),
+    ).rejects.toBe(rollbackSentinel);
+  });
+
+  test("0007 aborts on a case-insensitive collision (live + soft-deleted) and changes no email (email_lowercase_normalization R18, R19)", async () => {
+    const db = getDb();
+    const sql = await read0007();
+    const id = crypto.randomUUID();
+    const inserted = [`col-${id}@example.com`, `COL-${id}@EXAMPLE.COM`, `Keep-${id}@Example.com`];
+    const rollbackSentinel = new Error("rollback");
+    await expect(
+      db.begin(async (tx) => {
+        await tx`DROP INDEX users_email_lower_key`;
+        const [live] = await tx<{ id: string }[]>`
+          INSERT INTO users (email, password_hash) VALUES (${inserted[0]!}, 'x') RETURNING id
+        `;
+        const [deleted] = await tx<{ id: string }[]>`
+          INSERT INTO users (email, password_hash, deleted_at)
+          VALUES (${inserted[1]!}, 'x', NOW()) RETURNING id
+        `;
+        const [keep] = await tx<{ id: string }[]>`
+          INSERT INTO users (email, password_hash) VALUES (${inserted[2]!}, 'x') RETURNING id
+        `;
+
+        let caught: unknown;
+        try {
+          await tx.savepoint(async (sp) => {
+            await sp.unsafe(sql);
+          });
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        const message = (caught as Error).message;
+        expect(message).toContain("case-insensitive email collision");
+        expect(message).toContain(`col-${id}@example.com`);
+        expect(message).toContain(live!.id);
+        expect(message).toContain(deleted!.id);
+
+        const rows = await tx<{ email: string }[]>`
+          SELECT email FROM users WHERE id IN (${live!.id}, ${deleted!.id}, ${keep!.id})
+          ORDER BY created_at, id
+        `;
+        expect(rows.map((r) => r.email).sort()).toEqual([...inserted].sort());
+        throw rollbackSentinel;
+      }),
+    ).rejects.toBe(rollbackSentinel);
+  });
+
+  test("a case-variant INSERT/UPDATE is rejected with 23505, also against a soft-deleted row (email_lowercase_normalization R20)", async () => {
+    const db = getDb();
+    for (const softDeleted of [false, true]) {
+      const id = crypto.randomUUID();
+      const [first] = await db<{ id: string }[]>`
+        INSERT INTO users (email, password_hash) VALUES (${`x-${id}@example.com`}, 'x') RETURNING id
+      `;
+      if (softDeleted) await db`UPDATE users SET deleted_at = NOW() WHERE id = ${first!.id}`;
+
+      const insertErr = await captureError(
+        db`INSERT INTO users (email, password_hash) VALUES (${`X-${id}@example.com`}, 'x')`,
+      );
+      expect(sqlState(insertErr)).toBe("23505");
+
+      const [other] = await db<{ id: string }[]>`
+        INSERT INTO users (email, password_hash) VALUES (${`other-${id}@example.com`}, 'x') RETURNING id
+      `;
+      const updateErr = await captureError(
+        db`UPDATE users SET email = ${`X-${id}@Example.com`} WHERE id = ${other!.id}`,
+      );
+      expect(sqlState(updateErr)).toBe("23505");
+    }
+  });
+
+  test("users_email_key is gone and users_email_lower_key is a non-partial unique index on lower(email) (email_lowercase_normalization R21)", async () => {
+    const db = getDb();
+    const constraints = await db<{ conname: string }[]>`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'users'::regclass AND conname = 'users_email_key'
+    `;
+    expect(constraints).toHaveLength(0);
+
+    const indexes = await db<{ indexname: string; indexdef: string }[]>`
+      SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'users'
+    `;
+    const lowerKey = indexes.find((i) => i.indexname === "users_email_lower_key");
+    expect(lowerKey).toBeDefined();
+    expect(lowerKey!.indexdef).toContain("UNIQUE");
+    expect(lowerKey!.indexdef).toContain("lower(");
+    expect(lowerKey!.indexdef).not.toContain(" WHERE ");
+    const plainEmailUnique = indexes.filter(
+      (i) => i.indexdef.includes("UNIQUE") && i.indexdef.endsWith("(email)"),
+    );
+    expect(plainEmailUnique).toHaveLength(0);
+  });
+
+  test("re-executing the 0007 SQL on an already-migrated database does not throw (email_lowercase_normalization R22)", async () => {
+    const db = getDb();
+    const sql = await read0007();
+    await db.unsafe(sql);
+    await db.unsafe(sql);
   });
 
   test("a failing migration file is not recorded as applied (R5)", async () => {

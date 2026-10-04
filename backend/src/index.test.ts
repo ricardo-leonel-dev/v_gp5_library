@@ -1060,7 +1060,7 @@ describe("GET /admin/users?email= (plan_management_admin R35, R36, R37)", () => 
     expect(await res.json()).toEqual({ id: user!.id, email, plan: "basic", role: "user" });
   });
 
-  test("unknown, upper-cased and soft-deleted emails -> 404 (R36)", async () => {
+  test("unknown and soft-deleted emails -> 404 (R36)", async () => {
     const admin = await makeAdminToken();
     const email = `lookup-${crypto.randomUUID()}@example.com`;
     await getDb()`INSERT INTO users (email, password_hash) VALUES (${email}, 'x')`;
@@ -1070,13 +1070,34 @@ describe("GET /admin/users?email= (plan_management_admin R35, R36, R37)", () => 
     `;
     for (const candidate of [
       `nobody-${crypto.randomUUID()}@example.com`,
-      email.toUpperCase(),
       deleted,
     ]) {
       const res = await lookup(admin.token, `?email=${encodeURIComponent(candidate)}`);
       expect(res.status).toBe(404);
       expect(await res.json()).toEqual({ error: "user not found" });
     }
+  });
+
+  test("padded, upper-cased email -> 200 with the stored body (email_lowercase_normalization R11, supersedes plan_management_admin R35)", async () => {
+    const admin = await makeAdminToken();
+    const email = `lookup-ci-${crypto.randomUUID()}@example.com`;
+    const [user] = await getDb()<{ id: string }[]>`
+      INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', 'basic') RETURNING id
+    `;
+    const res = await lookup(admin.token, `?email=${encodeURIComponent(`  ${email.toUpperCase()} `)}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: user!.id, email, plan: "basic", role: "user" });
+  });
+
+  test("upper-cased lookup of a soft-deleted row -> 404 (email_lowercase_normalization R12)", async () => {
+    const admin = await makeAdminToken();
+    const deleted = `lookup-ci-del-${crypto.randomUUID()}@example.com`;
+    await getDb()`
+      INSERT INTO users (email, password_hash, deleted_at) VALUES (${deleted}, 'x', NOW())
+    `;
+    const res = await lookup(admin.token, `?email=${encodeURIComponent(deleted.toUpperCase())}`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "user not found" });
   });
 
   test("missing or empty email -> 400 (R37)", async () => {

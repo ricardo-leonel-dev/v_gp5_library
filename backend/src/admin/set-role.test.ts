@@ -85,3 +85,13 @@ describe("runSetRole (plan_management_admin)", () => {
     expect(await roleOf(user.id)).toEqual(before);
   });
 });
+
+describe("runSetRole (email_lowercase_normalization)", () => {
+  test("upper-cased email -> exit 0, role admin, log prints the stored email (R13, R14)", async () => {
+    const user = await insertUser("user");
+    const io = silentOut();
+    expect(await runSetRole([user.email.toUpperCase(), "admin"], io.out)).toBe(0);
+    expect((await roleOf(user.id)).role).toBe("admin");
+    expect(io.logs).toEqual([`role of ${user.email} set to admin`]);
+  });
+});

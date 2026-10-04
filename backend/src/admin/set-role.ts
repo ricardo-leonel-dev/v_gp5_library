@@ -1,3 +1,4 @@
+import { normalizeEmail } from "../auth/email";
 import { toPublicUser, type PublicUser, type Role } from "../auth/user-service";
 import { getDb } from "../db/client";
 
@@ -15,7 +16,7 @@ export function parseSetRoleArgs(argv: string[]): { email: string; role: Role } 
 export async function setUserRoleByEmail(email: string, role: Role): Promise<PublicUser | null> {
   const [row] = await getDb()<{ id: string; email: string; plan: string; role: string }[]>`
     UPDATE users SET role = ${role}, updated_at = NOW()
-    WHERE email = ${email} AND deleted_at IS NULL
+    WHERE lower(email) = ${normalizeEmail(email)} AND deleted_at IS NULL
     RETURNING id, email, plan, role
   `;
   return row ? toPublicUser(row) : null;
@@ -35,7 +36,7 @@ export async function runSetRole(
     out.error(`no live user with email ${args.email}`);
     return 1;
   }
-  out.log(`role of ${args.email} set to ${args.role}`);
+  out.log(`role of ${user.email} set to ${args.role}`);
   return 0;
 }
 
