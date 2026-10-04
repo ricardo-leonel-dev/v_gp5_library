@@ -189,3 +189,83 @@ describe("role exposure (plan_management_admin)", () => {
     expect(((await after.json()) as { role: string }).role).toBe("admin");
   });
 });
+
+describe("email normalization (email_lowercase_normalization)", () => {
+  test("register stores and returns the trimmed lowercase email (R2, R3)", async () => {
+    const id = crypto.randomUUID();
+    const res = await postJson("/auth/register", {
+      email: `  Foo-${id}@Example.COM\t`,
+      password: "pw-123456",
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: { id: string; email: string } };
+    expect(body.user.email).toBe(`foo-${id}@example.com`);
+    const [row] = await getDb()<{ email: string }[]>`SELECT email FROM users WHERE id = ${body.user.id}`;
+    expect(row!.email).toBe(`foo-${id}@example.com`);
+  });
+
+  test("login with a different casing and padding -> 200, sub is the user id, email lowercase (R8, R9)", async () => {
+    const id = crypto.randomUUID();
+    const reg = await postJson("/auth/register", { email: `Foo-${id}@Example.com`, password: "pw-123456" });
+    const { user } = (await reg.json()) as { user: { id: string } };
+
+    const res = await postJson("/auth/login", { email: ` FOO-${id}@EXAMPLE.COM `, password: "pw-123456" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string; user: { id: string; email: string } };
+    expect(decodeJwt(body.token).sub).toBe(user.id);
+    expect(body.user.email).toBe(`foo-${id}@example.com`);
+  });
+
+  test("register with a case variant of a live or soft-deleted row -> 409 (R4)", async () => {
+    const liveId = crypto.randomUUID();
+    await postJson("/auth/register", { email: `dup-${liveId}@example.com`, password: "pw-123456" });
+    const live = await postJson("/auth/register", { email: `DUP-${liveId}@Example.COM`, password: "pw-123456" });
+    expect(live.status).toBe(409);
+    expect(await live.json()).toEqual({ error: "Email is already registered" });
+
+    const deletedId = crypto.randomUUID();
+    await getDb()`
+      INSERT INTO users (email, password_hash, deleted_at)
+      VALUES (${`gone-${deletedId}@example.com`}, 'x', NOW())
+    `;
+    const deleted = await postJson("/auth/register", {
+      email: `Gone-${deletedId}@EXAMPLE.com`,
+      password: "pw-123456",
+    });
+    expect(deleted.status).toBe(409);
+    expect(await deleted.json()).toEqual({ error: "Email is already registered" });
+  });
+
+  test("whitespace-only email -> 400 on register (no row inserted) and on login (R7, R10)", async () => {
+    const countUsers = async () => {
+      const [r] = await getDb()<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM users`;
+      return r!.n;
+    };
+    const before = await countUsers();
+    const reg = await postJson("/auth/register", { email: "   ", password: "pw-123456" });
+    expect(reg.status).toBe(400);
+    expect(await reg.json()).toEqual({ error: "email and password are required" });
+    expect(await countUsers()).toBe(before);
+
+    const login = await postJson("/auth/login", { email: " \t ", password: "pw-123456" });
+    expect(login.status).toBe(400);
+    expect(await login.json()).toEqual({ error: "email and password are required" });
+  });
+
+  test("concurrent case-variant registers -> one 201, one 409, exactly one row (R5, R6)", async () => {
+    for (let i = 0; i < 10; i++) {
+      const id = crypto.randomUUID();
+      const responses = await Promise.all([
+        postJson("/auth/register", { email: `Race-${id}@Example.com`, password: "pw-123456" }),
+        postJson("/auth/register", { email: `race-${id}@example.com`, password: "pw-123456" }),
+      ]);
+      expect(responses.map((r) => r.status).sort()).toEqual([201, 409]);
+      const loser = responses.find((r) => r.status === 409)!;
+      expect(await loser.json()).toEqual({ error: "Email is already registered" });
+      const [row] = await getDb()<{ n: number }[]>`
+        SELECT COUNT(*)::int AS n FROM users WHERE lower(email) = ${`race-${id}@example.com`}
+      `;
+      expect(row!.n).toBe(1);
+    }
+  });
+});
