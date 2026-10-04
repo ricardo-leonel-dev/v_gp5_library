@@ -2,9 +2,9 @@
 feature_number: 18
 name: email_lowercase_normalization
 title: Normalize user emails to lowercase
-status: pending
+status: done
 created_at: 2026-10-03T22:20:03.000Z
-updated_at: 2026-10-03T22:20:05.000Z
+updated_at: 2026-10-04T04:08:16.000Z
 ---
 
 ## Description
