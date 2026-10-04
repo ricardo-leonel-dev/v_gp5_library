@@ -3,7 +3,7 @@ session_id: 39
 feature: block_soft_deleted_users_auth
 agent: Claude (implementer agent by MiniMax-M3[1m])
 started_at: 2026-10-04T05:06:19.000Z
-closed_at:
+closed_at: 2026-10-04T05:21:58.000Z
 ---
 
 ## Plan
@@ -34,3 +34,9 @@ closed_at:
 - [Claude (implementer agent by MiniMax-M3[1m])] T15 done: ./init.sh green (336 pass / 0 fail / 1081 expect across 18 files); progress/impl_block_soft_deleted_users_auth.md written with R1-R18 traceability.
 
 ## Next Step
+
+## Verification
+336 pass, 0 fail, 1081 expect() calls across 18 files
+
+## Closure
+implemented and reviewed per progress/review.md; spec tasks file ticked to keep it self-consistent with the implementation
