@@ -834,11 +834,11 @@ describe("GET /me/plan (plan_tiers R18-R26)", () => {
     expect(res.status).toBe(401);
   });
 
-  test("valid token for a user with no users row -> 404 (R26)", async () => {
+  test("valid token for a user with no users row -> 401 Invalid or expired token (R26, D4)", async () => {
     const token = await issueToken(crypto.randomUUID(), "free");
     const res = await getPlan(token);
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "user not found" });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid or expired token" });
   });
 });
 
@@ -1137,5 +1137,51 @@ describe("no role-changing endpoint (plan_management_admin R28, R30)", () => {
       expect(res.status).toBe(404);
       expect(await res.json()).toEqual({ error: "Not found" });
     }
+  });
+});
+
+describe("block_soft_deleted_users_auth — protected routes lose access on soft-delete (R10, R11)", () => {
+  test("live token GET /songs -> 200, then soft-delete, same token GET /songs -> 401 (R10)", async () => {
+    const { userId, token } = await makeUserToken("soft-r10", "free");
+
+    // Insert a song so the first GET has something to list — also confirms
+    // we can read the songs owned by the user before the delete.
+    const fd = new FormData();
+    fd.append("name", "Before delete");
+    fd.append("preset", presetPart());
+    const createRes = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(createRes.status).toBe(201);
+
+    const before = await app.request("/songs", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(before.status).toBe(200);
+
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${userId}`;
+
+    const after = await app.request("/songs", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(after.status).toBe(401);
+    expect(await after.json()).toEqual({ error: "Invalid or expired token" });
+  });
+
+  test("soft-deleted admin GET /admin/users?email=x -> 401 Invalid or expired token (R11)", async () => {
+    const admin = await makeAdminToken();
+    const targetEmail = `r11-target-${crypto.randomUUID()}@example.com`;
+    await getDb()`
+      INSERT INTO users (email, password_hash, plan) VALUES (${targetEmail}, 'x', 'free')
+    `;
+    await getDb()`UPDATE users SET deleted_at = NOW() WHERE id = ${admin.userId}`;
+
+    const res = await app.request(`/admin/users?email=${encodeURIComponent(targetEmail)}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Invalid or expired token" });
   });
 });

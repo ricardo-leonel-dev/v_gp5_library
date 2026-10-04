@@ -3,8 +3,15 @@ import { Hono } from "hono";
 import { createProtectedRouter } from "./protected-router";
 import { createCorsMiddleware } from "./cors";
 import { issueToken } from "../auth/jwt";
+import { getDb } from "../db/client";
 
-const TEST_USER_ID = "22222222-2222-2222-2222-222222222222";
+async function makeLiveUser(): Promise<{ id: string; token: string }> {
+  const [user] = await getDb()<{ id: string }[]>`
+    INSERT INTO users (email, password_hash) VALUES (${`cors-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+  `;
+  return { id: user!.id, token: await issueToken(user!.id, "free") };
+}
+
 const ALLOWED_ORIGIN = "http://allowed.test";
 const OTHER_ORIGIN = "http://evil.test";
 
@@ -125,7 +132,7 @@ describe("createCorsMiddleware real request on a protected route (R12, R16)", ()
 describe("createCorsMiddleware real request on a protected route with bad tokens (R17)", () => {
   test("expired bearer token returns 401 {error:'Invalid or expired token'} with Allow-Origin", async () => {
     const app = buildFixtureApp();
-    const expired = await issueToken(TEST_USER_ID, "free", "-10s");
+    const expired = await issueToken(crypto.randomUUID(), "free", "-10s");
     const res = await app.request("/private", {
       headers: { Origin: ALLOWED_ORIGIN, Authorization: `Bearer ${expired}` },
     });
@@ -148,7 +155,7 @@ describe("createCorsMiddleware real request on a protected route with bad tokens
 describe("createCorsMiddleware real request on a protected route with a valid token (R18)", () => {
   test("GET /private with a valid bearer token returns the same status/body with an allowed Origin header as without one", async () => {
     const app = buildFixtureApp();
-    const token = await issueToken(TEST_USER_ID, "free");
+    const { token } = await makeLiveUser();
 
     const withoutOrigin = await app.request("/private", {
       headers: { Authorization: `Bearer ${token}` },
