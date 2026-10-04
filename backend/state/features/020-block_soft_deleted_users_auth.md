@@ -2,9 +2,9 @@
 feature_number: 20
 name: block_soft_deleted_users_auth
 title: Block soft-deleted users from login and API access
-status: in_progress
+status: done
 created_at: 2026-10-04T03:12:39.000Z
-updated_at: 2026-10-04T05:06:19.000Z
+updated_at: 2026-10-04T05:21:58.000Z
 ---
 
 ## Description
