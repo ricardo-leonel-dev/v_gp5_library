@@ -783,3 +783,9 @@ describe('PresetBrowserPage v6 — R40 read-only MIDI send spy', () => {
     expect(outputPort.sendSpy.mock.calls.length).toBe(sendCountAfterLoad);
   });
 });
+
+// F4 save-song dialog integration is covered by the dialog spec
+// (src/app/songs/save-song-dialog/save-song-dialog.spec.ts). The dialog is
+// mounted on <app-save-song-dialog> only when `saveDialog()` is non-null, so
+// this page just snapshots the input set — see `openSaveDialog()` /
+// `closeSaveDialog()`.

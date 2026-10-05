@@ -592,6 +592,31 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
     expect(presets.map((p) => p.slot)).toEqual([0, 1]);
   });
 
+  test('resolves a preset whose raw bytes came from the codec unchanged (R4)', async () => {
+    vi.useFakeTimers();
+    const rawBody = new Uint8Array(466);
+    for (let i = 0; i < 466; i++) rawBody[i] = (i * 7) & 0xff;
+    const rawName = new Uint8Array(16);
+    rawName.set([0x54, 0x4c, 0x20, 0x44, 0x4c, 0x58, 0x20, 0x41, 0x4d, 0x50], 0);
+    const presetWithRaw: Preset = {
+      slot: 5,
+      name: 'TL DLX AMP',
+      chain: [{ moduleType: 'cat7_fx4', enabled: true, parameters: {} }],
+      raw: { body: rawBody, nameField: rawName },
+    };
+    const codec = new FakeCodec();
+    codec.readMessageSets = [[new Uint8Array([0x01]), new Uint8Array([0x02])]];
+    codec.decodeResults = [{ kind: 'preset', preset: presetWithRaw, isLast: true }];
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
+
+    const presets = await driveFullRead(connection.readPresets(), inputPort, 1);
+
+    expect(presets[0].raw).toBeDefined();
+    expect(presets[0].raw!.body).toBe(rawBody);
+    expect(presets[0].raw!.nameField).toBe(rawName);
+  });
+
   test('ignores "ignored" decode results without affecting the pending call, extending the per-step deadline instead (R11)', async () => {
     vi.useFakeTimers();
     const codec = new FakeCodec();

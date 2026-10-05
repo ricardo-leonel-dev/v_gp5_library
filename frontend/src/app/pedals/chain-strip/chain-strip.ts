@@ -12,7 +12,7 @@ import { PedalGlyph } from '../pedal-glyph/pedal-glyph';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ChainStrip {
-  readonly chain = input.required<PresetSlot[]>();
+  readonly chain = input.required<readonly PresetSlot[]>();
 
   readonly displayCategoryCode = displayCategoryCode;
 
