@@ -1,12 +1,14 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   HostListener,
   OnInit,
   computed,
   effect,
   inject,
   signal,
+  viewChild,
 } from '@angular/core';
 import { TranslocoDirective } from '@jsverse/transloco';
 import type { Preset, PresetSlot } from '../../midi/preset';
@@ -16,8 +18,15 @@ import { PresetComparisonStore } from '../preset-comparison.service';
 import { ChainBoard, type ChainBlockClicked } from '../chain-board/chain-board';
 import { BlockDetail } from '../block-detail/block-detail';
 import { MockPresetsStore } from '../mock-presets.store';
+import { SaveSongDialog } from '../../songs/save-song-dialog/save-song-dialog';
 
 type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
+
+interface SaveDialogState {
+  initial: readonly Preset[];
+  available: readonly Preset[];
+  testMode: boolean;
+}
 
 // v6: the page is a chip-based navigation (R22, R23) above the main
 // area (R24). The drawer, compact list, sticky toolbar, voltforge
@@ -28,7 +37,7 @@ type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
 // (R25-R27) opens when "Browse presets" is clicked.
 @Component({
   selector: 'app-preset-browser-page',
-  imports: [TranslocoDirective, ChainBoard, BlockDetail],
+  imports: [TranslocoDirective, ChainBoard, BlockDetail, SaveSongDialog],
   templateUrl: './preset-browser-page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -85,6 +94,12 @@ export class PresetBrowserPage implements OnInit {
   private readonly selectedBlockBySlot = signal<ReadonlyMap<number, ChainBlockClicked>>(
     new Map(),
   );
+
+  // F4: snapshot of the Save-as-song dialog state at the moment of open
+  // (R24-R27). Null while closed. The dialog reads these inputs once and
+  // never re-reads them while it stays open (R26).
+  readonly saveDialog = signal<SaveDialogState | null>(null);
+  private readonly saveButton = viewChild<ElementRef<HTMLButtonElement>>('saveSongButton');
 
   constructor() {
     // v6: when mock data is loaded via the header button, mirror it into
@@ -165,6 +180,49 @@ export class PresetBrowserPage implements OnInit {
   onExportMarkChange(slot: number): void {
     this.exportSelection.toggle(slot);
   }
+
+  // F4: F4 dialog open/close. Opens with initial = chip-listed savable
+  // presets (sorted), available = every savable preset (mock or has raw),
+  // and testMode = the displayed preset is a mock (R22-R27).
+  openSaveDialog(): void {
+    const savable = this.presets().filter((p) => this.isSavable(p));
+    const chips = new Set(this.chipSlots());
+    const initial = savable
+      .filter((p) => chips.has(p.slot))
+      .slice()
+      .sort((a, b) => a.slot - b.slot);
+    this.saveDialog.set({
+      initial,
+      available: savable.slice(),
+      testMode: this.displayIsMock(),
+    });
+  }
+
+  closeSaveDialog(): void {
+    this.saveDialog.set(null);
+    queueMicrotask(() => this.saveButton()?.nativeElement.focus());
+  }
+
+  // F4: savability for the page entry button (R22-R24). A pedal preset is
+  // savable when it has raw bytes; mocks are always savable (they open
+  // the dialog in test mode).
+  isMock(p: Preset): boolean {
+    return this.mockPresets.presets().includes(p);
+  }
+
+  isSavable(p: Preset): boolean {
+    return this.isMock(p) || p.raw !== undefined;
+  }
+
+  readonly displayIsMock = computed(() => {
+    const p = this.displayPreset();
+    return p !== null && this.isMock(p);
+  });
+
+  readonly canSave = computed(() => {
+    const p = this.displayPreset();
+    return p !== null && this.isSavable(p);
+  });
 
   onBlockClicked(presetSlot: number, click: ChainBlockClicked): void {
     this.selectedBlockBySlot.update((m) => {

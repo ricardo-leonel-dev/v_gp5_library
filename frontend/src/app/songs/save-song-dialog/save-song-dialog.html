@@ -1,0 +1,453 @@
+<div *transloco="let t" class="contents">
+  <div
+    class="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 sm:items-center sm:p-4"
+    data-testid="save-song-backdrop"
+    (click)="onBackdropClick()"
+  >
+    <div
+      class="flex max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-xl bg-white shadow-xl dark:bg-slate-800 sm:max-h-[90vh] sm:rounded-xl"
+      data-testid="save-song-card"
+      role="dialog"
+      aria-modal="true"
+      [attr.aria-labelledby]="titleId"
+      (click)="$event.stopPropagation()"
+    >
+      <header
+        class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-6"
+      >
+        <h2
+          [id]="titleId"
+          class="text-base font-semibold text-slate-900 dark:text-slate-100"
+          data-testid="save-song-title"
+        >
+          {{ t('saveSong.title') }}
+        </h2>
+        <button
+          type="button"
+          class="-mr-1 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 disabled:opacity-50"
+          [attr.aria-label]="t('saveSong.close')"
+          [disabled]="submitting()"
+          data-testid="save-song-close"
+          (click)="requestClose()"
+        >×</button>
+      </header>
+
+      <div class="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6" data-testid="save-song-body">
+        @if (songLimitReached()) {
+          <p
+            class="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+            role="status"
+            data-testid="save-song-song-limit"
+          >
+            {{ t('saveSong.plan.songLimitReached', { limit: plan()!.songLimit }) }}
+          </p>
+        }
+
+        <fieldset class="space-y-2" data-testid="save-song-presets">
+          <legend class="text-sm font-medium text-slate-700 dark:text-slate-300">
+            {{ t('saveSong.presets_legend') }}
+          </legend>
+          <p class="text-xs text-slate-500 dark:text-slate-400">
+            {{ t('saveSong.presets_help') }}
+          </p>
+
+          @if (entries().length > 0) {
+            <ol
+              class="divide-y divide-slate-200 rounded-lg bg-slate-50 ring-1 ring-inset ring-slate-200 dark:divide-slate-700 dark:bg-slate-900 dark:ring-slate-700"
+              data-testid="save-song-presets-list"
+            >
+              @for (e of entries(); track e.key; let i = $index, first = $first, last = $last) {
+                <li
+                  class="grid grid-cols-[1.5rem_1fr_auto] items-start gap-x-2 px-3 py-2.5"
+                  data-testid="save-song-preset-row"
+                  [attr.data-row-key]="e.key"
+                  [attr.aria-label]="t(e.source === 'pedal' ? 'saveSong.preset_row_aria' : 'saveSong.preset_row_file_aria', { position: i + 1, name: e.name })"
+                >
+                  <span class="pt-0.5 text-right text-sm font-semibold tabular-nums text-slate-400 dark:text-slate-500" aria-hidden="true">
+                    {{ i + 1 }}
+                  </span>
+                  <div class="min-w-0">
+                    <p class="flex min-w-0 items-baseline gap-2 text-sm">
+                      @if (e.source === 'pedal') {
+                        <span
+                          class="rounded bg-indigo-50 px-1 text-[10px] font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
+                          data-testid="save-song-pedal-badge"
+                        >{{ t('saveSong.pedal_badge') }}</span>
+                      } @else {
+                        <span
+                          class="rounded bg-slate-200 px-1 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                          data-testid="save-song-file-badge"
+                        >{{ t('saveSong.file_badge') }}</span>
+                      }
+                      <span class="truncate font-medium text-slate-900 dark:text-slate-100">{{ e.name }}</span>
+                    </p>
+                    <div class="mt-1.5"><app-chain-strip [chain]="e.chain"></app-chain-strip></div>
+                    @if (fieldErrors().entryRows[e.key]) {
+                      <p
+                        class="mt-1 text-xs text-red-600 dark:text-red-400"
+                        data-testid="save-song-preset-row-error"
+                      >
+                        {{ t(fieldErrors().entryRows[e.key].key, fieldErrors().entryRows[e.key].params) }}
+                      </p>
+                    }
+                  </div>
+                  <div class="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      class="rounded-md p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      [attr.aria-label]="t('saveSong.move_up', { name: e.name })"
+                      [attr.data-testid]="'save-song-preset-up-' + i"
+                      [disabled]="first || submitting()"
+                      (click)="moveUp(i)"
+                    >↑</button>
+                    <button
+                      type="button"
+                      class="rounded-md p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      [attr.aria-label]="t('saveSong.move_down', { name: e.name })"
+                      [attr.data-testid]="'save-song-preset-down-' + i"
+                      [disabled]="last || submitting()"
+                      (click)="moveDown(i)"
+                    >↓</button>
+                    <button
+                      type="button"
+                      class="rounded-md p-1.5 text-slate-500 hover:bg-slate-200 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-red-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      [attr.aria-label]="t('saveSong.remove_preset', { name: e.name })"
+                      [attr.data-testid]="'save-song-preset-remove-' + i"
+                      [disabled]="submitting()"
+                      (click)="removeEntry(i)"
+                    >×</button>
+                  </div>
+                </li>
+              }
+            </ol>
+          } @else {
+            <div
+              class="rounded-lg border border-dashed border-slate-300 px-3 py-4 text-center text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400"
+              data-testid="save-song-presets-empty"
+            >
+              {{ t('saveSong.presets_empty') }}
+            </div>
+          }
+
+          @if (fieldErrors().presets) {
+            <p class="text-xs text-red-600 dark:text-red-400" data-testid="save-song-presets-error">
+              {{ t(fieldErrors().presets!.key, fieldErrors().presets!.params) }}
+            </p>
+          }
+
+          <div class="flex flex-col gap-2 sm:flex-row" data-testid="save-song-add-controls">
+            @if (availablePresets().length > 0) {
+              <select
+                class="w-full rounded-md border border-dashed border-slate-300 bg-transparent px-3 py-2 text-sm text-slate-600 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-indigo-500 sm:flex-1"
+                [attr.aria-label]="t('saveSong.add_preset_aria')"
+                [disabled]="addable().length === 0 || atCap() || submitting()"
+                data-testid="save-song-add-preset"
+                (change)="onAddPreset($any($event.target).value); $any($event.target).value = ''"
+              >
+                <option value="" disabled selected>{{ t('saveSong.add_preset') }}</option>
+                @for (p of addable(); track p.slot) {
+                  <option [value]="p.slot">{{ p.slot }} · {{ p.name }}</option>
+                }
+              </select>
+            }
+            <button
+              type="button"
+              class="inline-flex w-full shrink-0 items-center justify-center gap-1.5 rounded-md border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-600 hover:border-slate-400 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 sm:w-auto"
+              [attr.aria-label]="t('saveSong.add_file')"
+              [disabled]="atCap() || submitting()"
+              data-testid="save-song-add-file"
+              (click)="fileInput.click()"
+            >
+              <span aria-hidden="true">+</span>
+              <span>{{ t('saveSong.add_file') }}</span>
+            </button>
+            <input
+              #fileInput
+              type="file"
+              accept=".prst"
+              tabindex="-1"
+              aria-hidden="true"
+              class="sr-only"
+              data-testid="save-song-add-file-input"
+              (change)="onPrstPicked($event)"
+            />
+          </div>
+
+          @if (addError(); as err) {
+            <p class="text-xs text-red-600 dark:text-red-400" data-testid="save-song-add-error" role="alert">
+              {{ t(err.key, err.params) }}
+            </p>
+          }
+
+          @if (plan() !== null && plan()!.presetsPerSongLimit !== null) {
+            <p class="text-xs text-slate-500 dark:text-slate-400" data-testid="save-song-preset-limit">
+              {{ t('saveSong.plan.presetLimitReached', { limit: plan()!.presetsPerSongLimit }) }}
+            </p>
+          }
+        </fieldset>
+
+        <div class="space-y-1">
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+            {{ t('saveSong.name') }}
+          </label>
+          <input
+            #songName
+            type="text"
+            class="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
+            data-testid="save-song-name"
+            [class.border-red-500]="!!fieldErrors().name"
+            [class.dark:border-red-400]="!!fieldErrors().name"
+            [attr.aria-invalid]="!!fieldErrors().name"
+            [attr.maxlength]="SONG_TEXT_MAX"
+            [attr.aria-describedby]="fieldErrors().name ? 'save-song-name-error' : null"
+            [disabled]="submitting()"
+            [ngModel]="name()"
+            (ngModelChange)="name.set($event)"
+          />
+          @if (fieldErrors().name) {
+            <p class="mt-1 text-xs text-red-600 dark:text-red-400" id="save-song-name-error" data-testid="save-song-name-error">
+              {{ t(fieldErrors().name!) }}
+            </p>
+          }
+        </div>
+
+        <div class="space-y-1">
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+            {{ t('saveSong.artist') }}
+            <span class="ml-1 font-normal text-slate-500 dark:text-slate-400">{{ t('saveSong.optional') }}</span>
+          </label>
+          <input
+            type="text"
+            class="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
+            data-testid="save-song-artist"
+            [class.border-red-500]="!!fieldErrors().artist"
+            [class.dark:border-red-400]="!!fieldErrors().artist"
+            [attr.aria-invalid]="!!fieldErrors().artist"
+            [attr.maxlength]="SONG_TEXT_MAX"
+            [disabled]="submitting()"
+            [ngModel]="artist()"
+            (ngModelChange)="artist.set($event)"
+          />
+          @if (fieldErrors().artist) {
+            <p class="mt-1 text-xs text-red-600 dark:text-red-400" data-testid="save-song-artist-error">
+              {{ t(fieldErrors().artist!) }}
+            </p>
+          }
+        </div>
+
+        <div class="space-y-1">
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+            {{ t('saveSong.cover') }}
+            <span class="ml-1 font-normal text-slate-500 dark:text-slate-400">{{ t('saveSong.optional') }}</span>
+          </label>
+          <input
+            type="file"
+            accept="image/*"
+            class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200 dark:text-slate-400 dark:file:bg-slate-700 dark:file:text-slate-200 dark:hover:file:bg-slate-600"
+            data-testid="save-song-cover"
+            [disabled]="submitting()"
+            (change)="onFilePicked('cover', null, $event)"
+          />
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ t('saveSong.cover_help') }}</p>
+          @if (cover()) {
+            <div class="mt-1 flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400" data-testid="save-song-cover-row">
+              <span class="truncate">{{ cover()!.name }}</span>
+              <button
+                type="button"
+                class="shrink-0 rounded px-1.5 py-0.5 text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                [attr.aria-label]="t('saveSong.remove_file')"
+                [disabled]="submitting()"
+                (click)="clearFile('cover', null)"
+              >{{ t('saveSong.remove_file') }}</button>
+            </div>
+          }
+          @if (fieldErrors().cover) {
+            <p class="mt-1 text-xs text-red-600 dark:text-red-400" data-testid="save-song-cover-error">
+              {{ t(fieldErrors().cover!) }}
+            </p>
+          }
+        </div>
+
+        @if (userSlots().length > 0) {
+          <fieldset class="space-y-2" data-testid="save-song-attachments">
+            <legend class="text-sm font-medium text-slate-700 dark:text-slate-300">
+              {{ t('saveSong.attachments_legend') }}
+            </legend>
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('saveSong.attachments_help') }}
+            </p>
+            @for (ref of userSlots(); track ref.kind + ':' + ref.slot) {
+              <div
+                class="rounded-md border border-dashed border-slate-300 p-3 dark:border-slate-600"
+                [attr.data-testid]="'save-song-attach-' + ref.kind + '-' + ref.slot"
+              >
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {{ ref.kind === 'ir' ? t('chainBoard.userIrSlot', { slot: ref.slot }) : t('chainBoard.userSnapToneSlot', { slot: ref.slot }) }}
+                </label>
+                <input
+                  type="file"
+                  [attr.accept]="ref.kind === 'ir' ? '.wav,audio/wav' : '.nam'"
+                  class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200 dark:text-slate-400 dark:file:bg-slate-700 dark:file:text-slate-200 dark:hover:file:bg-slate-600"
+                  [attr.data-testid]="'save-song-attach-input-' + ref.kind + '-' + ref.slot"
+                  [disabled]="submitting()"
+                  (change)="onFilePicked(ref.kind, ref.slot, $event)"
+                />
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ ref.kind === 'ir' ? t('saveSong.ir_help') : t('saveSong.nam_help') }}
+                </p>
+                @if (attachments().get(ref.kind + ':' + ref.slot); as f) {
+                  <div class="mt-1 flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+                    <span class="truncate">{{ f.name }}</span>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded px-1.5 py-0.5 text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      [attr.aria-label]="t('saveSong.remove_file')"
+                      [disabled]="submitting()"
+                      (click)="clearFile(ref.kind, ref.slot)"
+                    >{{ t('saveSong.remove_file') }}</button>
+                  </div>
+                }
+                @if (fieldErrors().attachments[ref.kind + ':' + ref.slot]) {
+                  <p class="mt-1 text-xs text-red-600 dark:text-red-400">
+                    {{ t(fieldErrors().attachments[ref.kind + ':' + ref.slot]!) }}
+                  </p>
+                }
+              </div>
+            }
+          </fieldset>
+        }
+
+        <fieldset class="space-y-2" data-testid="save-song-extra">
+          <legend class="text-sm font-medium text-slate-700 dark:text-slate-300">
+            {{ t('saveSong.extra_legend') }}
+          </legend>
+          <p class="text-xs text-slate-500 dark:text-slate-400">{{ t('saveSong.extra_help') }}</p>
+          @for (row of extraRows(); track row.id) {
+            <div
+              class="grid grid-cols-[1fr_1fr_auto] items-start gap-2"
+              [attr.data-testid]="'save-song-extra-row'"
+              [attr.data-row-id]="row.id"
+            >
+              <input
+                type="text"
+                [attr.placeholder]="t('saveSong.extra_key_placeholder')"
+                class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
+                [class.border-red-500]="!!fieldErrors().extraRows[row.id]"
+                [class.dark:border-red-400]="!!fieldErrors().extraRows[row.id]"
+                [attr.data-testid]="'save-song-extra-key-' + row.id"
+                [attr.aria-invalid]="!!fieldErrors().extraRows[row.id]"
+                [disabled]="submitting()"
+                [ngModel]="row.key"
+                (ngModelChange)="onExtraKey(row.id, $event)"
+              />
+              <input
+                type="text"
+                [attr.placeholder]="t('saveSong.extra_value_placeholder')"
+                class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
+                [attr.data-testid]="'save-song-extra-value-' + row.id"
+                [disabled]="submitting()"
+                [ngModel]="row.value"
+                (ngModelChange)="onExtraValue(row.id, $event)"
+              />
+              <button
+                type="button"
+                class="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-red-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-red-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                [attr.aria-label]="t('saveSong.remove_field')"
+                [attr.data-testid]="'save-song-extra-remove-' + row.id"
+                [disabled]="submitting()"
+                (click)="removeRow(row.id)"
+              >×</button>
+              @if (fieldErrors().extraRows[row.id]) {
+                <p class="col-span-3 mt-1 text-xs text-red-600 dark:text-red-400">
+                  {{ t(fieldErrors().extraRows[row.id]!) }}
+                </p>
+              }
+            </div>
+          }
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-full border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-900 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+            data-testid="save-song-extra-add"
+            [disabled]="submitting()"
+            (click)="addRow()"
+          >
+            <span aria-hidden="true">+</span>
+            <span>{{ t('saveSong.add_field') }}</span>
+          </button>
+          @if (fieldErrors().extraConfig) {
+            <p class="text-xs text-red-600 dark:text-red-400" data-testid="save-song-extra-config-error">
+              {{ t(fieldErrors().extraConfig!) }}
+            </p>
+          }
+        </fieldset>
+      </div>
+
+      <footer
+        class="flex flex-col-reverse gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row sm:justify-end sm:px-6"
+      >
+        <button
+          type="button"
+          class="w-full rounded-md px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 sm:w-auto"
+          [disabled]="submitting()"
+          data-testid="save-song-cancel"
+          (click)="requestClose()"
+        >
+          {{ t('saveSong.cancel') }}
+        </button>
+        <button
+          type="submit"
+          class="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:w-auto"
+          [disabled]="submitting()"
+          data-testid="save-song-submit"
+          (click)="submit()"
+        >
+          {{ submitting() ? t('saveSong.saving') : t('saveSong.save') }}
+        </button>
+      </footer>
+
+      @if (serverError(); as e) {
+        @if (e.place === 'banner') {
+          <div
+            class="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900 mx-4 mb-3 sm:mx-6"
+            role="alert"
+            data-testid="save-song-error"
+          >
+            {{ t(e.key, e.params) }}
+            @if (e.loginLink) {
+              <a routerLink="/login" class="ml-2 font-medium underline">{{ t('saveSong.login_link') }}</a>
+            }
+          </div>
+        }
+      }
+
+      @if (testModeNoticeShown()) {
+        <div
+          class="rounded-md bg-indigo-50 px-3 py-2 text-indigo-800 ring-1 ring-inset ring-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-200 dark:ring-indigo-900 mx-4 mb-3 sm:mx-6"
+          role="status"
+          data-testid="save-song-test-mode"
+        >
+          <p class="text-sm"><span class="font-medium">{{ t('saveSong.test_mode_title') }}</span> {{ t('saveSong.test_mode_notice') }}</p>
+        </div>
+      }
+
+      @if (saved(); as s) {
+        <div class="flex flex-col items-center gap-3 py-6 text-center mx-4 mb-3 sm:mx-6" data-testid="save-song-success">
+          <div class="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true" class="size-5">
+              <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100">{{ t('saveSong.success_title') }}</h3>
+          <p class="text-sm text-slate-600 dark:text-slate-400">{{ t('saveSong.success_body', { name: s.name }) }}</p>
+          <button
+            type="button"
+            class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+            (click)="closeSaved()"
+          >
+            {{ t('saveSong.done') }}
+          </button>
+        </div>
+      }
+    </div>
+  </div>
+</div>

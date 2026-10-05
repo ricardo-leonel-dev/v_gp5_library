@@ -130,7 +130,7 @@ import type { Preset, PresetSlot } from './preset';
 import type { SysexDecodeResult, SysexPresetCodec } from './sysex-preset-codec';
 
 // CRC-8/SMBUS, poly 0x07, init 0. Used for every packet's CRC byte.
-function crc8(bytes: Uint8Array): number {
+export function crc8(bytes: Uint8Array): number {
   let c = 0;
   for (const b of bytes) {
     c ^= b;
@@ -256,23 +256,27 @@ function concatChunks(chunks: ReadonlyMap<number, Uint8Array>, target: number): 
   return out;
 }
 
-function decodeNames(blob: Uint8Array): Map<number, string> {
+function decodeNames(blob: Uint8Array): { names: Map<number, string>; nameFields: Map<number, Uint8Array> } {
   const names = new Map<number, string>();
+  const nameFields = new Map<number, Uint8Array>();
   // blob starts with [CATSEL, NAME_SEL] echo, then [u32le idx][16-byte name] * 100.
   const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
   for (let i = ECHO_LEN; i + 20 <= blob.length; i += 20) {
     const idx = dv.getUint32(i, true);
     let nm = '';
+    const field = new Uint8Array(NAME_LEN);
     for (let j = i + 4; j < i + 4 + NAME_LEN; j++) {
+      field[j - i - 4] = blob[j];
       if (blob[j] === 0) break;
       nm += String.fromCharCode(blob[j]);
     }
     names.set(idx, nm.trim());
+    nameFields.set(idx, field);
   }
-  return names;
+  return { names, nameFields };
 }
 
-function decodeBody(body: Uint8Array, name: string, slot: number): Preset {
+export function decodeGp5Body(body: Uint8Array, name: string, slot: number): Preset {
   const modelsBase = findMagic(body, REC_MODELS_MAGIC);
   const bypassBase = findMagic(body, REC_BYPASS_MAGIC);
   const orderBase = findMagic(body, REC_ORDER_MAGIC);
@@ -395,6 +399,7 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
   private namesChunks: Map<number, Uint8Array> | null = null;
   private bodyChunks: Map<number, Uint8Array> | null = null;
   private namesMap: Map<number, string> | null = null;
+  private nameFieldsMap: Map<number, Uint8Array> | null = null;
   private currentSlot = 0;
   private nextIndex = 0;
   private awaitingActiveBody = false;
@@ -406,6 +411,7 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     this.namesChunks = new Map();
     this.bodyChunks = null;
     this.namesMap = null;
+    this.nameFieldsMap = null;
     this.currentSlot = 0;
     this.nextIndex = 0;
     this.awaitingActiveBody = false;
@@ -465,7 +471,9 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
         return { kind: 'ignored' };
       }
       const blob = concatChunks(this.namesChunks, NAMES_BLOB_LEN);
-      this.namesMap = decodeNames(blob);
+      const { names, nameFields } = decodeNames(blob);
+      this.namesMap = names;
+      this.nameFieldsMap = nameFields;
       this.namesChunks = null;
       this.bodyChunks = new Map();
       this.nextIndex = 0;
@@ -497,12 +505,17 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
       this.matchingSlots.push(this.currentSlot);
     }
     const name = this.namesMap?.get(this.currentSlot) ?? `slot${this.currentSlot}`;
-    const preset = decodeBody(body, name, this.currentSlot);
+    const preset = decodeGp5Body(body, name, this.currentSlot);
+    const nameField =
+      this.nameFieldsMap?.get(this.currentSlot)?.slice() ?? new Uint8Array(NAME_LEN);
+    const bodyCopy = body.slice();
+    preset.raw = { body: bodyCopy, nameField };
     const isLast = this.currentSlot === SLOT_COUNT - 1;
     this.currentSlot++;
     if (isLast) {
       this.bodyChunks = null;
       this.namesMap = null;
+      this.nameFieldsMap = null;
       this.currentSlot = 0;
     }
     return { kind: 'preset', preset, isLast };

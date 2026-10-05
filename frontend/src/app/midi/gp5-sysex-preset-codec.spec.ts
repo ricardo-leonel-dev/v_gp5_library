@@ -429,6 +429,18 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
     return codec;
   }
 
+  function buildBodyWithMarker(marker: number): Uint8Array {
+    const body = buildBody();
+    body[GP5_BODY_LEN - 1] = marker;
+    return body;
+  }
+
+  function feedFullBody(codec: Gp5SysexPresetCodec, blob: Uint8Array): SysexDecodeResult {
+    let last: SysexDecodeResult = { kind: 'ignored' };
+    for (const f of chunkForReassembly(blob)) last = codec.decodeIncomingMessage(f);
+    return last;
+  }
+
   test('returns ignored until a full 466-byte body has been reassembled', () => {
     const codec = newCodec();
     const bodyBlob = buildBodyBlob(buildBody());
@@ -459,6 +471,43 @@ describe('Gp5SysexPresetCodec.decodeIncomingMessage — body accumulation', () =
       // Bypass mask was all zeros in buildBody(), so all enabled=false.
       expect(lastResult.preset.chain[0].enabled).toBe(false);
     }
+  });
+
+  test('attaches raw.body (R1) and raw.nameField (R2) to every decoded preset', () => {
+    const codec = newCodec();
+    const blob = buildBodyBlob(buildBody());
+    const lastResult = feedFullBody(codec, blob);
+    expect(lastResult.kind).toBe('preset');
+    if (lastResult.kind !== 'preset') return;
+
+    const preset = lastResult.preset;
+    expect(preset.raw).toBeDefined();
+    expect(preset.raw!.body).toBeInstanceOf(Uint8Array);
+    expect(preset.raw!.body).toHaveLength(GP5_BODY_LEN);
+    expect(preset.raw!.body).toEqual(blob.subarray(ECHO_LEN));
+    expect(preset.raw!.nameField).toBeInstanceOf(Uint8Array);
+    expect(preset.raw!.nameField).toHaveLength(NAME_LEN);
+  });
+
+  test('keeps raw unchanged across the next slot (R3): earlier preset is not aliased to codec state', () => {
+    const codec = newCodec();
+    const firstBody = buildBodyWithMarker(0x55);
+    const firstBlob = buildBodyBlob(firstBody);
+    const secondBlob = buildBodyBlob(buildBodyWithMarker(0xaa));
+    const firstResult = feedFullBody(codec, firstBlob);
+    expect(firstResult.kind).toBe('preset');
+    if (firstResult.kind !== 'preset') return;
+    const firstRawBody = firstResult.preset.raw!.body;
+    const firstRawName = firstResult.preset.raw!.nameField;
+    // Decoding the next slot's body reassembles a new Uint8Array — the
+    // earlier preset's `raw` keeps its bytes (no shared ownership with the
+    // codec's reassembly buffer).
+    const secondResult = feedFullBody(codec, secondBlob);
+    expect(secondResult.kind).toBe('preset');
+
+    expect(firstResult.preset.raw!.body).toBe(firstRawBody);
+    expect(firstResult.preset.raw!.body).toEqual(firstBody);
+    expect(firstResult.preset.raw!.nameField).toBe(firstRawName);
   });
 
   test('marks isLast=true on the 100th preset and resets state', () => {
