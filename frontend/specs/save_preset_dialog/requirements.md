@@ -2,9 +2,10 @@
 
 Create a **song** in the backend library (`POST /songs`) from an **ordered list of 1..N presets** chosen by the
 user, each added either **from the pedal** (presets read over MIDI) or **from a `.prst` file** (e.g. a commercial
-ToneLab preset). Each preset is uploaded as its own `.prst` file and stored as an independent byte copy, together
-with its name as **reference-only** metadata (no pedal slot is sent or stored — Revision 4: a preset can be
-installed in any slot, any number of times, so its origin slot is not relevant data). The song also carries a
+ToneLab preset). Each preset is uploaded as its own `.prst` file and stored as an independent byte copy; the
+backend derives each preset's **reference-only** name from the uploaded bytes (Revision 5: no name field is sent;
+no pedal slot is sent or stored — Revision 4: a preset can be installed in any slot, any number of times, so its
+origin slot is not relevant data). The song also carries a
 name, an optional artist, an optional cover image, an optional key/value extra config, and optional IR / NAM files
 prompted by the User IR / User SnapTone slots its presets use. Mock presets open the same dialog in a "test mode"
 that never contacts the backend.
@@ -20,14 +21,29 @@ Notion cards `multiple_presets_per_song_with_per_preset_reference_metadata` and
 `plan_tiers_songs_and_presets_per_song_limits` (both quoted in `design.md` §0). Evidence:
 `progress/explore_f4_frontend.md`, `progress/explore_f4_backend_contract.md`.
 
-## Cross-project dependencies (block implementation)
+**Revision 5 — 2026-10-05 (contract alignment with the finished backend; `progress/f4_rev5_backend_contract.md`):**
+`GET /me/plan` has the nested shape `{plan, limits:{songs, presetsPerSong}, usage:{songs}}` (OQ6, R53, R59);
+`pedal_preset_name` is no longer sent — the backend reads each name from the `.prst` bytes (R85 withdrawn and
+replaced by a "SHALL NOT contain" requirement); the 400 string for a missing preset is now `at least one preset
+file is required` (R98) and the new `preset file at position ${i} has no readable GP-5 preset name` is mapped
+(R108); R104 excludes R108. Revision 5 also closes the gap between the frontend's `.prst` name decoding and the
+backend's stricter `readPresetName`: R109-R113 mirror the backend rule in one pure helper and R114-R118 make the
+dialog reject, at add/pick time and at submit, any preset whose name the backend would reject (R108 remains the
+server-side fallback). No other requirement changed.
 
-1. The current backend `POST /songs` accepts **exactly one** `preset` part. R79 and R85 need backend feature
-   `multiple_presets_per_song_with_per_preset_reference_metadata` (project `v_gp5_library-backend`) to be `done`.
-2. R53-R59 and R99-R101 need backend feature `plan_tiers_songs_and_presets_per_song_limits` (same project) to be
-   `done` (per-tier limits, 402 `code`s, plan read endpoint).
+## Cross-project dependencies (both `done` as of Revision 5)
 
-Implementation must not start before both are `done` (see `design.md` §0 and T1).
+Backend project: `/Users/ricardoaguilar/Documents/Development/v_gp5_library/backend` (main checkout, branch
+`dev`, verified at commit `04eda42`).
+
+1. R79 needs backend feature 15 `multiple_presets_per_song` (PR #28; the Notion card was
+   `multiple_presets_per_song_with_per_preset_reference_metadata`, but the backend feature got the shorter name) —
+   **`done`**.
+2. R53-R59 and R99-R101 need backend feature 14 `plan_tiers_songs_and_presets_per_song_limits` (PR #29) —
+   **`done`** (per-tier limits, 402 `code`s, plan read endpoint).
+
+Both are `done`; T1 only re-verifies the contract recorded in `progress/f4_rev5_backend_contract.md`
+(see `design.md` §0).
 
 ## Decisions (former open questions — all resolved, none open)
 
@@ -49,9 +65,12 @@ Numbering is kept stable across revisions.
   authoritative (R99-R101).
 - **OQ5 — the same preset twice in one song. RESOLVED (Revision 3):** not allowed; two presets with the same
   trimmed name may not coexist in one song, for both sources (R39, R47, R52).
-- **OQ6 — plan read endpoint. RESOLVED (Revision 4):** `GET ${apiBaseUrl}/me/plan` → `{ "plan": string,
-  "songLimit": number|null, "presetsPerSongLimit": number|null, "songCount": number }` (camelCase; `null` =
-  unlimited). A response that does not match this shape is treated as "limits unknown" (R59). Used by R53, R59.
+- **OQ6 — plan read endpoint. RESOLVED (Revision 4; shape corrected in Revision 5 to the finished backend):**
+  `GET ${apiBaseUrl}/me/plan` → `{ "plan": string, "limits": { "songs": number|null, "presetsPerSong":
+  number|null }, "usage": { "songs": number } }` (camelCase; `null` = unlimited; `usage.songs` = live,
+  non-soft-deleted songs). A response that does not match this shape is treated as "limits unknown" (R59). Used by
+  R53, R59. (Revision 4 had pinned a flat `{plan, songLimit, presetsPerSongLimit, songCount}`, which the backend
+  did not adopt.)
 - **OQ7 — 402 body. RESOLVED (Revision 4):** `{ error, code: 'plan_song_limit' | 'plan_preset_limit', plan,
   limit }`, `limit` a number. Used by R99-R101.
 - **OQ8 — name comparison for uniqueness. RESOLVED (Revision 4):** exact, case-sensitive equality after trimming
@@ -299,7 +318,9 @@ IF the user submits while two listed presets have the same trimmed name THEN the
 
 ## R53
 WHEN the dialog opens while not in test mode, the system SHALL send exactly one `GET`
-`${environment.apiBaseUrl}/me/plan` request. *(OQ6)*
+`${environment.apiBaseUrl}/me/plan` request. *(OQ6; response `{plan, limits:{songs, presetsPerSong},
+usage:{songs}}` per Revision 5 — R54-R57 read the presets-per-song limit from `limits.presetsPerSong`, the song
+limit from `limits.songs` and the song count from `usage.songs`)*
 
 ## R54
 WHILE the plan limits are loaded with a non-null presets-per-song limit L and the list holds L or more presets,
@@ -436,9 +457,9 @@ artist.
 IF the trimmed artist is empty THEN the `FormData` SHALL NOT contain an `artist` field.
 
 ## R85
-WHEN the save request is built, the `FormData` SHALL contain exactly one `pedal_preset_name` text field per
-listed preset, in list order, each equal to that preset's trimmed name (not user-editable; for a file preset the
-name decoded from its file).
+*(Revision 5: the former R85 — one `pedal_preset_name` text field per listed preset — is withdrawn; the backend
+ignores that field and derives each preset's name from the uploaded `.prst` bytes at `0x19`. Replaced by:)*
+WHEN the save request is built, the `FormData` SHALL NOT contain a `pedal_preset_name` field.
 
 ## R86
 IF no extra-config row has a non-empty trimmed key THEN the `FormData` SHALL NOT contain an `extra_config`
@@ -493,12 +514,13 @@ cover, attachments, extra-config rows) so the user can retry.
 
 ## R98
 IF the save request fails with HTTP 400 and an `error` message listed below THEN the dialog SHALL show the
-mapped Transloco key, in the mapped place (strings re-checked against the finished backend in T1):
+mapped Transloco key, in the mapped place (strings verified against the finished backend in Revision 5,
+`progress/f4_rev5_backend_contract.md`; re-checked in T1):
 
 | `error` message (exact) | key | shown |
 |---|---|---|
 | `name is required` | `saveSong.errors.nameRequired` | under name |
-| `exactly one preset file is required` | `saveSong.errors.presetMissing` | form banner |
+| `at least one preset file is required` | `saveSong.errors.presetMissing` | form banner |
 | `at most one cover file is allowed` | `saveSong.errors.coverTooMany` | form banner |
 | `extra_config exceeds maximum size of 32768 bytes` | `saveSong.errors.extraConfigTooLarge` | under extra config |
 | `extra_config must be valid JSON` | `saveSong.errors.extraConfigInvalid` | under extra config |
@@ -527,8 +549,14 @@ IF the save request fails with HTTP status 0 THEN the dialog SHALL show `saveSon
 banner.
 
 ## R104
-IF the save request fails in any way not covered by R98-R103 (including a `text/plain` 500 or an unlisted 400
-message) THEN the dialog SHALL show `saveSong.errors.unexpected` in the form banner.
+IF the save request fails in any way not covered by R98-R103 or R108 (including a `text/plain` 500 or an
+unlisted 400 message) THEN the dialog SHALL show `saveSong.errors.unexpected` in the form banner.
+
+## R108
+IF the save request fails with HTTP 400 and an `error` message matching
+`/^preset file at position (\d+) has no readable GP-5 preset name$/` THEN the dialog SHALL show
+`saveSong.errors.presetNameUnreadable` in the form banner with `position` set to the captured number plus 1
+(the backend's position is 0-based; the dialog's row numbers are 1-based). *(Revision 5)*
 
 ## i18n, layout, theme
 
@@ -547,6 +575,61 @@ test-mode notice SHALL have the `dark:` counterpart given in `design.md` → "Vi
 assertions on the card, inputs, buttons, preset rows, add controls, song-limit warning and notice and by a manual
 dark-mode check.
 
+## Backend-readable preset names (Revision 5)
+
+The backend derives each preset's name with `readPresetName` (`backend/src/songs/prst-name.ts`) and rejects the
+whole request with a 400 (R108) when it returns `null`. Its rule on the 16-byte name field `0x19..0x28`: the
+name is the bytes before the first `0x00` (all 16 if there is none); every one of those bytes must be in
+`0x20..0x7e`; the name must not be empty or all spaces (`trim() === ''`); bytes after the first `0x00` are not
+inspected; the name is not trimmed or otherwise rewritten. The `GP-5` magic and the minimum length that
+`readPresetName` also checks are already guaranteed for every uploaded file by R5/R8 and R12/R13. R109-R113 mirror
+that rule in one pure helper; R114-R118 apply it in the dialog so a request the backend would reject for a name is
+never sent. R108 stays as the server-side fallback.
+
+## R109
+WHEN `isReadablePrstNameField(field)` receives a 16-byte field whose bytes before the first `0x00` (all 16 bytes
+if no `0x00` is present) are all in `0x20..0x7e` and include at least one byte other than `0x20`, the system
+SHALL return `true`.
+
+## R110
+IF `isReadablePrstNameField(field)` receives a 16-byte field in which any byte before the first `0x00` (or any
+byte, if no `0x00` is present) is outside `0x20..0x7e` THEN the system SHALL return `false`.
+
+## R111
+IF `isReadablePrstNameField(field)` receives a 16-byte field whose first byte is `0x00`, or whose bytes before the
+first `0x00` (all 16 if none) are all `0x20`, THEN the system SHALL return `false`.
+
+## R112
+WHEN `isReadablePrstNameField(field)` receives a field that contains a `0x00`, the system SHALL return the same
+result regardless of the values of the bytes after the first `0x00`.
+
+## R113
+IF `isReadablePrstNameField(field)` receives a field whose length is not 16 THEN the system SHALL return `false`.
+
+## R114
+IF the user picks, in the "Add preset" selector, a pedal preset that has `raw` bytes and whose `raw.nameField`
+fails `isReadablePrstNameField` THEN the system SHALL leave the list unchanged, show
+`saveSong.errors.presetNameUnsupported` in the add-error slot (`data-testid="save-song-add-error"`), and reset the
+selector to its placeholder option.
+
+## R115
+IF the user picks a `.prst` file that `decodePrstFile` accepts, whose decoded name is non-empty and whose file
+name is at most 255 characters, but whose name field (`0x19..0x28`) fails `isReadablePrstNameField` THEN the
+system SHALL leave the list unchanged and show `saveSong.errors.presetNameUnsupported` in the add-error slot.
+
+## R116
+IF the user submits while a listed preset that has bytes (a pedal preset with `raw`, or a file preset) has a
+name field that fails `isReadablePrstNameField` THEN the system SHALL show `saveSong.errors.presetNameUnsupported`
+on that preset's row (`data-testid="save-song-preset-row-error"`), taking precedence over a
+`presetNameDuplicate` error on the same row.
+
+## R117
+IF an R116 error is present at submit time THEN the system SHALL NOT send a save request.
+
+## R118
+IF a listed or picked pedal preset has no `raw` bytes (a mock preset, test mode only) THEN the system SHALL NOT
+show `saveSong.errors.presetNameUnsupported` for it.
+
 ## Out of scope
 
 - **Feature 26 `library_first_startup`**: the song library screen, loading the library at startup, keeping
@@ -554,8 +637,9 @@ dark-mode check.
   with an empty initial list and no pedal presets — R42, R43, R51 — but its only entry point in F4 is the preset
   browser page). Feature 25 `library_first_pedal_sync` is superseded.
 - **Feature 27 `song_preset_duplicate_edit_export`**: duplicating a preset under a new name, editing it, exporting.
-- **Any comparison or update of saved songs.** `pedal_preset_name` is reference-only metadata, never a link to
-  the pedal, never used to detect changes; F4 only sends it and never reads it back.
+- **Any comparison or update of saved songs.** The stored per-preset name (backend `song_files.pedal_preset_name`,
+  derived by the backend from the uploaded bytes) is reference-only metadata, never a link to the pedal, never
+  used to detect changes; F4 neither sends it (Revision 5) nor reads it back.
 - **Any pedal-slot metadata** (Revision 4): no `pedal_slot` field is sent, and the slot number appears only as a
   display aid in the "Add preset" selector's option labels (R40). Otherwise the slot stays only as the page's
   internal identity of a read preset (R24, R40); it is never stored or sent.

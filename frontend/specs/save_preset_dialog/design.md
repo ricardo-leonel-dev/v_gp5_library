@@ -17,22 +17,44 @@ file" with strict validation; no two presets with the same name in a song; plan-
 `presetSlotLabel` helper, no slot in the dialog's copy) — a preset can be installed in any slot any number of
 times, so its origin slot is not relevant data; OQ6 (`GET /me/plan` shape), OQ7 (402 codes) and OQ8 (exact,
 case-sensitive name match after trim) accepted as proposed.
+**2026-10-05 Rev 5** (contract alignment only; source `progress/f4_rev5_backend_contract.md`, backend main
+checkout at `04eda42`): (a) `GET /me/plan` is nested `{plan, limits:{songs, presetsPerSong}, usage:{songs}}` —
+OQ6/R53 text, §0, §3 (`parsePlanLimits` maps nested wire → the unchanged flat internal `PlanLimits`), T18/T19
+fixtures; (b) `pedal_preset_name` dropped from the request (the backend ignores it and reads names from the
+`.prst` bytes) — R85 withdrawn and replaced by "SHALL NOT contain `pedal_preset_name`", §0 alignment note, §4
+`buildSongFormData` order/invariants, T1/T20/T27/T40/T49 assertions, discarded alternatives 13 and 22; (c) 400
+strings — `exactly one preset file is required` → `at least one preset file is required` (R98, §5), new pattern
+row `preset file at position ${i} has no readable GP-5 preset name` → new key `presetNameUnreadable` with
+`position` (R108, §5, Copy, T28/T29/T41/T46), R104 excludes R108; (d) backend paths point to the main checkout,
+both dependencies `done` (backend F15 is `multiple_presets_per_song`, not the predicted name), T1 shrunk to a
+re-verification; (e) backend-readable names: the backend's `readPresetName` is stricter than `decodePrstFile`,
+so a preset with a blank or non-printable-ASCII name passed the dialog and was rejected by the server — new
+pure helper `isReadablePrstNameField` in `gp5-prst-file.ts` mirrors it exactly (R109-R113, §1),
+`PrstDecodeResult` gains `nameReadable`, `SongPresetEntry` gains `nameReadable`, `tryAppendEntry` and
+`validateSaveSongDraft` reject unreadable names at add/pick time and at submit (R114-R118, §4), new key
+`saveSong.errors.presetNameUnsupported` (Copy), discarded alternatives 24-25, tasks T50-T56; R108 stays as the
+server-side fallback. Nothing else changed.
 
 ## 0. Cross-project dependencies
 
-Both are in project `v_gp5_library-backend`
-(`/Users/ricardoaguilar/Documents/Development/v_gp5_library-frontend/backend`). F4 implementation must not start
-until **both** are `done` in the backend harness.
+Both are in project `v_gp5_library-backend`, main checkout
+`/Users/ricardoaguilar/Documents/Development/v_gp5_library/backend` (branch `dev`). **Both are `done`** as of
+Revision 5 (verified at commit `04eda42`, `progress/f4_rev5_backend_contract.md`).
 
-### Dependency 1 — multi-preset songs
+### Dependency 1 — multi-preset songs (`done`)
 
-**Today's backend** (`../backend/src/songs/parse-multipart.ts`) accepts exactly one `preset` part
-(`exactly one preset file is required`) and one song-level `pedal_preset_name`. The request this feature sends
-(R79-R85) needs:
+**Finished backend** (`src/songs/parse-multipart.ts`, `src/songs/song-service.ts` `createSong`) accepts 1..N
+`preset` parts (order = `sort_order`; none → 400 `at least one preset file is required`). `parse-multipart.ts`
+reads only `name`, `artist`, `extra_config`, `preset`, `ir`, `nam`, `cover`; each preset's name is derived from
+its bytes (`readPresetName`: `GP-5` magic, printable ASCII up to the first NUL at `0x19..0x28`, non-blank) and
+stored as `song_files.pedal_preset_name` — a preset without a readable name is a 400 `preset file at position
+${i} has no readable GP-5 preset name` (0-based `i`). The request this feature sends (R79-R85) relies on:
 
 - Notion: https://app.notion.com/p/Multiple-presets-per-song-with-per-preset-reference-metadata-3eddef9a37cd81ea952dccc2d5cdf68e
-- Predicted backend feature name: `multiple_presets_per_song_with_per_preset_reference_metadata`.
-- Card acceptance (summary, the contract this design builds against):
+- Backend feature 15 **`multiple_presets_per_song`** (PR #28) — not the predicted
+  `multiple_presets_per_song_with_per_preset_reference_metadata`.
+- Card acceptance (summary, as written on the card; item 2 was superseded by the finished backend — see the
+  Rev 5 note below):
   1. `POST /songs` accepts 1..N `preset` File parts; order sent = `sort_order`.
   2. Per-preset metadata via repeatable text fields aligned by order: `pedal_preset_name` (the card also
      defines an optional `pedal_slot`, which F4 **does not send** — Rev 4); 400 if more metadata entries than
@@ -41,14 +63,17 @@ until **both** are `done` in the backend harness.
   4. `GET /songs/:id/files/preset?sort_order=n` returns each preset's raw bytes.
   5. Existing single-preset songs and the song-level `pedal_preset_name` keep working.
   6. No endpoint mutates presets of an existing song.
-- Alignment: every preset sends exactly one `pedal_preset_name`, appended right after its `preset` part (§4), so
-  per-field-index and positional readings of "aligned by order" give the same result. The only assumption beyond
-  the card is the exact post-card 400 strings; T1 checks them. The response is only read for `name` (R96).
+- **Rev 5 — no metadata fields are sent.** The finished backend does not read `pedal_preset_name` (nor
+  `pedal_slot`); it derives each name from the `.prst` bytes. F4 therefore sends only `preset` parts (R85 now
+  forbids `pedal_preset_name`), so there is no field-alignment question at all. Nothing is lost: names in F4 are
+  not user-editable, and the bytes already carry the right name at `0x19` (pedal: `raw.nameField` verbatim, R7;
+  file: validated bytes unchanged, R18). The 400 strings are listed in R98/R108 and §5. The response is only
+  read for `name` (R96).
 
-### Dependency 2 — plan tiers and limits
+### Dependency 2 — plan tiers and limits (`done`)
 
 - Notion: https://app.notion.com/p/Plan-tiers-songs-and-presets-per-song-limits-3eddef9a37cd81c3ba06e3c04c108f6d
-- Predicted backend feature name: `plan_tiers_songs_and_presets_per_song_limits`.
+- Backend feature 14 `plan_tiers_songs_and_presets_per_song_limits` (PR #29), as predicted.
 - Card acceptance (summary):
   1. Plans free / basic / premium: free ≤ 1 song, ≤ 1 preset/song; basic ≤ 2 songs, ≤ 2 presets/song; premium
      unlimited.
@@ -58,20 +83,21 @@ until **both** are `done` in the backend harness.
      unlimited) plus the current song count.
   4. Soft-deleted songs do not count. 5. Existing data migrates; limits apply only to new writes. 6. Tests per
      tier boundary.
-- Pinned by Ricardo (Rev 4), not by the card: endpoint path and field names (OQ6 resolved: `GET /me/plan` →
-  `{plan, songLimit, presetsPerSongLimit, songCount}`); 402 body shape and code strings (OQ7 resolved: `{error,
-  code: 'plan_song_limit' | 'plan_preset_limit', plan, limit}`). T1 confirms the finished backend matches.
+- Finished backend (`src/plans/plan-service.ts` `getPlanSummary`, route `GET /me/plan` in `src/index.ts`):
+  `{ plan: 'free'|'basic'|'premium', limits: { songs: number|null, presetsPerSong: number|null }, usage: { songs:
+  number } }` (`null` = unlimited; `usage.songs` counts live, non-soft-deleted songs); 404 `{error:'user not
+  found'}`. Rev 4 had pinned a flat `{plan, songLimit, presetsPerSongLimit, songCount}`; Rev 5 adopts the
+  backend's nested shape on the wire and keeps the flat shape internally (§3). 402 body and codes match OQ7
+  unchanged: `{error, code: 'plan_song_limit' | 'plan_preset_limit', plan, limit}`.
 - The server stays authoritative: client caps (R54-R56) are a convenience; a 402 is always mapped (R99-R101).
   The old message-regex mapping (`plan 'free' is limited to 10 songs`) is dropped — the card replaces that limit.
 
 ### Gate
 
-Suggested mechanics for the leader (not run by the spec author): after `approve-spec` and `claim`, if either
-backend feature is not `done`, `scripts/harness.sh block save_preset_dialog "waiting on v_gp5_library-backend:
-BLOCKED_ON: path=/Users/ricardoaguilar/Documents/Development/v_gp5_library-frontend/backend
-feature=<the pending one> notion_page=<its url>"` (one block note per outstanding feature, or the first one, then
-re-block on the second after resume), and resume via `check-blockers` (AGENTS.md §8). T1 re-checks both finished
-backend features against this section before any code.
+Not needed: both backend features are `done` (Rev 5), so no `block` is needed. Should a later backend change regress
+the contract, the leader would block with `BLOCKED_ON: path=/Users/ricardoaguilar/Documents/Development/v_gp5_library/backend
+feature=multiple_presets_per_song` (or `plan_tiers_songs_and_presets_per_song_limits`) per AGENTS.md §8. T1
+re-verifies the finished backend against `progress/f4_rev5_backend_contract.md` before any code.
 
 ## Overview
 
@@ -154,10 +180,42 @@ export function encodePrstFile(preset: Preset): Uint8Array;        // throws Err
 
 export type PrstFileError = 'wrong_length' | 'bad_header' | 'bad_sentinel' | 'bad_crc';
 export type PrstDecodeResult =
-  | { ok: true; name: string; chain: PresetSlot[]; bytes: Uint8Array }
+  | { ok: true; name: string; chain: PresetSlot[]; bytes: Uint8Array; nameReadable: boolean } // nameReadable: Rev 5
   | { ok: false; error: PrstFileError };
 export function decodePrstFile(bytes: Uint8Array): PrstDecodeResult; // pure, never throws (R12-R19)
+
+// Rev 5 — mirrors backend readPresetName (backend/src/songs/prst-name.ts) on the 16-byte name field (R109-R113)
+export function isReadablePrstNameField(field: Uint8Array): boolean;
 ```
+
+**`isReadablePrstNameField` (Rev 5, the single frontend copy of the backend name rule).** Pure, never throws:
+
+```ts
+if (field.length !== 16) return false;                     // R113 (pedal raw.nameField / file 0x19..0x28 are 16)
+let end = 0; while (end < 16 && field[end] !== 0x00) end++; // name = bytes before the first NUL (all 16 if none)
+if (end === 0) return false;                               // empty (R111)
+let nonSpace = false;
+for (let i = 0; i < end; i++) {
+  const b = field[i];
+  if (b < 0x20 || b > 0x7e) return false;                  // R110: control bytes, 0x7f, any byte >= 0x80 (é, UTF-8)
+  if (b !== 0x20) nonSpace = true;
+}
+return nonSpace;                                            // all spaces → false (R111); bytes after the NUL never read (R112)
+```
+
+- Equivalence with the backend: `readPresetName` returns non-null iff length ≥ `0x29`, bytes `0..3` = `GP-5`, the
+  bytes before the first NUL in `0x19..0x28` are all `0x20..0x7e`, and `name.trim() !== ''`. Within `0x20..0x7e`
+  the only byte JS `trim()` removes is `0x20`, so "not all `0x20`" ≡ "non-blank after trim". Length and magic are
+  already guaranteed for every uploaded file (R5/R8 for pedal files, R12/R13 for picked files), so the helper only
+  takes the name field. The backend does **not** trim or rewrite the name; neither does the frontend — the bytes
+  are uploaded unchanged (R6/R7/R18), only the decision is mirrored.
+- Lives in `gp5-prst-file.ts` because it interprets `.prst` bytes (isolation rule below). Code outside `midi/`
+  never calls it on bytes it sliced itself: pedal entries pass `preset.raw.nameField` (opaque, R2), file entries
+  get the precomputed `nameReadable` from `decodePrstFile`.
+- `decodePrstFile` sets `nameReadable = isReadablePrstNameField(input.subarray(0x19, 0x29))` on success; it is
+  independent of `ok` (a file can be a valid GP-5 file with an unreadable name — the ToneLab fixture with a
+  `0xe9` name byte and recomputed CRC is `ok: true, nameReadable: false`).
+- If the backend rule ever changes, only this function, its spec and R109-R113 change.
 
 Layout (OQ1, confirmed against the ToneLab reference file `02-TLDLXAMP.prst`; matches codec `PRST_LEN`/`NAME_OFF`):
 
@@ -268,9 +326,9 @@ export class SongsApi {
   createSong(form: FormData): Promise<CreatedSong>  // firstValueFrom(http.post<CreatedSong>(`${apiBaseUrl}/songs`, form))
 }
 
-// src/app/songs/plan-limits.ts
+// src/app/songs/plan-limits.ts — internal shape stays flat (Rev 5); only the parser knows the wire shape
 export interface PlanLimits { plan: string; songLimit: number | null; presetsPerSongLimit: number | null; songCount: number }
-export function parsePlanLimits(json: unknown): PlanLimits | null; // OQ6 shape; anything else → null (R59)
+export function parsePlanLimits(json: unknown): PlanLimits | null; // OQ6 nested wire shape → flat; anything else → null (R59)
 
 // src/app/songs/plan-api.service.ts
 @Injectable({ providedIn: 'root' })
@@ -281,8 +339,13 @@ export class PlanApi {
 
 - No headers are set on `createSong` (R91): the browser adds the multipart boundary, `authInterceptor` adds the
   Bearer token and clears `AuthStore` on 401. No `withCredentials`.
-- `parsePlanLimits` accepts only: `plan` string; `songLimit` and `presetsPerSongLimit` each `null` or a
-  non-negative integer; `songCount` a non-negative integer. Extra fields are ignored.
+- `parsePlanLimits` (Rev 5) accepts only a non-null object with: `plan` a string; `limits` a non-null object
+  whose `songs` and `presetsPerSong` are each `null` or a non-negative integer; `usage` a non-null object whose
+  `songs` is a non-negative integer. It maps `limits.songs` → `songLimit`, `limits.presetsPerSong` →
+  `presetsPerSongLimit`, `usage.songs` → `songCount`. Extra fields (top-level or nested) are ignored; anything
+  else (missing `limits`/`usage`, a missing nested field, a string/fractional/negative number, the old flat
+  Rev 4 shape) → `null`. Everything downstream of the parser (§4 `SaveSongDraft.presetsPerSongLimit`, §6
+  `atCap`/`songLimitReached`) is unchanged.
 - `PlanApi` lives in `songs/` because F4 is its only consumer; if F26 needs the plan elsewhere it can move it to
   an `account/` folder then.
 
@@ -295,9 +358,11 @@ export const FILE_NAME_MAX = 255;
 
 export type SongPresetEntry =
   | { readonly key: string; readonly source: 'pedal'; readonly name: string; readonly chain: readonly PresetSlot[];
-      readonly preset: Preset }                                  // key `pedal:<slot>`, name = preset.name.trim()
+      readonly preset: Preset; readonly nameReadable: boolean }  // key `pedal:<slot>`, name = preset.name.trim()
   | { readonly key: string; readonly source: 'file'; readonly name: string; readonly chain: readonly PresetSlot[];
-      readonly fileName: string; readonly bytes: Uint8Array };   // key `file:<n>`, from decodePrstFile
+      readonly fileName: string; readonly bytes: Uint8Array; readonly nameReadable: boolean };   // key `file:<n>`, from decodePrstFile
+// nameReadable (Rev 5): pedal = preset.raw ? isReadablePrstNameField(preset.raw.nameField) : true (mocks, R118);
+//                       file  = decoded.nameReadable
 
 export interface ExtraConfigRow { readonly id: number; key: string; value: string }
 export interface UserSlotRef { readonly kind: 'ir' | 'nam'; readonly slot: number }
@@ -318,11 +383,11 @@ export interface SaveSongErrors {
 
 // entries (R34-R40, R44-R47) — all return new arrays, never mutate
 export function pedalEntry(p: Preset): SongPresetEntry;
-export function fileEntry(key: string, fileName: string, decoded: { name: string; chain: readonly PresetSlot[]; bytes: Uint8Array }): SongPresetEntry;
+export function fileEntry(key: string, fileName: string, decoded: { name: string; chain: readonly PresetSlot[]; bytes: Uint8Array; nameReadable: boolean }): SongPresetEntry;
 export function moveEntry(list: readonly SongPresetEntry[], index: number, delta: -1 | 1): readonly SongPresetEntry[]; // out of range → same list
 export function removeEntryAt(list: readonly SongPresetEntry[], index: number): readonly SongPresetEntry[];
 export type AddResult = { ok: true; list: readonly SongPresetEntry[] } | { ok: false; error: { key: string; params?: Record<string, string> } };
-export function tryAppendEntry(list: readonly SongPresetEntry[], e: SongPresetEntry): AddResult;   // duplicate name → presetNameDuplicate (R39, R47)
+export function tryAppendEntry(list: readonly SongPresetEntry[], e: SongPresetEntry): AddResult;   // !nameReadable → presetNameUnsupported (R114, R115), then duplicate name → presetNameDuplicate (R39, R47)
 export function addablePresets(available: readonly Preset[], list: readonly SongPresetEntry[]): Preset[]; // slot not listed by a pedal entry, ascending (R40)
 export function checkPrstPick(fileName: string, result: PrstDecodeResult): { key: string } | null; // R45, R46, R48 (name length first)
 export function atPresetCap(count: number, limit: number | null): boolean;                       // limit !== null && count >= limit (R54, R55)
@@ -331,7 +396,7 @@ export function detectUserSlots(entries: readonly SongPresetEntry[]): UserSlotRe
 export function pruneAttachments(a: ReadonlyMap<string, File>, refs: readonly UserSlotRef[]): ReadonlyMap<string, File>; // R76
 export function checkPickedFile(file: File, kind: 'cover' | 'ir' | 'nam'): string | null;          // R63/R64
 export function serializeExtraConfig(rows: readonly ExtraConfigRow[]): string | null;            // null => omit (R86)
-export function validateSaveSongDraft(d: SaveSongDraft): SaveSongErrors;                          // R51, R52, R56, R60-R62, R67-R69
+export function validateSaveSongDraft(d: SaveSongDraft): SaveSongErrors;                          // R51, R52, R56, R60-R62, R67-R69, R116
 export function hasErrors(e: SaveSongErrors): boolean;
 export function presetFileName(presetName: string): string;
 export function buildSongFormData(d: SaveSongDraft): FormData;                                   // R77-R90; throws on 0 entries
@@ -343,6 +408,16 @@ Details:
   rejects a clashing entry with `{ key: 'saveSong.errors.presetNameDuplicate', params: { name } }`;
   `validateSaveSongDraft` flags each later entry whose name appeared earlier (R52) — reachable only through the
   initial chip list, since adds are rejected up front.
+- **Backend-readable names (Rev 5, R114-R118):** `tryAppendEntry` checks `e.nameReadable` **before** the duplicate
+  check and rejects with `{ key: 'saveSong.errors.presetNameUnsupported' }` (no params — the name may not be
+  printable). This one check covers both the pedal selector (R114) and file picks (R115); for files it runs after
+  `checkPrstPick`, so a blank decoded name still gets `prstNoName` (R46) and a too-long file name still gets
+  `fileNameTooLong` (R48) first. `validateSaveSongDraft` sets `entryRows[e.key] = { key:
+  'saveSong.errors.presetNameUnsupported', params: {} }` for every entry with `nameReadable === false`, overriding
+  a duplicate error on the same row (R116); `hasErrors` counts it, so submit stops (R117) — in test mode too
+  (validation runs before the test-mode return). The only way an unreadable entry reaches the list is the initial
+  chip snapshot, exactly like same-name chips (R52). Mock pedal entries (no `raw`) are `nameReadable: true` (R118);
+  they are never uploaded (R93).
 - **Pedal identity is by `slot`** (one read = one preset per slot) for `addablePresets`; a pedal preset whose
   slot is not listed but whose name is, is still offered, and picking it is rejected with the inline message (R39)
   — the user sees why rather than wondering where it went (discarded alternative 18).
@@ -368,18 +443,17 @@ Details:
 - **`presetFileName`** (pedal entries only): lowercase, NFKD, strip diacritics, runs of non `[a-z0-9]` → `-`, trim
   `-`, max 64 chars, fallback `preset`; append `.prst` (`"TL DLX AMP"` → `tl-dlx-amp.prst`). File entries keep the
   picked file's own name (R81).
-- **`buildSongFormData`** append order (alignment rationale in §0):
+- **`buildSongFormData`** append order (Rev 5: no per-preset metadata fields, see §0):
   1. `name` (trimmed); `artist` only if non-empty; `extra_config` only if non-null.
-  2. For each entry `e`, in list order:
-     - `preset` = pedal: `new File([encodePrstFile(e.preset)], presetFileName(e.name), { type:
-       'application/octet-stream' })`; file: `new File([e.bytes], e.fileName, { type: 'application/octet-stream' })`
-       (a `File`, not a bare `Blob`, so the backend keeps the filename);
-     - then `pedal_preset_name` = `e.name`.
-     No `pedal_slot` field is ever appended (Rev 4).
+  2. For each entry `e`, in list order, one `preset` part = pedal: `new File([encodePrstFile(e.preset)],
+     presetFileName(e.name), { type: 'application/octet-stream' })`; file: `new File([e.bytes], e.fileName,
+     { type: 'application/octet-stream' })` (a `File`, not a bare `Blob`, so the backend keeps the filename).
+     No `pedal_preset_name` (Rev 5) and no `pedal_slot` (Rev 4) field is ever appended — the backend derives
+     each name from the part's bytes.
   3. `ir` files in `detectUserSlots` order, then `nam` files, then `cover`.
-  Invariants checked by tests: `getAll('preset').length === getAll('pedal_preset_name').length ===
-  entries.length`; every `preset` part's bytes pass
-  `decodePrstFile` (R82). Throws `Error('no_presets')` for an empty list (unreachable via the UI, R51).
+  Invariants checked by tests: `getAll('preset').length === entries.length`; `fd.has('pedal_preset_name')` is
+  `false` (R85); every `preset` part's bytes pass `decodePrstFile` (R82). Throws `Error('no_presets')` for an
+  empty list (unreachable via the UI, R51).
 
 ## 5. Error mapping (`src/app/songs/save-song-errors.ts`)
 
@@ -395,7 +469,8 @@ Reads `err` as `HttpErrorResponse`; body = `typeof err.error === 'object' ? err.
 | status | condition | key (`saveSong.errors.*`) | place |
 |---|---|---|---|
 | 400 | message `name is required` | `nameRequired` | name |
-| 400 | message `exactly one preset file is required` *(today; T1 confirms the post-card string)* | `presetMissing` | banner |
+| 400 | message `at least one preset file is required` *(Rev 5; was `exactly one …` before backend F15)* | `presetMissing` | banner |
+| 400 | message matches `/^preset file at position (\d+) has no readable GP-5 preset name$/` *(Rev 5, R108)* | `presetNameUnreadable`, `params.position` = captured number + 1 | banner |
 | 400 | message `at most one cover file is allowed` | `coverTooMany` | banner |
 | 400 | message `extra_config exceeds maximum size of 32768 bytes` | `extraConfigTooLarge` | extraConfig |
 | 400 | message `extra_config must be valid JSON` | `extraConfigInvalid` | extraConfig |
@@ -410,6 +485,15 @@ Reads `err` as `HttpErrorResponse`; body = `typeof err.error === 'object' ? err.
 
 The 401 path relies on `authInterceptor` having cleared `AuthStore`; the dialog does not touch the token. Values
 are kept (R97) — lost only if the user navigates to `/login`.
+
+Rev 5 coverage check against the finished `createSong` (`song-service.ts` ~L162-215) and the `POST /songs` route:
+every 400 string it can return is a row above (`name is required`, `at least one preset file is required`, `at
+most one cover file is allowed`, `extra_config exceeds maximum size of 32768 bytes` (`MAX_EXTRA_CONFIG_BYTES =
+32768`), `extra_config must be valid JSON`, `extra_config must be a JSON object`, the position pattern); 404
+`user not found` and 402 are rows above; anything else falls to `unexpected`. The `presetNameUnreadable` case (R108) is
+pre-empted on the client by R114-R118 (`isReadablePrstNameField`, §1, mirrors `readPresetName`), so it should
+only appear if the two rules drift apart; it stays as the server-side fallback and names the row so the user can
+remove it.
 
 ## 6. Dialog component (`src/app/songs/save-song-dialog/save-song-dialog.{ts,html}`)
 
@@ -491,16 +575,16 @@ labels reuse `chainBoard.userIrSlot` / `chainBoard.userSnapToneSlot`. Parity tes
 | `src/app/midi/preset.ts` | `PresetRaw`, optional `Preset.raw` |
 | `src/app/midi/gp5-sysex-preset-codec.ts` (+ spec) | name-field capture, `raw` attach, export `crc8` and `decodeGp5Body` (R1-R3) |
 | `src/app/midi/web-midi-pedal-connection.spec.ts` | R4 pass-through test |
-| `src/app/midi/gp5-prst-file.ts` (+ spec) | new — `encodePrstFile`, `decodePrstFile`, layout constants (R5-R19) |
+| `src/app/midi/gp5-prst-file.ts` (+ spec) | new — `encodePrstFile`, `decodePrstFile` (+ `nameReadable`), layout constants, `isReadablePrstNameField` (R5-R19, R109-R113) |
 | `src/app/midi/gp5-captured-bodies.fixture.ts` (+ `.fixture.spec.ts`) | new — captured bodies, spec-only (R20) |
 | `src/app/midi/gp5-tonelab-prst.fixture.ts` (+ `.fixture.spec.ts`) | new — ToneLab reference file as hex, spec-only (R20) |
 | `src/app/pedals/preset-browser-page/preset-browser-page.{ts,html}` (+ spec) | button in chip row, enablement, snapshot, test mode, dialog host (R21-R27, R32); gate **unchanged** |
 | `src/app/songs/song.ts` | new — `CreatedSong` |
 | `src/app/songs/songs-api.service.ts` (+ spec) | new — `SongsApi.createSong` (R77, R91) |
 | `src/app/songs/plan-limits.ts`, `plan-api.service.ts` (+ specs) | new — `PlanLimits`, `parsePlanLimits`, `PlanApi.getMyPlan` (R53, R59) |
-| `src/app/songs/save-song-form.ts` (+ spec) | new — entries ops, validation, request builder (R34-R90 pure parts) |
-| `src/app/songs/save-song-errors.ts` (+ spec) | new — `mapSaveSongError` (R98-R104) |
-| `src/app/songs/save-song-dialog/save-song-dialog.{ts,html}` (+ spec) | new — dialog (R26, R28-R76, R92-R97, R106, R107) |
+| `src/app/songs/save-song-form.ts` (+ spec) | new — entries ops, validation, request builder (R34-R90 pure parts, R114-R118) |
+| `src/app/songs/save-song-errors.ts` (+ spec) | new — `mapSaveSongError` (R98-R104, R108) |
+| `src/app/songs/save-song-dialog/save-song-dialog.{ts,html}` (+ spec) | new — dialog (R26, R28-R76, R92-R97, R106, R107, R114-R118) |
 | `src/app/songs/i18n-parity.spec.ts` | new — R105 |
 | `public/i18n/es.json`, `public/i18n/en.json` | `saveSong` namespace |
 | `specs/sysex_preset_read_write/design.md` | one dated note under discarded alternative #2 |
@@ -542,6 +626,7 @@ Not touched: `src/app/pedals/mock-presets.ts`, `mock-presets.store.ts`, the page
 12. **Ship an interim N = 1 build against today's backend.** Rejected: contradicts Rev 2's data model and needs
     a second revision to remove.
 13. **Send per-preset metadata as one JSON field.** Rejected: the backend card specifies repeatable fields.
+    (Moot since Rev 5: no per-preset metadata is sent at all, see 22.)
 14. **Drag-and-drop reordering.** Rejected: pointer + keyboard + touch handling, hard to test in jsdom, adds
     motion; Move up / Move down buttons are accessible and testable (R34-R36).
 15. **Pre-fill the dialog with only the displayed preset.** Rejected: the chip row is the user's working set.
@@ -560,6 +645,22 @@ Not touched: `src/app/pedals/mock-presets.ts`, `mock-presets.store.ts`, the page
 21. **Send `pedal_slot` (`String(slot)`) for pedal presets as reference-only origin metadata** (Revs 1-3).
     Rejected by Ricardo (Rev 4): a preset can be installed in any slot, any number of times, so the origin slot
     is not relevant data; dropping it also removes the per-field alignment hazard file presets created.
+22. **Keep sending `pedal_preset_name` per preset** (Revs 1-4) since the backend tolerates unknown fields.
+    Rejected (Rev 5): the finished backend never reads it and derives the name from the bytes, so the field would
+    be dead weight that suggests to readers (and to F26) that the client controls the stored name; the bytes are
+    already the single source of the name.
+23. **Mirror the backend's nested `/me/plan` shape in the internal `PlanLimits`** (`limits.songs`,
+    `usage.songs`, …). Rejected (Rev 5): it would ripple through §4 (`SaveSongDraft`), §6 (`atCap`,
+    `songLimitReached`) and the component tasks for no behavioral gain; mapping once in `parsePlanLimits` keeps the
+    wire shape in a single function.
+24. **Check name readability on the decoded name string** (`preset.name` / `decoded.name`) instead of the name
+    field bytes. Rejected (Rev 5): the strings are already trimmed and cut at the first NUL by the codec / R17,
+    and the pedal name comes from a different decoder (`decodeNames`) than the uploaded bytes (`raw.nameField`);
+    only the bytes that are actually uploaded can mirror the backend exactly (R112's NUL boundary, `0x00` fallback
+    name fields).
+25. **Sanitize the name instead of rejecting** (replace non-ASCII bytes, pad a blank name). Rejected (Rev 5):
+    it would rewrite the uploaded `.prst`, breaking "pedal bytes verbatim / file as given" (Rev 3, R6, R7, R18) and
+    the installability criterion; the user renames on the pedal or in the app instead.
 
 ## Visual direction
 
@@ -759,6 +860,8 @@ rows appear at the end instantly; the dialog appears and disappears instantly, l
 | `saveSong.errors.extraConfigTooLarge` | Los datos extra superan 32 KB. Acórtalos. | Extra details exceed 32 KB. Shorten them. |
 | `saveSong.errors.extraConfigInvalid` | El servidor rechazó los datos extra. Revísalos y vuelve a guardar. | The server rejected the extra details. Check them and save again. |
 | `saveSong.errors.presetMissing` | El servidor no recibió los presets. Vuelve a añadirlos. | The server didn't receive the presets. Add them again. |
+| `saveSong.errors.presetNameUnsupported` | El nombre de este preset está vacío o usa caracteres no admitidos (solo letras sin acentos, números, espacios y símbolos básicos). Cámbialo en el pedal o en la app y vuelve a cargarlo. | This preset's name is empty or uses unsupported characters (only unaccented letters, digits, spaces and basic symbols). Rename it on the pedal or in the app and load it again. |
+| `saveSong.errors.presetNameUnreadable` | El servidor no pudo leer el nombre del preset n.º {{position}}. Quítalo o ponle un nombre en el pedal y vuelve a leerlo. | The server couldn't read the name of preset #{{position}}. Remove it, or name it on the pedal and read it again. |
 | `saveSong.errors.coverTooMany` | Solo se admite una portada. | Only one cover image is allowed. |
 | `saveSong.errors.planSongLimit` | Tu plan admite hasta {{limit}} canción(es). Borra alguna para guardar esta. | Your plan allows up to {{limit}} song(s). Delete one to save this song. |
 | `saveSong.errors.planPresetLimit` | Tu plan admite hasta {{limit}} preset(s) por canción. Quita alguno y vuelve a guardar. | Your plan allows up to {{limit}} preset(s) per song. Remove some and save again. |

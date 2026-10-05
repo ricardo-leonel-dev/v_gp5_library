@@ -2,22 +2,28 @@
 
 Execute in order. Each task names the `R<n>` it covers; tests are their own tasks so traceability in
 `progress/impl_save_preset_dialog.md` can point at concrete test names. Do not start until the spec is approved
-**and** both backend features `multiple_presets_per_song_with_per_preset_reference_metadata` and
-`plan_tiers_songs_and_presets_per_song_limits` are `done` (design §0). No question is open: OQ1 is resolved
+**and** both backend features `multiple_presets_per_song` (backend F15; the Notion card's predicted name was
+`multiple_presets_per_song_with_per_preset_reference_metadata`) and `plan_tiers_songs_and_presets_per_song_limits`
+(backend F14) are `done` — both are, as of Revision 5 (design §0). No question is open: OQ1 is resolved
 (507 bytes, `01` at `0x12`) by the ToneLab reference file — keep the layout confined to `gp5-prst-file.ts`; OQ6-OQ8
-were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sent, no helper).
+were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sent, no helper). Revision 5
+(2026-10-05) aligned the spec with the finished backend: nested `GET /me/plan` shape, no `pedal_preset_name` field,
+updated 400 strings (R98, new R108), and client-side rejection of preset names the backend's `readPresetName`
+would reject (R109-R118, tasks T50-T56 — run them together with sections B, D and F: T50/T51 right after T14,
+T52/T53 right after T27, T54/T55 right after T42, T56 with T46).
 
 ## 0. Precondition
 
-- [ ] T1 (R53, R59, R77, R79, R85, R98, R99, R100, R101) Backend contract check, no frontend code
-  yet. In `/Users/ricardoaguilar/Documents/Development/v_gp5_library-frontend/backend`: confirm both backend
-  features are `done` (its harness status); read the final `src/songs/parse-multipart.ts`, the songs route and
-  the plan read route, and record in `progress/impl_save_preset_dialog.md`: (a) repeatable `preset` parts with
-  order = `sort_order`; (b) repeatable `pedal_preset_name` aligned one-per-preset by order, and that omitting the
-  card's optional `pedal_slot` is accepted; (c) every 400 `error` string; (d) the plan endpoint path and response
-  field names; (e) the 402 body shape and both `code` strings. If (a)/(b) contradict design §0, a preset-related
-  400 string differs from R98's table, or (d)/(e) differ from the resolved OQ6/OQ7, **stop and report** for a
-  spec revision — do not adapt the spec unilaterally.
+- [ ] T1 (R53, R59, R77, R79, R85, R98, R99, R100, R101, R108) Re-verify the backend contract, no frontend code
+  yet. The full check was done in Revision 5 and is recorded in `progress/f4_rev5_backend_contract.md` (backend
+  main checkout `/Users/ricardoaguilar/Documents/Development/v_gp5_library/backend`, commit `04eda42`). Run
+  `git -C /Users/ricardoaguilar/Documents/Development/v_gp5_library/backend log --oneline -1` on `dev`; if HEAD
+  is still `04eda42`, or `git diff 04eda42 -- src/songs src/plans src/index.ts` is empty, record "contract
+  unchanged since Rev 5" in `progress/impl_save_preset_dialog.md` and proceed. Otherwise re-read those files and
+  confirm against that progress file: (a) 1..N `preset` parts, order = `sort_order`; (b) `parse-multipart.ts`
+  still reads no `pedal_preset_name`; (c) the 400 strings of R98/R108; (d) `GET /me/plan` →
+  `{plan, limits:{songs, presetsPerSong}, usage:{songs}}`; (e) the 402 body and both `code` strings. Any
+  difference → **stop and report** for a spec revision — do not adapt the spec unilaterally.
 
 ## A. Raw bytes in `src/app/midi/`
 
@@ -76,11 +82,16 @@ were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sen
 - [ ] T17 (R77, R91) `songs-api.service.spec.ts` with `HttpTestingController`: one `POST` `${apiBaseUrl}/songs`,
   body `instanceof FormData`, no `Content-Type` header; resolves with the 201 body.
 - [ ] T18 (R53, R59) Create `plan-limits.ts` (`PlanLimits`, `parsePlanLimits`) and `plan-api.service.ts`
-  (`PlanApi.getMyPlan`) per design §3, using the path and fields confirmed in T1.
+  (`PlanApi.getMyPlan`) per design §3: flat internal `PlanLimits`, `parsePlanLimits` maps the nested wire shape
+  `{plan, limits:{songs, presetsPerSong}, usage:{songs}}` (Revision 5).
 - [ ] T19 (R53, R59) Specs: `getMyPlan` sends one `GET ${apiBaseUrl}/me/plan` and resolves the parsed limits;
-  `parsePlanLimits` accepts `{plan:'free',songLimit:1,presetsPerSongLimit:1,songCount:0}` and the premium shape
-  with both limits `null`, and returns `null` for a missing field, a string limit, a negative count and a
-  non-object; `getMyPlan` rejects on HTTP 500.
+  `parsePlanLimits({plan:'free',limits:{songs:1,presetsPerSong:1},usage:{songs:0}})` returns
+  `{plan:'free',songLimit:1,presetsPerSongLimit:1,songCount:0}`; the premium shape
+  `{plan:'premium',limits:{songs:null,presetsPerSong:null},usage:{songs:7}}` returns both limits `null` and
+  `songCount:7`; an extra top-level or nested field is ignored; it returns `null` for a missing `limits`, a
+  missing `usage`, a missing nested field (`limits.presetsPerSong`), a string limit (`limits.songs:'1'`), a
+  negative `usage.songs`, the old flat Rev 4 shape `{plan:'free',songLimit:1,presetsPerSongLimit:1,songCount:0}`
+  and a non-object; `getMyPlan` rejects on HTTP 500.
 
 ## D. Pure form logic (`src/app/songs/save-song-form.ts`)
 
@@ -123,19 +134,21 @@ were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sen
   pedal slot 3]` (pedal ones decoded from captured bodies through the codec): `name` trimmed; `getAll('preset')`
   = 3 `File`s in list order, type `application/octet-stream`; pedal parts named `test-metal.prst` /
   `power-lead.prst` with bytes equal to `encodePrstFile`; the file part named `02-TLDLXAMP.prst` with bytes
-  byte-identical to `tonelabPrstBytes()`; every part's bytes pass `decodePrstFile`; `getAll('pedal_preset_name')`
-  = the three names in list order; `[...fd.keys()]` equals `name`, then
-  `preset, pedal_preset_name, preset, pedal_preset_name, preset, pedal_preset_name`
-  (plus optional fields at their documented places); a 1-pedal-entry list yields exactly one of each; `artist`
+  byte-identical to `tonelabPrstBytes()`; every part's bytes pass `decodePrstFile`; `fd.has('pedal_preset_name')`
+  is `false` (R85, Revision 5); `[...fd.keys()]` equals `name`, then `preset, preset, preset` (plus optional
+  fields at their documented places); a 1-pedal-entry list yields exactly one `preset` part; `artist`
   present only when non-blank; `extra_config` absent without keyed rows; `ir`/`nam` parts in ascending slot
   order; at most one `cover`; an empty list throws `no_presets`.
 
 ## E. Error mapping
 
-- [ ] T28 (R98, R99, R100, R101, R102, R103, R104) Create `save-song-errors.ts` (`mapSaveSongError`) per design
-  §5, using the 400 strings and 402 codes confirmed in T1.
-- [ ] T29 (R98, R99, R100, R101, R102, R103, R104) `save-song-errors.spec.ts`, table-driven over every row of
-  design §5 with `HttpErrorResponse`: six 400 messages → keys/places; 402 `{code:'plan_song_limit',limit:1}` →
+- [ ] T28 (R98, R99, R100, R101, R102, R103, R104, R108) Create `save-song-errors.ts` (`mapSaveSongError`) per design
+  §5 (Revision 5 strings, re-verified in T1), including the R108 position pattern.
+- [ ] T29 (R98, R99, R100, R101, R102, R103, R104, R108) `save-song-errors.spec.ts`, table-driven over every row
+  of design §5 with `HttpErrorResponse`: six exact 400 messages → keys/places (incl. `at least one preset file is
+  required` → `presetMissing`, and the obsolete `exactly one preset file is required` → `unexpected`);
+  `preset file at position 0 has no readable GP-5 preset name` → `presetNameUnreadable`, banner, `params.position`
+  `1`, and position `2` → `3`; 402 `{code:'plan_song_limit',limit:1}` →
   `planSongLimit` `limit: 1`; 402 `{code:'plan_preset_limit',limit:2}` → `planPresetLimit` `limit: 2`; 402 with
   a known code but no numeric `limit`, an unknown code, or a `text/plain` body → `planLimitGeneric`; 401 and 404
   `user not found` → `sessionExpired` with `loginLink`; status 0 → `network`; `text/plain` 500, unlisted 400 and
@@ -189,15 +202,17 @@ were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sen
   that file; then adding, through the file input, `encodePrstFile(<decoded slot 0>)` as a `.prst` (same name as
   the removed row, so no duplicate) brings `ir-1`/`nam-3` back as empty inputs; with no-user-slot presets the section is absent; submit with empty attachment inputs sends the request.
 - [ ] T40 (R77, R79, R80, R81, R85, R94, R95, R96) Dialog spec (not test mode): list = pedal slot 5 +
-  ToneLab file, reorder so the file is first, valid submit → exactly one `POST /songs` whose `preset` parts and
-  `pedal_preset_name` values follow the reordered list and whose file part bytes
-  equal the fixture; while pending the submit button is disabled and shows `saveSong.saving`; flushing 201 with
+  ToneLab file, reorder so the file is first, valid submit → exactly one `POST /songs` whose `preset` parts
+  follow the reordered list by file name (`02-TLDLXAMP.prst` first), whose body has no `pedal_preset_name` field,
+  and whose file part bytes equal the fixture; while pending the submit button is disabled and shows `saveSong.saving`; flushing 201 with
   `{id, name}` shows `save-song-success` containing that name.
-- [ ] T41 (R97, R98, R99, R100, R101, R102, R103, R104) Dialog spec: flushing a 402 `plan_song_limit` shows the
+- [ ] T41 (R97, R98, R99, R100, R101, R102, R103, R104, R108) Dialog spec: flushing a 402 `plan_song_limit` shows the
   `planSongLimit` banner with the limit and every value (preset rows and order including the file row, name,
   artist, extra rows, picked files) is still present; a 402 `plan_preset_limit` shows `planPresetLimit`; a 402
   without code shows `planLimitGeneric`; a 400 `name is required` shows the error under the name field; a 401
-  shows the banner with a `/login` link; status 0 shows `network`; an unlisted 400 shows `unexpected`.
+  shows the banner with a `/login` link; a 400 `preset file at position 1 has no readable GP-5 preset name` shows
+  `presetNameUnreadable` in the banner with position 2; status 0 shows `network`; an unlisted 400 shows
+  `unexpected`.
 - [ ] T42 (R92, R93) Dialog spec with `testMode = true` and byte-less mock presets: no plan request is made;
   reorder and add the ToneLab file, then valid submit shows `save-song-test-mode` (`role="status"`) with the
   translated notice, `HttpTestingController.verify()` finds no request at all, `save-song-success` absent, every
@@ -226,7 +241,7 @@ were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sen
 ## H. i18n, verification
 
 - [ ] T46 (R105) Add the `saveSong` namespace to `public/i18n/es.json` and `en.json` with every key in design
-  "Copy" (including the nested `saveSong.plan.*`); create `src/app/songs/i18n-parity.spec.ts` for `saveSong`
+  "Copy" (including the nested `saveSong.plan.*` and Revision 5's `saveSong.errors.presetNameUnreadable`); create `src/app/songs/i18n-parity.spec.ts` for `saveSong`
   (helpers from `src/app/pedals/i18n-parity.spec.ts`).
 - [ ] T47 (R77, R105, R106) `./init.sh` green (Node ≥ 22.22.3 PATH, see memory note) and `bun run build` passes.
 - [ ] T48 (R43, R92, R93, R106, R107) Manual Level 2 check, UI only: load mock presets, add two to the chips,
@@ -234,12 +249,57 @@ were accepted in Revision 4, which also dropped `pedal_slot` entirely (never sen
   work; add the ToneLab `.prst` and a renamed non-`.prst` file (error shown); submit shows the test-mode notice
   and the network tab shows no request to `/songs` or `/me/plan`. Record in `progress/impl_save_preset_dialog.md`.
 - [ ] T49 (R1, R4, R6, R44, R53, R57, R77, R80, R81, R82, R85, R96, R99, R100) Manual check with the
-  real GP-5 (Chrome) and the local backend (`cd ../backend && bun run dev`, logged in on a `basic` user): read
+  real GP-5 (Chrome) and the local backend (`cd /Users/ricardoaguilar/Documents/Development/v_gp5_library/backend
+  && bun run dev`, logged in on a `basic` user): read
   presets, select two, add the ToneLab file, reorder, save; confirm `201`; `GET /songs/:id/files/preset?sort_order=n`
   for each n returns, in the chosen order, a 507-byte file whose `0x29..` slice equals that preset's logged body
-  (pedal presets) or that is byte-identical to `02-TLDLXAMP.prst` (file preset), and the song shows each
-  preset's `pedal_preset_name`. **Installability:** load one downloaded
+  (pedal presets) or that is byte-identical to `02-TLDLXAMP.prst` (file preset), and `GET /songs/:id` lists each
+  preset's `name` equal to the name shown in the dialog (derived by the backend from the bytes; the request's
+  network payload has no `pedal_preset_name` part). **Installability:** load one downloaded
   pedal-sourced file onto a free GP-5 slot (Valeton app, or F5 once available) and confirm it plays. On a `free`
   user: a second preset is blocked in the dialog with the cap message, and a second song shows the amber
   warning and then the `planSongLimit` banner. If no pedal is available, record that in
   `progress/impl_save_preset_dialog.md` and leave it for Ricardo.
+
+## I. Backend-readable preset names (Revision 5)
+
+Run at the points given in the preamble; listed last only to keep task numbers stable.
+
+- [ ] T50 (R109, R110, R111, R112, R113) In `src/app/midi/gp5-prst-file.ts` add `isReadablePrstNameField(field)`
+  per design §1 (mirror of backend `src/songs/prst-name.ts` `readPresetName` on the 16-byte name field) and set
+  `nameReadable` on every `ok: true` result of `decodePrstFile` from `input.subarray(0x19, 0x29)`. No other file
+  in `src/` inspects name-field bytes.
+- [ ] T51 (R109, R110, R111, R112, R113) `gp5-prst-file.spec.ts`, table-driven `isReadablePrstNameField` on
+  16-byte fields built from ASCII + `0x00` padding: `"TL DLX AMP"` → `true`; `"ABCDEFGHIJKLMNOP"` (16 chars, no
+  NUL, max length) → `true`; `" LEAD "` → `true` (untrimmed, like the backend); `"~"` (`0x7e`) and `"! "` (`0x20`
+  boundary with a non-space) → `true`; all `0x00` (blank) → `false`; `"    "` and 16 × `0x20` (all spaces) →
+  `false`; `"TL"` + `0x07` + `"X"` → `false`; `"AB"` + `0x7f` → `false`; `"CAF"` + `0xc3 0xa9` (UTF-8 é) →
+  `false`; `"CAF"` + `0xe9` → `false`; `0x1f` alone → `false`; `"AB"` + `0x00` + `0xe9 0x07` (non-ASCII only after
+  the NUL) → `true`; 15-byte and 17-byte fields → `false`. Cases mirror `backend/src/songs/prst-name.test.ts`.
+- [ ] T52 (R109, R115, R116, R117, R118) In `save-song-form.ts`: `SongPresetEntry.nameReadable`; `pedalEntry`
+  sets it from `preset.raw ? isReadablePrstNameField(preset.raw.nameField) : true`; `fileEntry` copies
+  `decoded.nameReadable`; `tryAppendEntry` rejects `!e.nameReadable` with `presetNameUnsupported` before the
+  duplicate check; `validateSaveSongDraft` flags every unreadable entry's row with `presetNameUnsupported`
+  (overriding a duplicate on that row) per design §4.
+- [ ] T53 (R109, R114, R115, R116, R117, R118) Specs: `gp5-prst-file.spec.ts` — the ToneLab fixture decodes with
+  `nameReadable: true`; a copy with byte `0x19` set to `0xe9` and byte `0x14` recomputed with `crc8` decodes
+  `ok: true`, `name` non-empty, `nameReadable: false`. `save-song-form.spec.ts` — `pedalEntry` of a captured
+  preset → `nameReadable: true`; of the same preset with `raw.nameField` = 16 × `0x00`, 16 × `0x20` or containing
+  `0xe9` → `false`; of a mock (no `raw`) → `true`; `tryAppendEntry` of an unreadable pedal entry and of an
+  unreadable file entry → `presetNameUnsupported`, list unchanged, even when its name also duplicates a listed
+  one; `validateSaveSongDraft` with `[readable A, unreadable B]` → `entryRows[B.key].key ===
+  'saveSong.errors.presetNameUnsupported'` and `hasErrors` true; with `[A, unreadable A-named]` the second row
+  shows `presetNameUnsupported`, not `presetNameDuplicate`; an all-readable list has no such error.
+- [ ] T54 (R114, R115, R116, R117, R118) Wire R114-R118 in `save-song-dialog` (no new markup: add errors go to
+  `save-song-add-error`, row errors to `save-song-preset-row-error`, both already styled in "Visual direction").
+- [ ] T55 (R114, R115, R116, R117, R118) Dialog spec: (a) available presets include a real preset with
+  `raw.nameField` containing `0xe9`; selecting it leaves the rows unchanged, shows `presetNameUnsupported` in
+  `save-song-add-error` and resets the select; (b) picking the ToneLab file with `0x19` = `0xe9` (CRC recomputed)
+  leaves the rows unchanged and shows `presetNameUnsupported`; picking a file whose name field is all spaces still
+  shows `prstNoName` (R46 first); (c) opened (not test mode) with initial presets `[valid, blank-name-field]`,
+  submit shows `presetNameUnsupported` on the second row and `expectNone` for `POST /songs`; removing that row
+  then submitting sends exactly one request; (d) test mode with byte-less mocks: no `presetNameUnsupported`
+  anywhere and submit shows the test-mode notice; test mode with an initial real preset having an unreadable name
+  field: submit shows the row error and no notice.
+- [ ] T56 (R105, R114) Add `saveSong.errors.presetNameUnsupported` (es/en text from design "Copy") to
+  `public/i18n/es.json` and `en.json`; the R105 parity spec (T46) passes.
