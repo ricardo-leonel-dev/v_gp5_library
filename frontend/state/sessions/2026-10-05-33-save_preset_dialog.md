@@ -3,7 +3,7 @@ session_id: 33
 feature: save_preset_dialog
 agent: Claude (implementer agent by MiniMax-M3[1m])
 started_at: 2026-10-05T06:52:56.000Z
-closed_at:
+closed_at: 2026-10-05T13:35:04.000Z
 ---
 
 ## Plan
@@ -30,3 +30,9 @@ closed_at:
 - [Claude (implementer agent by MiniMax-M3[1m])] Implementer agent terminated mid-flight at ~45min mark with HTTP 429 (Token Plan rate limit). All in-flight files remain uncommitted in working tree (24 files: 17 in src/, 2 fixtures, 5 specs). No record-review / log-out attempted. Resuming implementer with explicit resume instructions.
 
 ## Next Step
+
+## Verification
+Implementation: 118 R / 56 T complete. ./init.sh green (1060 tests, +150 vs baseline 910); ng build green. Reviewer APPROVED — see progress/review.md. Backend contract re-verified at dev 04eda42 (progress/f4_rev5_backend_contract.md). BuildSongFormData invariant verified: !fd.has(pedal_preset_name) and getAll(preset).length===entries.length. isReadablePrstNameField 14-case boundary suite mirrors backend readPresetName. parsePlanLimits rejects rev-4 flat shape. R108 regex + at-least-one + unexpected fallback all mapped.
+
+## Closure
+Committed 73c6abe (feat(F4): implement save_preset_dialog (rev 5)) and pushed feature/gp5-save-preset-dialog to origin. PR URL: https://github.com/ricardo-leonel-dev/v_gp5_library/pull/new/feature/gp5-save-preset-dialog — base=dev (NOT main). T48 (manual UI at 375/1280px, light+dark) and T49 (real GP-5 + real backend installability) are RICARDOS, not publisher RICARDOS — do them locally before requesting repo merge. Notion page will go to Done via claim.

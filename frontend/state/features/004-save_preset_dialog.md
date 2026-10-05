@@ -2,9 +2,9 @@
 feature_number: 4
 name: save_preset_dialog
 title: Save a preset as a song (name, artist, cover, extra config)
-status: in_progress
+status: done
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-10-05T06:52:56.000Z
+updated_at: 2026-10-05T13:35:04.000Z
 ---
 
 ## Description
