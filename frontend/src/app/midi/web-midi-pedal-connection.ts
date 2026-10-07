@@ -14,6 +14,13 @@ export const GP5_NAME_PATTERN = /gp[\s-]?5/i;
 // Settle after selecting a slot before requesting its body.
 export const READ_SETTLE_MS = 300;
 
+// Deadline for the pedal to answer ONE write chunk. writePreset is
+// stop-and-wait (feature 28): chunk i+1 is sent only after chunk i's ACK, as
+// Valeton Suite does — the GP-5 answers each chunk in ~1-2 ms
+// (progress/gp5_suite_write_capture_2.txt), so this only trips when the
+// pedal stops answering. Re-armed for every chunk.
+export const WRITE_ACK_TIMEOUT_MS = 1000;
+
 // Deadline for ONE read step (the names phase completing, or one body
 // arriving) — NOT one flat deadline for the whole 100-slot read. It resets
 // every time a chunk of progress is observed (see waitForStep below), so a
@@ -37,6 +44,9 @@ type PendingRead = {
 
 type PendingWrite = {
   kind: 'write';
+  // Set while waiting for a chunk's reply; handleMidiMessage forwards every
+  // raw incoming message to it.
+  onMessage: ((data: Uint8Array) => void) | null;
 };
 
 type PendingOperation = PendingRead | PendingWrite;
@@ -206,23 +216,74 @@ export class WebMidiPedalConnection implements PedalConnection {
       throw new Error('not_connected');
     }
 
-    this.pendingOperation = { kind: 'write' };
+    const pending: PendingWrite = { kind: 'write', onMessage: null };
+    this.pendingOperation = pending;
     try {
-      for (const message of this.codec.encodeWriteRequest(preset)) {
-        this.output!.send(message);
-      }
-      // Yield once so the operation stays observable to callers who run another
-      // read/write in the same synchronous tick (R5 — "request_in_progress").
-      await Promise.resolve();
+      const packets = this.codec.encodeWriteRequest(preset);
+      // No slot selection first: the target slot is in the first chunk's
+      // header, and Valeton Suite sends no Bank Select before a write
+      // (feature 28). The operation stays pending until the last ACK (R5).
+      await this.sendWithStopAndWait(pending, packets);
     } finally {
+      pending.onMessage = null;
       this.pendingOperation = null;
     }
   }
 
+  // Stop-and-wait (feature 28): sends packet 0, waits for the pedal's ACK,
+  // sends packet 1, ... and resolves on the last packet's ACK. A NAK rejects
+  // with write_rejected (nothing more is sent); no reply within
+  // WRITE_ACK_TIMEOUT_MS of a send rejects with write_timeout. Messages that
+  // are neither (e.g. the pedal's patch-change notification) are ignored.
+  // Every exit clears the timer and detaches the handler, so a reply arriving
+  // while no write is pending is dropped. Replies carry no chunk index, so a
+  // stray ACK from an aborted write that lands after a NEW write sent its
+  // packet 0 would be counted for it — unlikely (replies take ~1-90 ms, an
+  // abort needs WRITE_ACK_TIMEOUT_MS of silence) and accepted. The 26th ACK
+  // comes ~90 ms after the last chunk, right after the pedal's 12 1B 02
+  // commit notification (ignored as a null reply).
+  private sendWithStopAndWait(pending: PendingWrite, packets: Uint8Array[]): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let next = 0;
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      let finished = false;
+      const finish = (error?: unknown) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeoutHandle);
+        pending.onMessage = null;
+        if (error === undefined) resolve();
+        else reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      const sendNext = () => {
+        if (next >= packets.length) {
+          finish();
+          return;
+        }
+        clearTimeout(timeoutHandle);
+        timeoutHandle = setTimeout(() => finish(new Error('write_timeout')), WRITE_ACK_TIMEOUT_MS);
+        try {
+          this.output!.send(packets[next++]);
+        } catch (error) {
+          finish(error);
+        }
+      };
+      pending.onMessage = (data) => {
+        const reply = this.codec.decodeWriteReply(data);
+        if (reply === 'nak') finish(new Error('write_rejected'));
+        else if (reply === 'ack') sendNext();
+      };
+      sendNext();
+    });
+  }
+
   private handleMidiMessage(data: Uint8Array): void {
-    if (this.pendingOperation?.kind !== 'read') return;
-    const result = this.codec.decodeIncomingMessage(data);
-    this.pendingOperation.onMessage?.(result);
+    const pending = this.pendingOperation;
+    if (pending?.kind === 'read') {
+      pending.onMessage?.(this.codec.decodeIncomingMessage(data));
+    } else if (pending?.kind === 'write') {
+      pending.onMessage?.(data);
+    }
   }
 
   private findGp5Port<T extends MIDIInput | MIDIOutput>(
@@ -235,10 +296,13 @@ export class WebMidiPedalConnection implements PedalConnection {
   }
 
   private handlePortStateChange(): void {
-    if (this.stateSignal() !== 'connected') return;
-    if (this.input?.state === 'disconnected' || this.output?.state === 'disconnected') {
-      this.input = null;
-      this.output = null;
+    const inputOk = this.input != null && this.input.state !== 'disconnected';
+    const outputOk = this.output != null && this.output.state !== 'disconnected';
+    if (inputOk && outputOk) {
+      if (this.stateSignal() !== 'connected') {
+        this.stateSignal.set('connected');
+      }
+    } else if (this.stateSignal() === 'connected') {
       this.stateSignal.set('not-connected');
     }
   }

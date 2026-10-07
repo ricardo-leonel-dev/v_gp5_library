@@ -196,15 +196,56 @@ default for a full-pedal dump, adjustable once real hardware timing is known; te
 `writePreset(preset: Preset)`:
 1. Guard (R4): not connected → `throw new Error('not_connected')`.
 2. Guard (R5): another operation pending → `throw new Error('request_in_progress')`.
-3. `this.pendingOperation = { kind: 'write' };`
-4. Send (R12): `for (const msg of this.codec.encodeWriteRequest(preset)) this.output!.send(msg);`.
-5. `this.pendingOperation = null;` then resolve (R13).
+3. `this.pendingOperation = { kind: 'write', onMessage: null };`
+4. Send (R12) — stop-and-wait (feature 28, rev 3): `packets = this.codec.encodeWriteRequest(preset)`; send
+   `packets[0]`, wait for the pedal's reply, send `packets[1]`, … exactly as Valeton Suite does (it sends
+   chunk i, waits ~1–2 ms for the ACK, then sends chunk i+1). **No slot selection (CC0 / Bank Select) is
+   sent first** — the target slot is carried in the first chunk's header, and Suite sends none. (Rev 1/2
+   sent `encodeSelectPreset(slot)` + a 300 ms settle and then burst all 26 packets; the pedal ACKed 3 and
+   NAKed the 4th, dropping the rest — see evidence below.)
+5. Wait for each reply (feature 28, amends R13): `handleMidiMessage` routes every incoming message to the
+   write op while one is pending, classified by `codec.decodeWriteReply(message)`:
+   - `'ack'` → send the next packet (re-arming the timer); after the last packet's ACK, resolve.
+   - `'nak'` → reject with `Error('write_rejected')`; nothing further is sent.
+   - `null` (e.g. the `[.., 0x12, 0x1b, ...]` patch-change notification) → ignored.
+   The timer is armed before each send: no reply within `WRITE_ACK_TIMEOUT_MS` (1000 ms **per chunk**)
+   rejects with `Error('write_timeout')`. A throwing `output.send` rejects with that error. Every exit
+   path clears the timer and detaches the handler, so a reply that arrives while no write is pending is
+   dropped. Limitation: write replies carry no chunk index, so a stray ACK from an aborted write that
+   arrives *after* a new write has sent its packet 0 cannot be told apart and would be counted as that
+   packet's ACK. This is unlikely (observed reply latency ~1-90 ms vs the 1000 ms timeout that must elapse
+   before an abort) and accepted. The operation stays pending until then (R5) and is released on resolve
+   and on reject.
+
+**Write frame layout (feature 28).** Every write frame decodes as
+`[crc, total_chunks, chunk_index, chunk_len, payload...]` — the same layout as every reply frame (see the
+codec's feature 13 note). Byte 1 is the total chunk count (`WRITE_BLOCK_COUNT` = 26 for the GP-5's
+488-byte payload), **not** an opcode: the GP-50 port put `0x1D` (29) there, so the GP-5 switched to the
+target slot but never committed the write (presumably waiting for chunks 26..28). Header
+`[0x11,0x4F,slot,0,0,0]` + `prst[NAME_OFF:]`, 19-byte chunking and CRC-8/0x07 are unchanged. This
+deliberately supersedes `import_preset_to_pedal` R45's "opcode 0x1D unchanged".
+
+**Write reply (ACK / NAK).** One frame per chunk received, decoded
+`[crc, 0x01, 0x00, 0x03, 0x14, 0x08, status]` — `Gp5SysexPresetCodec.decodeWriteReply` returns `'ack'`
+for status `0x00` (wire `F0 0B 02 00 01 00 00 00 03 01 04 00 08 00 00 F7`), `'nak'` for `0x01` (wire
+`F0 0B 05 00 01 00 00 00 03 01 04 00 08 00 01 F7`), `null` for anything else. In the Suite capture
+there are exactly 26 ACKs for 26 chunks: ACKs 1-25 arrive ~0-2 ms after chunks 0-24, but the 26th
+(final) ACK arrives ~90 ms after the last chunk (20:02:32.915 -> 20:02:33.006), immediately *after* the
+pedal's `12 1B 02 00 00 00` commit notification. That notification therefore arrives while the write is
+still pending and is ignored as a `null` reply; `writePreset` resolves on the 26th ACK that follows it.
+The ~90 ms final-ACK latency (the commit) is what the 1000 ms per-chunk timeout must cover.
+
+Evidence: `progress/gp5_suite_write_capture_2.txt` (spy-driver capture of Valeton Suite importing a
+preset, both directions: frames byte-identical in format to ours, byte 1 = `0x1A`, one chunk per ACK, no
+Bank Select), `progress/gp5_app_write_capture.txt` (our rev-2 burst: CC0, then 26 chunks in ~15 ms → 3
+ACKs then a NAK), `progress/gp5_suite_write_capture.txt` (round 1, pedal replies only) and the analysis
+`progress/analysis_suite_write_capture.md` ("Round 2").
 
 ## Error handling
 
 Matches `docs/architecture.md` principle 3: `PedalConnection` methods throw stable string-keyed errors
 (`'not_connected'`, `'request_in_progress'`, `'read_timeout'`, `'invalid_response'`,
-`'protocol_unconfirmed'`), never an unhandled rejection — callers (a future preset-browser page, out of
+`'protocol_unconfirmed'`, `'write_timeout'`, `'write_rejected'` — feature 28), never an unhandled rejection — callers (a future preset-browser page, out of
 scope here) catch and map to a translated message, same pattern `PedalConnectionPage` already
 establishes for `connect()`'s errors.
 
@@ -222,7 +263,11 @@ establishes for `connect()`'s errors.
     `'invalid'` (R10).
   - `vi.useFakeTimers()` + advancing past `READ_TIMEOUT_MS` with no `isLast` message → `read_timeout`
     (R9).
-  - `writePreset()` resolves once all messages are sent, without waiting for any input message (R13).
+  - `writePreset()` is stop-and-wait (R13 as amended by feature 28): packet i+1 is not sent until ACK i;
+    resolves after the last ACK, not one fewer; a NAK rejects `write_rejected` with no further sends; a
+    missing ACK rejects `write_timeout` after `WRITE_ACK_TIMEOUT_MS`; unrelated frames ignored; no CC0
+    sent; a late ACK arriving while no write is pending is dropped.
+  - `gp5-sysex-preset-codec.spec.ts`: `decodeWriteReply` on the exact captured ACK/NAK wire bytes.
   - an end-to-end **round-trip test** using a fake codec backed by an in-memory `Map<number, Preset>`
     (write encodes/stores, read decodes/emits from the map): `writePreset(preset)` then `readPresets()`
     returns a list containing that same `preset` — this is the concrete test satisfying acceptance
@@ -239,11 +284,23 @@ establishes for `connect()`'s errors.
    handshake that doesn't exist on real hardware. The acceptance criteria's round-trip requirement
    ("write, read back, matches") is satisfiable by a caller-level write-then-read test without the write
    call itself blocking on an ack.
+   - **2026-10-06 — reversed by feature 28 (`write_pacing_fix`).** A capture of the GP-5's replies during a
+     Valeton Suite import (`progress/gp5_suite_write_capture.txt`) shows the pedal does send one ACK per
+     chunk, so `writePreset()` now waits for them (step 5 above). Rev 3: one chunk per ACK (stop-and-wait),
+     matching Suite's outgoing traffic in `progress/gp5_suite_write_capture_2.txt`.
 2. **Model `Preset` as the raw `Uint8Array` SysEx payload** instead of a decoded domain object with typed
    slots/parameters. **Rejected**: `docs/architecture.md` keeps `src/app/midi/` as the only place that
    speaks the wire protocol; exposing raw bytes to callers (a future preset-browser page) would leak the
    SysEx format across the `PedalConnection` boundary and require every caller to understand it,
    defeating the point of the codec abstraction.
+   - **2026-10-05 — partial reversal completed by F5 (`import_preset_to_pedal`).** F4 added an optional
+     `Preset.raw` (`{ body: 466 bytes, nameField: 16 bytes }`); F5 completes the reversal by branching
+     `encodeWriteRequest` on `preset.raw` — when `raw.body.length === 466` the bytes are copied into the
+     write payload verbatim, the same way `encodePrstFile` already uses them on the upload path. A saved
+     preset now round-trips byte-identical: upload → save in the library → fetch the `.prst` → write
+     it back to a slot, the resulting bytes are the bytes the user originally read. `encodeBody` is
+     kept as the no-`raw` fallback so the path is still self-contained for callers that have not (yet)
+     captured the pedal's bytes.
 3. **Hardcode `new Gp5SysexPresetCodec()` inside `WebMidiPedalConnection`** instead of injecting
    `SysexPresetCodec` through a token. **Rejected**: this feature's own tests need a fake codec to
    exercise `readPresets()`/`writePreset()`'s orchestration logic (timeout, accumulation, invalid/ignored

@@ -4,6 +4,7 @@ import {
   WebMidiPedalConnection,
   READ_SETTLE_MS,
   READ_STEP_TIMEOUT_MS,
+  WRITE_ACK_TIMEOUT_MS,
 } from './web-midi-pedal-connection';
 import { SYSEX_PRESET_CODEC, type SysexPresetCodec, type SysexDecodeResult } from './sysex-preset-codec';
 import { Gp5SysexPresetCodec } from './gp5-sysex-preset-codec';
@@ -98,6 +99,18 @@ function fixturePreset(slot: number, name = `preset${slot}`): Preset {
 // without needing to fabricate real SysEx bytes in these orchestration tests.
 // The first message decoded after encodeActivePresetRequest() is the
 // active-preset reply; slotsMatchingActivePreset() returns `activeMatches`.
+// FakeCodec's stand-ins for the pedal's write-chunk ACK / NAK (see
+// decodeWriteReply).
+const FAKE_WRITE_ACK = new Uint8Array([0xa5]);
+const FAKE_WRITE_NAK = new Uint8Array([0xa6]);
+
+function fakeDecodeWriteReply(message: Uint8Array): 'ack' | 'nak' | null {
+  if (message.length !== 1) return null;
+  if (message[0] === FAKE_WRITE_ACK[0]) return 'ack';
+  if (message[0] === FAKE_WRITE_NAK[0]) return 'nak';
+  return null;
+}
+
 class FakeCodec implements SysexPresetCodec {
   readMessageSets: Uint8Array[][] = [];
   writeMessageSets: Uint8Array[][] = [];
@@ -150,6 +163,10 @@ class FakeCodec implements SysexPresetCodec {
     return this.writeMessageSets[this.encodeWriteRequestCalls.length - 1] ?? [
       new Uint8Array([0x01, 0x02, 0x03]),
     ];
+  }
+
+  decodeWriteReply(message: Uint8Array): 'ack' | 'nak' | null {
+    return fakeDecodeWriteReply(message);
   }
 
   decodeIncomingMessage(_message: Uint8Array): SysexDecodeResult {
@@ -208,6 +225,12 @@ async function fireMessages(input: FakePort, payloads: Uint8Array[]): Promise<vo
     const ev = { data } as unknown as MIDIMessageEvent;
     input.onmidimessage?.(ev);
   }
+}
+
+// Has the pedal ACK `count` write packets, one at a time (writePreset sends
+// the next packet synchronously on each ACK — stop-and-wait, feature 28).
+async function ackPackets(input: FakePort, count: number): Promise<void> {
+  await fireMessages(input, Array.from({ length: count }, () => FAKE_WRITE_ACK));
 }
 
 // Fires the names-complete message, then the active-preset reply to the
@@ -381,6 +404,28 @@ describe('WebMidiPedalConnection.connect', () => {
 
     expect(connection.connectionState()).toBe('not-connected');
   });
+
+  test('returns to "connected" when a stored input port onstatechange fires with state "connected" after a disconnect (patch 2026-10-06)', async () => {
+    const access = fakeAccess(
+      [{ name: 'Valeton GP-5' }],
+      [{ name: 'Valeton GP-5' }],
+    );
+    stubRequestMidiAccess(() => Promise.resolve(access));
+    const { connection } = setup();
+
+    await connection.connect();
+    expect(connection.connectionState()).toBe('connected');
+
+    const inputPort = [...access.inputs.values()][0];
+
+    inputPort.state = 'disconnected';
+    inputPort.onstatechange?.(new Event('statechange'));
+    expect(connection.connectionState()).toBe('not-connected');
+
+    inputPort.state = 'connected';
+    inputPort.onstatechange?.(new Event('statechange'));
+    expect(connection.connectionState()).toBe('connected');
+  });
 });
 
 describe('WebMidiPedalConnection.readPresets / writePreset — connection guards', () => {
@@ -441,12 +486,15 @@ describe('WebMidiPedalConnection.readPresets / writePreset — connection guards
   });
 
   test('readPresets rejects with "request_in_progress" while a write is pending (R5)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.writeMessageSets = [[new Uint8Array([0x01, 0x02, 0x03])]];
-    const { connection } = await connectAndSetup(codec);
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
 
     const first = connection.writePreset(fixturePreset(0));
     await expect(connection.readPresets()).rejects.toThrow('request_in_progress');
+    await ackPackets(inputPort, 1);
     await first;
   });
 });
@@ -861,6 +909,7 @@ describe('WebMidiPedalConnection.readPresets — orchestration', () => {
 
 describe('WebMidiPedalConnection.writePreset — orchestration', () => {
   test('sends every message from encodeWriteRequest in order via output.send (R12)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.writeMessageSets = [
       [
@@ -870,8 +919,11 @@ describe('WebMidiPedalConnection.writePreset — orchestration', () => {
       ],
     ];
     const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
 
-    await connection.writePreset(fixturePreset(3));
+    const pending = connection.writePreset(fixturePreset(3));
+    await ackPackets(inputPort, 3);
+    await pending;
 
     const outputPort = [...access.outputs.values()][0];
     expect(outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array))).toEqual([
@@ -881,14 +933,216 @@ describe('WebMidiPedalConnection.writePreset — orchestration', () => {
     ]);
   });
 
-  test('resolves once all messages are sent, without waiting for an input message (R13)', async () => {
+  // R13 as amended by feature 28: "all messages sent" is not enough — the
+  // call resolves once the pedal has ACKed every one of them.
+  test('resolves once every sent message is ACKed by the pedal (R13, feature 28)', async () => {
+    vi.useFakeTimers();
     const codec = new FakeCodec();
     codec.writeMessageSets = [[new Uint8Array([0x01, 0x02]), new Uint8Array([0x03, 0x04])]];
-    const { connection } = await connectAndSetup(codec);
+    const { connection, access } = await connectAndSetup(codec);
+    const inputPort = [...access.inputs.values()][0];
 
     const preset = fixturePreset(0);
-    await expect(connection.writePreset(preset)).resolves.toBeUndefined();
+    const pending = connection.writePreset(preset);
+    await ackPackets(inputPort, 2);
+    await expect(pending).resolves.toBeUndefined();
     expect(codec.encodeWriteRequestCalls).toEqual([preset]);
+  });
+});
+
+// Feature 28: writePreset is stop-and-wait, like Valeton Suite — packet i+1
+// goes out only after the pedal ACKs packet i; a NAK aborts with
+// write_rejected; no reply within WRITE_ACK_TIMEOUT_MS aborts with
+// write_timeout. No slot selection (CC0) is sent: the slot is in the header.
+// Evidence: progress/gp5_suite_write_capture_2.txt, progress/gp5_app_write_capture.txt.
+describe('WebMidiPedalConnection.writePreset — stop-and-wait ACK pacing (feature 28)', () => {
+  const PACKET_COUNT = 26;
+  const packets = Array.from({ length: PACKET_COUNT }, (_, i) => new Uint8Array([0xf0, 0x11, i, 0xf7]));
+  const NON_ACK = new Uint8Array([0xf0, 0x12, 0x1b, 0xf7]);
+  const packetBytes = (n: number) => packets.slice(0, n).map((p) => Array.from(p));
+
+  async function startWrite(slot = 7): Promise<{
+    connection: WebMidiPedalConnection;
+    codec: FakeCodec;
+    input: FakePort;
+    sent: () => number[][];
+    pending: Promise<void>;
+    settled: () => boolean;
+  }> {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.writeMessageSets = [packets, packets]; // the follow-up write is 26 packets too
+    const { connection, access } = await connectAndSetup(codec);
+    const outputPort = [...access.outputs.values()][0];
+    const input = [...access.inputs.values()][0];
+    const sent = () => outputPort.__sendSpy.mock.calls.map((c) => Array.from(c[0] as Uint8Array));
+    const pending = connection.writePreset(fixturePreset(slot));
+    let done = false;
+    pending.then(
+      () => (done = true),
+      () => (done = true),
+    );
+    return { connection, codec, input, sent, pending, settled: () => done };
+  }
+
+  test('the per-chunk ACK timeout is 1000ms', () => {
+    expect(WRITE_ACK_TIMEOUT_MS).toBe(1000);
+  });
+
+  test('sends no slot selection (CC0) — only write packets, packet 0 immediately', async () => {
+    const { codec, input, sent, pending } = await startWrite(7);
+
+    expect(codec.selectCalls).toEqual([]);
+    expect(sent()).toEqual(packetBytes(1));
+
+    await ackPackets(input, PACKET_COUNT);
+    await pending;
+    expect(codec.selectCalls).toEqual([]);
+    expect(sent()).toEqual(packetBytes(PACKET_COUNT));
+    expect(sent().some((m) => (m[0] & 0xf0) === 0xb0)).toBe(false);
+  });
+
+  test('packet i+1 is NOT sent until ACK i arrives, however long the wait (within the timeout)', async () => {
+    const { input, sent, pending } = await startWrite();
+
+    for (let i = 1; i < PACKET_COUNT; i++) {
+      await vi.advanceTimersByTimeAsync(WRITE_ACK_TIMEOUT_MS - 1);
+      expect(sent()).toEqual(packetBytes(i));
+      await fireMessages(input, [FAKE_WRITE_ACK]);
+      expect(sent()).toEqual(packetBytes(i + 1));
+    }
+    await fireMessages(input, [FAKE_WRITE_ACK]);
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  test('happy path: 26 ACKs resolve, after the 26th and not after 25', async () => {
+    const { input, sent, pending, settled } = await startWrite();
+
+    await ackPackets(input, PACKET_COUNT - 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent()).toEqual(packetBytes(PACKET_COUNT));
+    expect(settled()).toBe(false);
+
+    await fireMessages(input, [FAKE_WRITE_ACK]);
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  test('a NAK mid-stream rejects with "write_rejected", sends no further packets, and releases the operation', async () => {
+    const { connection, input, sent, pending } = await startWrite();
+    const rejection = expect(pending).rejects.toThrow('write_rejected');
+
+    await ackPackets(input, 3);
+    await fireMessages(input, [FAKE_WRITE_NAK]);
+    await rejection;
+    expect(sent()).toEqual(packetBytes(4));
+
+    // Late ACKs after the abort send nothing and time nothing out.
+    await ackPackets(input, 5);
+    await vi.advanceTimersByTimeAsync(WRITE_ACK_TIMEOUT_MS * 2);
+    expect(sent()).toEqual(packetBytes(4));
+
+    const next = connection.writePreset(fixturePreset(2));
+    await ackPackets(input, PACKET_COUNT);
+    await expect(next).resolves.toBeUndefined();
+  });
+
+  test('a missing ACK rejects with "write_timeout" after WRITE_ACK_TIMEOUT_MS, then releases the operation', async () => {
+    const { connection, input, sent, pending, settled } = await startWrite();
+    const rejection = expect(pending).rejects.toThrow('write_timeout');
+
+    await ackPackets(input, 5);
+    await vi.advanceTimersByTimeAsync(WRITE_ACK_TIMEOUT_MS - 1);
+    expect(settled()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(sent()).toEqual(packetBytes(6));
+
+    // A late ACK arriving while no write is pending is dropped; the next write needs its own 26.
+    await fireMessages(input, [FAKE_WRITE_ACK]);
+    expect(sent()).toEqual(packetBytes(6));
+    let nextDone = false;
+    const next = connection.writePreset(fixturePreset(2));
+    next.then(() => (nextDone = true), () => (nextDone = true));
+    await ackPackets(input, PACKET_COUNT - 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nextDone).toBe(false);
+    await fireMessages(input, [FAKE_WRITE_ACK]);
+    await expect(next).resolves.toBeUndefined();
+  });
+
+  test('ignores unrelated frames (e.g. the 0x12 0x1b notification): they neither advance nor abort the write', async () => {
+    const { input, sent, pending, settled } = await startWrite();
+
+    await ackPackets(input, 10);
+    await fireMessages(input, [NON_ACK, NON_ACK]);
+    expect(sent()).toEqual(packetBytes(11));
+    await ackPackets(input, PACKET_COUNT - 11);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled()).toBe(false); // 25 ACKs; the notifications didn't count
+
+    await fireMessages(input, [FAKE_WRITE_ACK]);
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  test('holds the operation until the last ACK: concurrent read/write reject with "request_in_progress" (R5)', async () => {
+    const { connection, input, sent, pending, settled } = await startWrite();
+
+    await expect(connection.writePreset(fixturePreset(1))).rejects.toThrow('request_in_progress');
+    await ackPackets(input, PACKET_COUNT - 1);
+    expect(sent()).toHaveLength(PACKET_COUNT);
+    expect(settled()).toBe(false);
+    await expect(connection.readPresets()).rejects.toThrow('request_in_progress');
+    await expect(connection.writePreset(fixturePreset(1))).rejects.toThrow('request_in_progress');
+
+    await fireMessages(input, [FAKE_WRITE_ACK]);
+    await pending;
+
+    // Released afterwards: a new write proceeds normally.
+    const next = connection.writePreset(fixturePreset(2));
+    await ackPackets(input, PACKET_COUNT);
+    await expect(next).resolves.toBeUndefined();
+  });
+
+  test('rejects with the send error, sends nothing more and releases, when output.send throws mid-stream', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.writeMessageSets = [packets];
+    const { connection, access } = await connectAndSetup(codec);
+    const outputPort = [...access.outputs.values()][0];
+    const input = [...access.inputs.values()][0];
+    let calls = 0;
+    outputPort.__sendSpy.mockImplementation(() => {
+      if (++calls === 3) throw new Error('port_closed');
+    });
+
+    const pending = connection.writePreset(fixturePreset(0));
+    const rejection = expect(pending).rejects.toThrow('port_closed');
+    await ackPackets(input, 2);
+    await rejection;
+    await ackPackets(input, 3);
+    expect(outputPort.__sendSpy).toHaveBeenCalledTimes(3);
+
+    outputPort.__sendSpy.mockImplementation(() => undefined);
+    codec.writeMessageSets.push(packets);
+    const next = connection.writePreset(fixturePreset(1));
+    await ackPackets(input, PACKET_COUNT);
+    await expect(next).resolves.toBeUndefined();
+  });
+
+  test('releases the operation when encodeWriteRequest throws, sending nothing (R14 errors still surface)', async () => {
+    vi.useFakeTimers();
+    const codec = new FakeCodec();
+    codec.encodeWriteRequest = () => {
+      throw new Error('protocol_unconfirmed');
+    };
+    const { connection, access } = await connectAndSetup(codec);
+    const outputPort = [...access.outputs.values()][0];
+
+    await expect(connection.writePreset(fixturePreset(0))).rejects.toThrow('protocol_unconfirmed');
+    expect(outputPort.__sendSpy).not.toHaveBeenCalled();
+
+    const next = connection.writePreset(fixturePreset(0));
+    await expect(next).rejects.toThrow('protocol_unconfirmed');
   });
 });
 
@@ -947,6 +1201,10 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
         this.store.set(preset.slot, preset);
         return [new Uint8Array([0x01])];
       }
+
+      decodeWriteReply(message: Uint8Array): 'ack' | 'nak' | null {
+        return fakeDecodeWriteReply(message);
+      }
     }
 
     vi.useFakeTimers();
@@ -963,7 +1221,9 @@ describe('WebMidiPedalConnection — round-trip (T20)', () => {
       ],
     };
 
-    await connection.writePreset(preset);
+    const writing = connection.writePreset(preset);
+    await ackPackets(inputPort, 1); // the pedal's ACK (feature 28)
+    await writing;
 
     const pending = connection.readPresets();
     await completeNamesAndActive(inputPort);

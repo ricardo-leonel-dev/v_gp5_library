@@ -15,10 +15,23 @@ export type SysexDecodeResult =
   | { kind: 'ignored' }
   | { kind: 'invalid'; reason: string };
 
+/**
+ * The pedal's reply to one write chunk: `ack` = accepted, send the next chunk;
+ * `nak` = rejected, the pedal drops the rest of the transfer.
+ */
+export type WriteReply = 'ack' | 'nak';
+
 export interface SysexPresetCodec {
   encodeReadAllRequest(): Uint8Array[];
   decodeIncomingMessage(message: Uint8Array): SysexDecodeResult;
   encodeWriteRequest(preset: Preset): Uint8Array[];
+  /**
+   * Classifies `message` as the pedal's reply to one write chunk (`ack` /
+   * `nak`), or null for anything else (e.g. its patch-change notification).
+   * WebMidiPedalConnection.writePreset sends chunk i+1 only after chunk i's
+   * `ack` (stop-and-wait) and aborts on `nak`.
+   */
+  decodeWriteReply(message: Uint8Array): WriteReply | null;
   /**
    * Makes `slot` the device's active preset. The body request carries no slot
    * number, so WebMidiPedalConnection.readPresets sends this — and lets it

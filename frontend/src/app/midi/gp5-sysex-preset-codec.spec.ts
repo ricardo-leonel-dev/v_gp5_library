@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { describeModuleType } from './gp5-module-vocabulary';
 import { Gp5SysexPresetCodec } from './gp5-sysex-preset-codec';
+import { GP5_CAPTURED_BODIES, capturedBodyBytes } from './gp5-captured-bodies.fixture';
 import type { Preset } from './preset';
 import type { SysexDecodeResult } from './sysex-preset-codec';
 
@@ -788,17 +789,22 @@ describe('Gp5SysexPresetCodec.encodeWriteRequest', () => {
     }
   });
 
-  test('each packet carries cmd=0x1D, an index byte, and a length byte (R17, T4)', () => {
+  test('each packet is [crc, total_chunks=26, index 0..25, len, payload] (R17, T4, feature 28)', () => {
     const codec = new Gp5SysexPresetCodec();
     const packets = codec.encodeWriteRequest(fixturePreset);
 
     packets.forEach((packet, i) => {
       const decoded = fromWire(packet);
       expect(decoded[0]).toBeGreaterThanOrEqual(0); // CRC
-      expect(decoded[1]).toBe(0x1d);
+      // Byte 1 is the transfer's chunk count, as in every GP-5 reply frame —
+      // not the GP-50's 0x1D (feature 28).
+      expect(decoded[1]).toBe(26);
+      expect(decoded[1]).toBe(packets.length);
       expect(decoded[2]).toBe(i);
       // length = decoded[3], body starts at decoded[4]
       expect(decoded.length).toBe(4 + decoded[3]);
+      // 488-byte payload in 19-byte chunks: 25 full chunks + a 13-byte tail.
+      expect(decoded[3]).toBe(i === packets.length - 1 ? 488 - 25 * 19 : 19);
     });
   });
 
@@ -868,6 +874,271 @@ describe('Gp5SysexPresetCodec — MIT license attribution (R16)', () => {
   });
 });
 
+// F5 `import_preset_to_pedal` — R42-R46 / R47 / R48.
+//
+// R47: with a Preset whose `raw` is present, the write payload's body bytes
+// (offset 22..22+466) must equal `raw.body` byte-for-byte, and the name field
+// (offset 6..22) must equal `raw.nameField`. R42 + R44 in the spec.
+//
+// R48: with a Preset whose `raw` is absent, encodeWriteRequest must produce
+// the same bytes as today's implementation — i.e. the fallback to encodeBody
+// (R43) is preserved unchanged.
+//
+// R46: a Preset whose `raw` is present but whose body length is not 466 must
+// throw `Error('preset_bytes_unavailable')` rather than silently falling
+// through to encodeBody (the bug guard).
+
+function reassembleWritePayload(packets: Uint8Array[]): Uint8Array {
+  const payload = new Uint8Array(6 + 482);
+  let pos = 0;
+  for (const packet of packets) {
+    const decoded = fromWire(packet);
+    const bodyLen = decoded[3];
+    payload.set(decoded.subarray(4, 4 + bodyLen), pos);
+    pos += bodyLen;
+  }
+  return payload;
+}
+
+describe('Gp5SysexPresetCodec.encodeWriteRequest — raw body (F5 R42, R44, R47)', () => {
+  const captured = GP5_CAPTURED_BODIES[0]; // slot 0 "TL DLX AMP"
+  const body = capturedBodyBytes(0);
+  // A 16-byte name field matching what the pedal would have sent for slot 0.
+  // Picked up here only to exercise the verbatim copy path; the captured
+  // fixture does not include name fields.
+  const nameField = (() => {
+    const f = new Uint8Array(NAME_LEN);
+    const enc = new TextEncoder().encode(captured.name);
+    for (let i = 0; i < NAME_LEN; i++) f[i] = i < enc.length ? enc[i] : 0;
+    return f;
+  })();
+
+  test('copies preset.raw.body verbatim into payload[22..22+466) and preset.raw.nameField into payload[6..22) (R42, R44, R47)', () => {
+    const preset: Preset = {
+      slot: 0,
+      name: 'should-not-be-used',
+      chain: Array.from({ length: 10 }, (_, i) => ({
+        moduleType: `cat${i}_fx${i}`,
+        enabled: false,
+        parameters: {},
+      })),
+      raw: { body, nameField },
+    };
+    const codec = new Gp5SysexPresetCodec();
+    const packets = codec.encodeWriteRequest(preset);
+    const payload = reassembleWritePayload(packets);
+
+    expect(payload.length).toBe(6 + 482);
+    // name field (R44)
+    expect(payload.subarray(6, 6 + NAME_LEN)).toEqual(nameField);
+    // body (R42)
+    expect(payload.subarray(22, 22 + GP5_BODY_LEN)).toEqual(body);
+  });
+
+  test('still produces 26 packets with valid header, CRC, and chunking when raw is set (R45)', () => {
+    const preset: Preset = {
+      slot: 7,
+      name: 'crunch',
+      chain: [],
+      raw: { body, nameField },
+    };
+    const codec = new Gp5SysexPresetCodec();
+    const packets = codec.encodeWriteRequest(preset);
+
+    expect(packets).toHaveLength(26);
+    const decodedFirst = fromWire(packets[0]);
+    expect(decodedFirst[4]).toBe(0x11);
+    expect(decodedFirst[5]).toBe(0x4f);
+    expect(decodedFirst[6]).toBe(7);
+    expect(decodedFirst[7]).toBe(0);
+    expect(decodedFirst[8]).toBe(0);
+    expect(decodedFirst[9]).toBe(0);
+    for (const packet of packets) {
+      const decoded = fromWire(packet);
+      const [crc, ...body] = decoded;
+      expect(crc).toBe(crc8(body));
+    }
+  });
+});
+
+describe('Gp5SysexPresetCodec.encodeWriteRequest — raw body, wrong length (F5 R46)', () => {
+  test('throws Error("preset_bytes_unavailable") when raw.body.length !== 466 but raw is set (R46)', () => {
+    const wrongBody = new Uint8Array(GP5_BODY_LEN - 1); // 465, not 466
+    const nameField = new Uint8Array(NAME_LEN);
+    const preset: Preset = {
+      slot: 0,
+      name: 'x',
+      chain: [],
+      raw: { body: wrongBody, nameField },
+    };
+    const codec = new Gp5SysexPresetCodec();
+    expect(() => codec.encodeWriteRequest(preset)).toThrowError('preset_bytes_unavailable');
+  });
+
+  test('also throws when raw.body is 467 (one byte too long)', () => {
+    const wrongBody = new Uint8Array(GP5_BODY_LEN + 1);
+    const nameField = new Uint8Array(NAME_LEN);
+    const preset: Preset = {
+      slot: 0,
+      name: 'x',
+      chain: [],
+      raw: { body: wrongBody, nameField },
+    };
+    const codec = new Gp5SysexPresetCodec();
+    expect(() => codec.encodeWriteRequest(preset)).toThrowError('preset_bytes_unavailable');
+  });
+});
+
+describe('Gp5SysexPresetCodec.encodeWriteRequest — fallback (F5 R43, R48)', () => {
+  // The R48 snapshot: a Preset without `raw` must still go through encodeBody
+  // and produce today's bytes exactly. We pin the payload bytes here so a
+  // future refactor of encodeBody that is supposed to stay byte-stable
+  // cannot regress silently. The chain is deterministic.
+  const fallbackPreset: Preset = {
+    slot: 3,
+    name: 'snapshot',
+    chain: Array.from({ length: 10 }, (_, i) => ({
+      moduleType: `cat${i}_fx${i}`,
+      enabled: i % 2 === 0,
+      parameters: { p0: i / 10 },
+    })),
+  };
+
+  test('body region still carries REC_MODELS / REC_BYPASS / REC_ORDER / REC_PARAMS at the documented offsets (R43, R48)', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const packets = codec.encodeWriteRequest(fallbackPreset);
+    const payload = reassembleWritePayload(packets);
+
+    expect(payload.length).toBe(6 + 482);
+    // REC_MODELS magic at the body region start (offset 22).
+    expect(payload[22]).toBe(0x03);
+    expect(payload[23]).toBe(0x30);
+    expect(payload[24]).toBe(0x28);
+    expect(payload[25]).toBe(0x00);
+    // REC_BYPASS magic immediately after the 10 REC_MODELS records (40 bytes).
+    expect(payload[66]).toBe(0x01);
+    expect(payload[67]).toBe(0x30);
+    expect(payload[68]).toBe(0x04);
+    expect(payload[69]).toBe(0x00);
+    // REC_BYPASS mask encodes the chain's enabled blocks (i%2===0 → bits 0,2,4,6,8 = 0x155).
+    expect(payload[70]).toBe(0x55);
+    expect(payload[71]).toBe(0x01);
+    expect(payload[72]).toBe(0x00);
+    expect(payload[73]).toBe(0x00);
+    // REC_ORDER magic.
+    expect(payload[74]).toBe(0x02);
+    expect(payload[75]).toBe(0x30);
+    expect(payload[76]).toBe(0x0a);
+    expect(payload[77]).toBe(0x00);
+    // REC_ORDER identity permutation 0..9.
+    for (let k = 0; k < 10; k++) {
+      expect(payload[78 + k]).toBe(k);
+    }
+    // REC_PARAMS magic.
+    expect(payload[88]).toBe(0x04);
+    expect(payload[89]).toBe(0x30);
+    expect(payload[90]).toBe(0x40);
+    expect(payload[91]).toBe(0x01);
+    // 80 zero float32s (320 zero bytes) at offset 92..412.
+    for (let i = 92; i < 412; i++) {
+      expect(payload[i]).toBe(0);
+    }
+  });
+
+  test('name slot still holds the NUL-padded name from preset.name (R43, R48)', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const packets = codec.encodeWriteRequest(fallbackPreset);
+    const payload = reassembleWritePayload(packets);
+
+    const expected = new Uint8Array(NAME_LEN);
+    const enc = new TextEncoder().encode(fallbackPreset.name);
+    for (let i = 0; i < NAME_LEN; i++) {
+      expected[i] = i < enc.length ? enc[i] : 0;
+    }
+    expect(payload.subarray(6, 6 + NAME_LEN)).toEqual(expected);
+  });
+
+  test('header bytes and slot byte are unchanged (R45, R48)', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const packets = codec.encodeWriteRequest(fallbackPreset);
+    const payload = reassembleWritePayload(packets);
+
+    expect(payload[0]).toBe(0x11);
+    expect(payload[1]).toBe(0x4f);
+    expect(payload[2]).toBe(3); // slot
+    expect(payload[3]).toBe(0);
+    expect(payload[4]).toBe(0);
+    expect(payload[5]).toBe(0);
+  });
+});
+
 // Silence the "declared but never used" import warnings for types-only imports.
 const _typeRefs: [Preset, SysexDecodeResult] | null = null;
 void _typeRefs;
+
+// Feature 28: the GP-5 answers each write chunk with one fixed frame whose
+// last decoded byte is the status: 0x00 = ACK, 0x01 = NAK. Wire bytes copied
+// verbatim from the hardware captures.
+describe('Gp5SysexPresetCodec.decodeWriteReply (feature 28)', () => {
+  // progress/gp5_suite_write_capture_2.txt — Suite's stop-and-wait write, one per chunk.
+  const CAPTURED_ACK = new Uint8Array([
+    0xf0, 0x0b, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x01, 0x04, 0x00, 0x08, 0x00, 0x00, 0xf7,
+  ]);
+  // progress/gp5_app_write_capture.txt — the pedal's reply after 3 ACKs to our rev-2 burst.
+  const CAPTURED_NAK = new Uint8Array([
+    0xf0, 0x0b, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x01, 0x04, 0x00, 0x08, 0x00, 0x01, 0xf7,
+  ]);
+  // The patch-change notification the pedal sends around a write.
+  const CAPTURED_MID_WRITE_NOTIFICATION = new Uint8Array([
+    0xf0, 0x0d, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x01, 0x0b, 0x00, 0x02, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf7,
+  ]);
+
+  // Builds a CRC-valid write-reply frame with the given status byte.
+  function replyWithStatus(status: number): Uint8Array {
+    const body = [0x01, 0x00, 0x03, 0x14, 0x08, status];
+    const decoded = [crc8(body), ...body];
+    return new Uint8Array([0xf0, ...decoded.flatMap((b) => [b >> 4, b & 0x0f]), 0xf7]);
+  }
+
+  test("'ack' for the captured write ACK", () => {
+    expect(new Gp5SysexPresetCodec().decodeWriteReply(CAPTURED_ACK)).toBe('ack');
+  });
+
+  test("'nak' for the captured write NAK (14 08 01)", () => {
+    expect(new Gp5SysexPresetCodec().decodeWriteReply(CAPTURED_NAK)).toBe('nak');
+  });
+
+  test('the frame builder reproduces both captured frames byte-for-byte', () => {
+    expect(Array.from(replyWithStatus(0x00))).toEqual(Array.from(CAPTURED_ACK));
+    expect(Array.from(replyWithStatus(0x01))).toEqual(Array.from(CAPTURED_NAK));
+  });
+
+  test('null for an unknown status byte', () => {
+    expect(new Gp5SysexPresetCodec().decodeWriteReply(replyWithStatus(0x02))).toBeNull();
+  });
+
+  test('null for the 0x12 0x1b notification sent around a write', () => {
+    expect(new Gp5SysexPresetCodec().decodeWriteReply(CAPTURED_MID_WRITE_NOTIFICATION)).toBeNull();
+  });
+
+  test('null for a reply-shaped frame with a bad CRC, a CC0 select, or an empty message', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const badCrc = CAPTURED_ACK.slice();
+    badCrc[1] = 0x0c;
+    expect(codec.decodeWriteReply(badCrc)).toBeNull();
+    const badNakCrc = CAPTURED_NAK.slice();
+    badNakCrc[2] = 0x06;
+    expect(codec.decodeWriteReply(badNakCrc)).toBeNull();
+    expect(codec.decodeWriteReply(new Uint8Array([0xb0, 0x00, 3]))).toBeNull();
+    expect(codec.decodeWriteReply(new Uint8Array([]))).toBeNull();
+  });
+
+  test('null for one of our own write packets echoed back', () => {
+    const codec = new Gp5SysexPresetCodec();
+    const preset: Preset = { slot: 0, name: 'x', chain: [] };
+    for (const packet of codec.encodeWriteRequest(preset)) {
+      expect(codec.decodeWriteReply(packet)).toBeNull();
+    }
+  });
+});
