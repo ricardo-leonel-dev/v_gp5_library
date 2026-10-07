@@ -670,6 +670,10 @@ class FakeReadCodec implements SysexPresetCodec {
     throw new Error('encodeWriteRequest should not be called from the preset browser page');
   }
 
+  decodeWriteReply(_message: Uint8Array): 'ack' | 'nak' | null {
+    return null;
+  }
+
   decodeIncomingMessage(_message: Uint8Array): SysexDecodeResult {
     if (this.awaitingNames) {
       this.namesCallCount++;

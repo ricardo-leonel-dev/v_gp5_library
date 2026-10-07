@@ -1,0 +1,262 @@
+<div *transloco="let t" class="contents">
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+    data-testid="write-to-pedal-backdrop"
+    (click)="onBackdropClick()"
+  >
+    <div
+      class="flex w-full max-w-md flex-col overflow-hidden rounded-xl bg-white shadow-xl dark:bg-slate-800"
+      data-testid="write-to-pedal-card"
+      role="dialog"
+      aria-modal="true"
+      [attr.aria-labelledby]="titleId"
+      (click)="$event.stopPropagation()"
+    >
+      <header
+        class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-5"
+      >
+        <h2
+          [id]="titleId"
+          class="text-base font-semibold text-slate-900 dark:text-slate-100"
+          data-testid="write-to-pedal-title"
+        >
+          {{ t('writeToPedal.title') }}
+        </h2>
+        <button
+          type="button"
+          class="-mr-1 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 disabled:opacity-50"
+          [attr.aria-label]="t('writeToPedal.close')"
+          [disabled]="submitting()"
+          data-testid="write-to-pedal-dismiss"
+          (click)="onClose()"
+        >×</button>
+      </header>
+
+      <div class="flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5" data-testid="write-to-pedal-body">
+        @if (success(); as s) {
+          <div
+            class="flex flex-col items-center gap-3 px-4 py-8 text-center"
+            data-testid="write-to-pedal-success"
+          >
+            <div class="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true" class="size-5">
+                <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </div>
+            <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100">
+              {{ t('writeToPedal.success_title') }}
+            </h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+              @if (s.items.length === 1) {
+                {{ t('writeToPedal.success_single', { toSlot: s.fromSlot, presetName: s.items[0]!.ref.name }) }}
+              } @else {
+                {{ t('writeToPedal.success_multi', { from: s.fromSlot, to: s.toSlot, count: s.items.length, songName: song().name }) }}
+              }
+            </p>
+            <button
+              #successCloseEl
+              type="button"
+              class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+              data-testid="write-to-pedal-close"
+              (click)="onClose()"
+            >
+              {{ t('writeToPedal.done') }}
+            </button>
+          </div>
+        } @else {
+          <p
+            class="text-sm font-medium text-slate-900 dark:text-slate-100"
+            data-testid="write-to-pedal-song-heading"
+          >
+            {{ t('writeToPedal.song_heading', { name: song().name }) }}
+          </p>
+
+          <div class="space-y-1">
+            <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+              {{ t('writeToPedal.presets_legend') }}
+            </span>
+            <ol
+              class="divide-y divide-slate-200 rounded-lg bg-slate-50 ring-1 ring-inset ring-slate-200 dark:divide-slate-700 dark:bg-slate-900 dark:ring-slate-700"
+              data-testid="write-to-pedal-presets"
+            >
+              @for (ref of presets(); track ref.presetId; let i = $index) {
+                <li
+                  class="grid grid-cols-[1.5rem_1fr_auto] items-center gap-x-2 px-3 py-2"
+                  data-testid="write-to-pedal-preset-row"
+                  [class]="!writeAll() && selectedSortOrder() === ref.sortOrder ? 'bg-indigo-50 dark:bg-indigo-950/30' : ''"
+                  [attr.aria-current]="!writeAll() && selectedSortOrder() === ref.sortOrder ? 'true' : null"
+                  [attr.aria-label]="t('writeToPedal.preset_row_aria', { position: ref.position, name: ref.name })"
+                  (click)="onPresetRowClick(ref.sortOrder)"
+                >
+                  <span class="pt-px text-right text-sm font-semibold tabular-nums text-slate-400 dark:text-slate-500" aria-hidden="true">
+                    {{ ref.position }}
+                  </span>
+                  <span class="truncate text-sm text-slate-900 dark:text-slate-100">{{ ref.name }}</span>
+                  <span class="size-4">
+                    @if (!writeAll() && selectedSortOrder() === ref.sortOrder) {
+                      <span class="flex size-4 items-center justify-center rounded-full bg-indigo-600 text-white dark:bg-indigo-400 dark:text-slate-900" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" class="size-3">
+                          <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                      </span>
+                    }
+                  </span>
+                </li>
+              }
+            </ol>
+          </div>
+
+          <div class="space-y-1">
+            <label
+              for="write-to-pedal-slot-input"
+              class="block text-sm font-medium text-slate-700 dark:text-slate-300"
+            >
+              {{ t('writeToPedal.target_slot') }}
+            </label>
+            <input
+              #slotInputEl
+              id="write-to-pedal-slot-input"
+              type="number"
+              inputmode="numeric"
+              pattern="[0-9]*"
+              min="0"
+              max="99"
+              step="1"
+              enterkeyhint="done"
+              class="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+              [class]="slotError() !== null ? 'border-red-500 dark:border-red-400' : ''"
+              [attr.aria-invalid]="slotError() !== null"
+              aria-describedby="write-to-pedal-slot-help"
+              data-testid="write-to-pedal-slot-input"
+              [value]="slotInput()"
+              [disabled]="submitting()"
+              (input)="onSlotInput($event)"
+            />
+            <p
+              id="write-to-pedal-slot-help"
+              class="mt-1 text-xs text-slate-500 dark:text-slate-400"
+            >
+              {{ t('writeToSlot.help') }}
+            </p>
+            @if (slotError(); as err) {
+              <p
+                class="mt-1 text-xs text-red-600 dark:text-red-400"
+                data-testid="write-to-pedal-slot-error"
+                role="alert"
+              >
+                @if (err === 'writeToSlot.errors.notEnoughRoom') {
+                  {{ t('writeToSlot.errors.notEnoughRoom', { N: presets().length, M: parsedSlot() ?? 0, available: 100 - (parsedSlot() ?? 0) }) }}
+                } @else {
+                  {{ t(err) }}
+                }
+              </p>
+            }
+          </div>
+
+          <div class="flex items-center gap-2" data-testid="write-to-pedal-mode-row">
+            <button
+              type="button"
+              [class]="writeAll() ? 'rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500' : 'rounded-full border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-900 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500'"
+              [attr.aria-pressed]="writeAll()"
+              data-testid="write-to-pedal-write-all"
+              [disabled]="submitting()"
+              (click)="writeAll.set(!writeAll())"
+            >
+              @if (writeAll()) {
+                <span aria-hidden="true">+</span>
+              }
+              {{ t('writeToPedal.write_all') }}
+            </button>
+            <span class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('writeToPedal.write_all_help') }}
+            </span>
+          </div>
+
+          @if (writeAll() && plan(); as p) {
+            <p
+              class="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              data-testid="write-to-pedal-range"
+            >
+              {{ t('writeToSlot.summary_range', { from: p.fromSlot, to: p.toSlot, count: p.items.length }) }}
+            </p>
+          }
+
+          @if (connectionState() !== 'connected') {
+            <div class="rounded-md bg-slate-50 px-3 py-2 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
+              <p
+                class="text-sm text-slate-700 dark:text-slate-200"
+                data-testid="write-to-pedal-not-connected"
+                role="status"
+              >
+                {{ t('writeToPedal.not_connected') }}
+              </p>
+              <button
+                type="button"
+                class="mt-2 inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:w-auto"
+                [disabled]="connectionState() === 'connecting'"
+                data-testid="write-to-pedal-connect"
+                (click)="onConnect()"
+              >
+                {{ connectionState() === 'connecting'
+                    ? t('writeToPedal.connecting')
+                    : t('writeToPedal.connect') }}
+              </button>
+            </div>
+          }
+
+          @if (failure(); as f) {
+            <div
+              class="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              data-testid="write-to-pedal-failure"
+              role="alert"
+            >
+              @if (f === 'writeToPedal.errors.sessionExpired') {
+                {{ t(f) }}
+                <a routerLink="/login" class="ml-2 font-medium underline">{{ t('writeToPedal.login_link') }}</a>
+              } @else {
+                {{ t(f) }}
+              }
+              @if (partialProgress().length > 0) {
+                <p
+                  class="mt-1 text-xs text-red-700/80 dark:text-red-300/80"
+                  data-testid="write-to-pedal-partial"
+                >
+                  {{ t('writeToPedal.partialProgress', { slots: partialProgress().join(', ') }) }}
+                </p>
+              }
+            </div>
+          }
+        }
+      </div>
+
+      @if (!success()) {
+        <footer
+          class="flex flex-col-reverse gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row sm:justify-end sm:px-5"
+        >
+          <button
+            type="button"
+            class="w-full rounded-md px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 sm:w-auto"
+            [disabled]="submitting()"
+            data-testid="write-to-pedal-cancel"
+            (click)="onClose()"
+          >
+            {{ t('writeToPedal.cancel') }}
+          </button>
+          <button
+            type="button"
+            class="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:w-auto"
+            [disabled]="!canSend()"
+            data-testid="write-to-pedal-submit"
+            (click)="submit()"
+          >
+            @if (submitting()) {
+              <span data-testid="write-to-pedal-submitting">{{ t('writeToPedal.writing') }}</span>
+            } @else {
+              {{ t('writeToPedal.send') }}
+            }
+          </button>
+        </footer>
+      }
+    </div>
+  </div>
+</div>

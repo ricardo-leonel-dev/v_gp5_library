@@ -2,8 +2,7 @@
 //
 // Adapted from drewmerc302/valeton-gp50 (https://github.com/drewmerc302/valeton-gp50):
 // the request/reply framing (CRC-8/0x07, nibble encoding, request/reply shape),
-// the GP-50 device profile's write-packet stream (PATCH_WRITE_CMD 0x1D, 19-byte
-// chunking), and the GP-5 body record layout (REC_MODELS / REC_BYPASS / REC_ORDER
+// the GP-50 device profile's write-packet stream (header + 19-byte chunking), and the GP-5 body record layout (REC_MODELS / REC_BYPASS / REC_ORDER
 // / REC_PARAMS) are all ported from that project's patch/prst_format.py and
 // patch/device_write.py. Verbatim MIT license notice follows.
 //
@@ -64,7 +63,7 @@
 //     exactly 26 identical device ACK frames — matching the GP-5 payload's
 //     predicted block count (488 bytes / 19-byte blocks = 26 blocks) to the
 //     byte, and the pedal's sound/config audibly changed. That confirms the
-//     payload SHAPE (cmd 0x1D, header [0x11,0x4F,slot,0,0,0], 19-byte chunking,
+//     payload SHAPE (header [0x11,0x4F,slot,0,0,0], 19-byte chunking,
 //     CRC-8/0x07), but the per-module vocabulary and the exact body-record
 //     padding between magics are still inferred from the GP-50 reference
 //     implementation rather than measured. Round-tripping a real GP-5 preset
@@ -72,6 +71,12 @@
 //     guarantees today — it implements the best-effort GP-50 port for the
 //     payload shape and the protocol mechanics, not a verified bit-perfect
 //     GP-5 serializer.
+//
+//   * encodeWriteRequest framing + decodeWriteReply (feature 28) — byte-
+//     confirmed against Valeton Suite's own outgoing frames (spy-driver
+//     capture progress/gp5_suite_write_capture_2.txt): [crc, 26, idx, len,
+//     payload...], one chunk per pedal ACK (stop-and-wait); NAK observed when
+//     chunks were burst (progress/gp5_app_write_capture.txt).
 //
 //   * decodeBody REC_MODELS byte layout (feature 18, R37) — INDEPENDENTLY RE-
 //     VERIFIED against real GP-5 hardware on 2026-09-28 from a captured preset
@@ -127,7 +132,7 @@
 
 import { Injectable } from '@angular/core';
 import type { Preset, PresetSlot } from './preset';
-import type { SysexDecodeResult, SysexPresetCodec } from './sysex-preset-codec';
+import type { SysexDecodeResult, SysexPresetCodec, WriteReply } from './sysex-preset-codec';
 
 // CRC-8/SMBUS, poly 0x07, init 0. Used for every packet's CRC byte.
 export function crc8(bytes: Uint8Array): number {
@@ -189,10 +194,13 @@ const CATSEL = 0x12;
 const NAME_SEL = 0x40;
 const BODY_SEL = 0x41;
 const SLOT_COUNT = 100;
-const NAME_LEN = 16;
+// F5 R42/R44/R46: encodeWriteRequest branches on preset.raw.body /
+// preset.raw.nameField. Exported so the codec spec can build a Preset with
+// the right sizes and the write-to-pedal dialog can guard on them too.
+export const NAME_LEN = 16;
 const PRST_LEN = 507;
 const NAME_OFF = 0x19; // 25 bytes = header(21, including CRC at 0x14) + sentinel(4).
-const GP5_BODY_LEN = PRST_LEN - NAME_OFF - NAME_LEN; // 466.
+export const GP5_BODY_LEN = PRST_LEN - NAME_OFF - NAME_LEN; // 466.
 
 // Each reply frame begins with a 2-byte echo: [CATSEL, SELECTOR].
 const ECHO_LEN = 2;
@@ -209,12 +217,30 @@ const N_BLOCKS = 10;
 const N_PARAM_SLOTS = 80;
 const PARAMS_PER_BLOCK = N_PARAM_SLOTS / N_BLOCKS; // 8
 
-// Write protocol constants, from device_write.py.
-const PATCH_WRITE_CMD = 0x1d;
+// Write protocol constants, from device_write.py. Every write frame, like every
+// reply frame, decodes as [crc, total_chunks, chunk_index, chunk_len, payload...]:
+// byte 1 is the transfer's chunk count, not an opcode. (The GP-50 port put its
+// 0x1D (29) here, a GP-50 value; sending only 26 chunks under it, the GP-5
+// switched slot but never committed the write — presumably still waiting for
+// chunks 26..28.
+// Feature 28, evidence: progress/analysis_suite_write_capture.md.)
 const WRITE_HDR = [0x11, 0x4f, 0, 0, 0, 0];
 const WRITE_BLOCK_SIZE = 19;
 const WRITE_PAYLOAD_LEN = WRITE_HDR.length + (PRST_LEN - NAME_OFF); // 6 + 482 = 488.
 const WRITE_BLOCK_COUNT = Math.ceil(WRITE_PAYLOAD_LEN / WRITE_BLOCK_SIZE); // 26.
+
+// The GP-5's reply to one write chunk, decoded (CRC excluded):
+// [total_chunks=1, index=0, len=3, 0x14, 0x08, status]. status 0x00 = ACK
+// (chunk accepted), 0x01 = NAK (chunk rejected; the pedal drops the rest of
+// the transfer). The pedal answers every chunk, so the writer must wait for
+// chunk i's reply before sending chunk i+1 — as Valeton Suite does.
+// Captures (feature 28): ACK wire F0 0B 02 00 01 00 00 00 03 01 04 00 08 00 00 F7
+// (progress/gp5_suite_write_capture_2.txt); NAK wire
+// F0 0B 05 00 01 00 00 00 03 01 04 00 08 00 01 F7, sent after our burst
+// (progress/gp5_app_write_capture.txt).
+const WRITE_REPLY_PREFIX = [0x01, 0x00, 0x03, 0x14, 0x08];
+const WRITE_REPLY_ACK = 0x00;
+const WRITE_REPLY_NAK = 0x01;
 
 function findMagic(body: Uint8Array, magic: number[]): number {
   outer: for (let i = 0; i <= body.length - magic.length; i++) {
@@ -549,20 +575,40 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
     payload[4] = 0;
     payload[5] = 0;
 
-    const nameBytes = new TextEncoder().encode(preset.name);
-    for (let i = 0; i < NAME_LEN; i++) {
-      payload[WRITE_HDR.length + i] = i < nameBytes.length ? nameBytes[i] : 0;
+    const nameOff = WRITE_HDR.length;          // 6
+    const bodyOff = WRITE_HDR.length + NAME_LEN; // 22
+
+    // R44 — verbatim name field when raw is present, else today's NUL-pad
+    // from preset.name.
+    if (preset.raw && preset.raw.nameField.length === NAME_LEN) {
+      payload.set(preset.raw.nameField, nameOff);
+    } else {
+      const nameBytes = new TextEncoder().encode(preset.name);
+      for (let i = 0; i < NAME_LEN; i++) {
+        payload[nameOff + i] = i < nameBytes.length ? nameBytes[i] : 0;
+      }
     }
 
-    encodeBody(preset.chain, payload.subarray(WRITE_HDR.length + NAME_LEN));
+    // R42 — verbatim body when raw is present, throw on wrong length, else
+    // fall through to today's encodeBody (R43).
+    if (preset.raw && preset.raw.body.length === GP5_BODY_LEN) {
+      payload.set(preset.raw.body, bodyOff);
+    } else if (preset.raw) {
+      throw new Error('preset_bytes_unavailable');
+    } else {
+      encodeBody(preset.chain, payload.subarray(bodyOff));
+    }
 
+    // Header, chunking (WRITE_BLOCK_SIZE bytes), CRC and toWire are unchanged
+    // from F5 R45. Byte 1 is the total chunk count (feature 28) — F5 R45's
+    // "opcode 0x1D unchanged" is deliberately superseded here.
     const packets: Uint8Array[] = [];
     for (let i = 0; i < WRITE_BLOCK_COUNT; i++) {
       const start = i * WRITE_BLOCK_SIZE;
       const end = Math.min(start + WRITE_BLOCK_SIZE, WRITE_PAYLOAD_LEN);
       const chunkLen = end - start;
       const packetBody = new Uint8Array(4 + chunkLen);
-      packetBody[1] = PATCH_WRITE_CMD;
+      packetBody[1] = WRITE_BLOCK_COUNT;
       packetBody[2] = i;
       packetBody[3] = chunkLen;
       payload.subarray(start, end).forEach((b, j) => (packetBody[4 + j] = b));
@@ -570,5 +616,17 @@ export class Gp5SysexPresetCodec implements SysexPresetCodec {
       packets.push(toWire(packetBody));
     }
     return packets;
+  }
+
+  decodeWriteReply(message: Uint8Array): WriteReply | null {
+    if (message.length !== 2 + 2 * (1 + WRITE_REPLY_PREFIX.length + 1)) return null;
+    if (message[0] !== 0xf0 || message[message.length - 1] !== 0xf7) return null;
+    const decoded = nibDecode(message.slice(1, -1));
+    if (decoded[0] !== crc8(decoded.slice(1))) return null;
+    if (!WRITE_REPLY_PREFIX.every((b, i) => decoded[1 + i] === b)) return null;
+    const status = decoded[1 + WRITE_REPLY_PREFIX.length];
+    if (status === WRITE_REPLY_ACK) return 'ack';
+    if (status === WRITE_REPLY_NAK) return 'nak';
+    return null;
   }
 }
