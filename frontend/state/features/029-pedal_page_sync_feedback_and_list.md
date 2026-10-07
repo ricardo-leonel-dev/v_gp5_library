@@ -4,7 +4,7 @@ name: pedal_page_sync_feedback_and_list
 title: /pedal page: sync feedback, scrollable preset list, mock presets link
 status: pending
 created_at: 2026-10-07T06:15:17.000Z
-updated_at: 2026-10-07T06:15:20.000Z
+updated_at: 2026-10-07T06:30:06.000Z
 ---
 
 ## Description

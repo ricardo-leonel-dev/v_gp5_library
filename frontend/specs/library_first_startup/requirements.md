@@ -34,10 +34,28 @@ approach stays, with the list-DTO indicator as a non-blocking follow-up; the hea
 pedal read when connected, including on `/pedal/presets` (R63-R67); the detail page scope is unchanged. Requirement
 ids are stable; new ones are R63-R74.
 
+Revision 3 (2026-10-07, reconciliation with F5 `import_preset_to_pedal` and F28 now on `dev`; audit
+`progress/f26_spec_audit.md`; Ricardo's decisions of 2026-10-07): **(1) The song card is not a link.** F5 put a
+"Send to pedal" `<button>` inside each card (F5 R53), and a button inside an `<a>` is invalid interactive nesting. The
+card stays F5's `<li data-testid="song-card" data-song-id>`; only the song name is a link (`song-card-link`) and the
+send button sits beside it inside the card. R25 is reworded to activate `song-card-link` instead of the card; R75-R78
+are new (link, card element, no nesting, button placement). **(2) F5's inline connect button in the write-to-pedal
+dialog stays** (it connects without navigating or reading presets); this supersedes the 2026-10-07 follow-up note
+about removing it. Its reminder text no longer tells the user to connect "from the header" (R81, es/en copy), and
+R82-R84 pin the kept behavior. **(3) The library page is extended, not rewritten**: F5's states, card button, write
+dialog, focus return and tests are preserved; the error message moves into `songs-error-message` so the retry button
+can sit inside `songs-error` (R79; two F5 assertions retarget, named in T19); the write dialog gets presets in
+`sortOrder` order (R80, audit #15). **(4) Scope lines** added for F29 (`/pedal/presets` fixes) and the `/pedal`
+page's own connect button. No other requirement text changed; ids are stable and new ones are R75-R84.
+
 Glossary:
 - **Library page**: the `/songs` route component (`SongsPage`).
 - **Detail page**: the new `/songs/:id` route component (`SongDetailPage`).
 - **Connect button**: the new header control (`data-testid="pedal-connect"`).
+- **Song card**: the `<li data-testid="song-card" data-song-id="<id>">` the library page renders per song (F5 markup,
+  kept).
+- **Song link**: the `<a data-testid="song-card-link">` inside a song card that holds the song name (Revision 3).
+- **Write dialog**: F5's `app-write-to-pedal-dialog`, opened by a card's `song-card-send-to-pedal` button.
 - **Blank**: `null`, empty, or only whitespace.
 - **Network failure**: an `HttpErrorResponse` with `status === 0`.
 - **Read presets**: `PedalPresetsStore.presets()`, the presets returned by the last successful real `readPresets()`
@@ -46,7 +64,16 @@ Glossary:
 Out of scope: editing, deleting, reordering, duplicating, exporting or downloading songs or presets (feature 27
 and later); showing a saved preset's chain (would need the preset bytes); showing IR/NAM files or `extraConfig`
 on the detail page; pagination/search/sort; any comparison between saved songs and the pedal; changes to the
-existing `/pedal` page; writing presets to the pedal (F5).
+existing `/pedal` page; writing presets to the pedal (F5) — F26 changes F5's write dialog only through R80-R84
+(preset order, reminder copy, and tests pinning the kept inline connect button).
+
+Also out of scope (Revision 3):
+- The `/pedal` page keeps its own `connect-button` next to the header's connect button; the duplication is accepted.
+- `/pedal/presets` fixes belong to **feature 29 `pedal_page_sync_feedback_and_list`**: visible sync success/error
+  feedback, the scrollable preset list, and showing mock presets on `/pedal/presets` after a real read has loaded
+  (the page's mock `effect` ignores mocks while `loadState` is `loaded`). F26's R58 covers only the navigation from
+  other routes to `/pedal/presets`.
+- Surfacing `connect()` failures from the write dialog's inline connect button (F5 swallows them; unchanged).
 
 ## Startup and library list
 
@@ -124,6 +151,24 @@ failure.
 WHEN the library page or the detail page is destroyed, the system SHALL call `URL.revokeObjectURL` once for every
 object URL that page created.
 
+## Song card structure (Revision 3)
+
+## R75
+The library page SHALL render each song's `name` as the text of an `<a>` element (`data-testid="song-card-link"`)
+inside that song's card, whose `href` is `/songs/<id>`.
+
+## R76
+The library page SHALL render each song card (`data-testid="song-card"`) as an `<li>` element carrying a
+`data-song-id` attribute equal to the song's `id`.
+
+## R77
+The library page SHALL NOT render any `<a>` or `<button>` element inside another `<a>` or `<button>` element within
+`songs-grid`.
+
+## R78
+WHEN the library page renders a song card, it SHALL render that card's `song-card-send-to-pedal` button inside the
+`song-card` element and outside its `song-card-link` element.
+
 ## Library load errors and session
 
 ## R20
@@ -138,6 +183,10 @@ render the error state (`data-testid="songs-error"`) showing `songs.errors.load_
 WHILE the library page shows the `songs-error` state, it SHALL render a retry button
 (`data-testid="songs-retry"`).
 
+## R79
+WHILE the library page shows the `songs-error` state, it SHALL render the translated error message as the entire
+trimmed text content of an element `data-testid="songs-error-message"` inside `songs-error`.
+
 ## R23
 WHEN the user activates `songs-retry`, the system SHALL send a new `GET {apiBaseUrl}/songs` request.
 
@@ -149,7 +198,8 @@ session-expired state (`data-testid="songs-session-expired"`) showing `songs.err
 ## Song detail
 
 ## R25
-WHEN the user activates a song card, the system SHALL navigate to `/songs/<id>` for that song.
+WHEN the user activates a song card's song link (`data-testid="song-card-link"`), the system SHALL navigate to
+`/songs/<id>` for that song. *(Revision 3: was "activates a song card".)*
 
 ## R26
 IF an unauthenticated user navigates to `/songs/<id>` THEN the system SHALL redirect to `/login`.
@@ -301,6 +351,9 @@ regardless of the pedal `connectionState` and of the contents of `MockPresetsSto
 WHEN the "Cargar presets de prueba" header link (`data-testid="load-mock-presets"`) is activated while the current
 URL is not `/pedal/presets`, the system SHALL navigate to `/pedal/presets`.
 
+*Scope note (Revision 3):* R58 is the whole of F26's change to this link. What `/pedal/presets` shows after the
+navigation — including mocks after a real read has loaded — is feature 29's (see "Out of scope").
+
 ## New song from the library (with or without the pedal)
 
 The library reuses the F4 dialog unchanged. F4 already mixes sources in one song: pedal presets come from its
@@ -348,6 +401,29 @@ using the `connectionState` and the read presets at the moment of that activatio
 ## R61
 WHEN the dialog opened by R60 or R68 emits `closed`, the system SHALL remove the dialog and send a new
 `GET {apiBaseUrl}/songs` request.
+
+## Write to pedal from the library (F5 coexistence, Revision 3)
+
+F5 owns the write dialog. F26 keeps it, and its inline connect button, and changes only what follows.
+
+## R80
+WHEN the user activates a song card's `song-card-send-to-pedal` button, the system SHALL open the write dialog with
+that song's presets ordered by `sortOrder` ascending, with `position` values 1 to N in that order, regardless of the
+order of the `GET /songs` response array.
+
+## R81
+The system SHALL define `writeToPedal.not_connected` as `Conecta el GP-5 para poder escribir en el pedal.` in
+`public/i18n/es.json` and as `Connect your GP-5 to write to the pedal.` in `public/i18n/en.json`.
+
+## R82
+WHILE the write dialog shows its not-connected reminder (`write-to-pedal-not-connected`), it SHALL render the inline
+connect button (`data-testid="write-to-pedal-connect"`).
+
+## R83
+WHEN the user activates `write-to-pedal-connect`, the system SHALL NOT change the current router URL.
+
+## R84
+WHEN `connect()` resolves after a `write-to-pedal-connect` activation, the system SHALL NOT call `readPresets()`.
 
 ## Translations
 
