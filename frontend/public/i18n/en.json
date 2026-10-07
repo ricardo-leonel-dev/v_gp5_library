@@ -15,7 +15,64 @@
   },
   "songs": {
     "title": "My songs",
-    "placeholder": "Your saved preset library will live here."
+    "placeholder": "Your saved preset library will live here.",
+    "loading": "Loading your songs…",
+    "empty_title": "No songs yet",
+    "empty_body": "Connect your GP-5, pick the presets you use in a song and save them together. You can also create a song from .prst files.",
+    "retry": "Try again",
+    "login_again": "Log in",
+    "errors": {
+      "unreachable": "Couldn't reach the server. Check your connection and try again.",
+      "load_failed": "Your songs couldn't be loaded.",
+      "session_expired": "Your session has expired."
+    },
+    "card": {
+      "send_to_pedal": "Send to pedal",
+      "send_to_pedal_aria": "Send song “{{name}}” to the pedal"
+    }
+  },
+  "writeToPedal": {
+    "title": "Send to pedal",
+    "close": "Close",
+    "song_heading": "Song: “{{name}}”",
+    "presets_legend": "Presets in this song",
+    "preset_row_aria": "Position {{position}}: {{name}}",
+    "target_slot": "Target slot",
+    "write_all": "Write all in order",
+    "write_all_help": "Sends the song's presets to consecutive slots starting at the target slot.",
+    "not_connected": "Connect your GP-5 from the header to write to the pedal.",
+    "connect": "Connect GP-5",
+    "connecting": "Connecting…",
+    "cancel": "Cancel",
+    "send": "Send",
+    "writing": "Sending…",
+    "success_title": "Done",
+    "success_single": "“{{presetName}}” is now on slot {{toSlot}} of the pedal.",
+    "success_multi": "{{count}} presets of “{{songName}}” are now on slots {{from}}..{{to}}.",
+    "partialProgress": "Already wrote slots: {{slots}}.",
+    "done": "Close",
+    "login_link": "Log in",
+    "errors": {
+      "pedalDisconnected": "The pedal disconnected. Reconnect it and try again.",
+      "busy": "The pedal is busy. Wait a moment and try again.",
+      "timeout": "The pedal didn't respond in time. Try again.",
+      "writeNotConfirmed": "The pedal didn't confirm the write. Check the connection and try again.",
+      "writeRejected": "The pedal rejected the write. Please try again.",
+      "connectionLost": "The pedal disconnected mid-write. Some presets were already saved; check the pedal before retrying.",
+      "unexpected": "Couldn't write to the pedal. Try again.",
+      "songNotFound": "This song is no longer in your library.",
+      "sessionExpired": "Your session expired. Please log in again.",
+      "network": "Couldn't reach the server. Check your connection and try again.",
+      "corruptFile": "The server returned a damaged preset. Re-read it."
+    }
+  },
+  "writeToSlot": {
+    "help": "0..99 (integer between 0 and 99)",
+    "errors": {
+      "outOfRange": "The slot must be between 0 and 99.",
+      "notEnoughRoom": "{{N}} presets do not fit starting at slot {{M}} (only {{available}} slots left)."
+    },
+    "summary_range": "Slots {{from}}..{{to}} — {{count}} presets"
   },
   "saveSong": {
     "open": "Save as song",

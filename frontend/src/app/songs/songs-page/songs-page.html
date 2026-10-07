@@ -1,4 +1,74 @@
-<div *transloco="let t" class="mx-auto max-w-3xl px-4 py-10">
+<div *transloco="let t" class="mx-auto max-w-5xl px-4 py-10">
   <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ t('songs.title') }}</h1>
-  <p class="mt-2 text-slate-600 dark:text-slate-400">{{ t('songs.placeholder') }}</p>
+
+  @switch (state()) {
+    @case ('loading') {
+      <p
+        class="mt-4 text-slate-500 dark:text-slate-400"
+        data-testid="songs-loading"
+        aria-busy="true"
+      >{{ t('songs.loading') }}</p>
+    }
+    @case ('empty') {
+      <div class="mt-4" data-testid="songs-empty">
+        <p class="text-sm font-medium text-slate-900 dark:text-slate-100">{{ t('songs.empty_title') }}</p>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ t('songs.empty_body') }}</p>
+      </div>
+    }
+    @case ('error') {
+      <p
+        class="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+        data-testid="songs-error"
+        role="alert"
+      >{{ t(errorMessage() ?? 'songs.errors.load_failed') }}</p>
+    }
+    @case ('session_expired') {
+      <p
+        class="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+        data-testid="songs-session-expired"
+        role="status"
+      >
+        {{ t(errorMessage() ?? 'songs.errors.session_expired') }}
+        <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songs.login_again') }}</a>
+      </p>
+    }
+    @case ('loaded') {
+      <ul
+        class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+        data-testid="songs-grid"
+      >
+        @for (song of songs(); track song.id) {
+          <li
+            class="block rounded-lg p-1.5 -m-1.5"
+            data-testid="song-card"
+            [attr.data-song-id]="song.id"
+          >
+            <div class="flex flex-col gap-2 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+              <p class="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+                {{ song.name }}
+              </p>
+              <button
+                #sendButton
+                type="button"
+                class="inline-flex items-center gap-1.5 self-start rounded-md bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600 hover:bg-indigo-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 dark:bg-slate-900 dark:text-indigo-300 dark:ring-indigo-400 dark:hover:bg-slate-800"
+                [attr.aria-label]="t('songs.card.send_to_pedal_aria', { name: song.name })"
+                data-testid="song-card-send-to-pedal"
+                (click)="$event.stopPropagation(); openWriteDialog(song)"
+              >
+                {{ t('songs.card.send_to_pedal') }}
+              </button>
+            </div>
+          </li>
+        }
+      </ul>
+    }
+  }
+
+  @if (writeDialog(); as w) {
+    <app-write-to-pedal-dialog
+      [song]="w.song"
+      [presets]="w.presets"
+      (closed)="closeWriteDialog()"
+    />
+  }
 </div>

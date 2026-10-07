@@ -15,7 +15,64 @@
   },
   "songs": {
     "title": "Mis canciones",
-    "placeholder": "Aquí vivirá tu librería de presets guardados."
+    "placeholder": "Aquí vivirá tu librería de presets guardados.",
+    "loading": "Cargando tus canciones…",
+    "empty_title": "Aún no tienes canciones",
+    "empty_body": "Conecta tu GP-5, elige los presets que usas en una canción y guárdalos juntos. También puedes crear una canción desde archivos .prst.",
+    "retry": "Reintentar",
+    "login_again": "Iniciar sesión",
+    "errors": {
+      "unreachable": "No se pudo contactar con el servidor. Revisa tu conexión e inténtalo de nuevo.",
+      "load_failed": "No se pudieron cargar tus canciones.",
+      "session_expired": "Tu sesión ha caducado."
+    },
+    "card": {
+      "send_to_pedal": "Enviar al pedal",
+      "send_to_pedal_aria": "Enviar al pedal la canción «{{name}}»"
+    }
+  },
+  "writeToPedal": {
+    "title": "Enviar al pedal",
+    "close": "Cerrar",
+    "song_heading": "Canción: «{{name}}»",
+    "presets_legend": "Presets de la canción",
+    "preset_row_aria": "Posición {{position}}: {{name}}",
+    "target_slot": "Slot de destino",
+    "write_all": "Escribir todos en orden",
+    "write_all_help": "Envía los presets de la canción a slots consecutivos empezando por el de destino.",
+    "not_connected": "Conecta el GP-5 desde el encabezado para poder escribir.",
+    "connect": "Conectar GP-5",
+    "connecting": "Conectando…",
+    "cancel": "Cancelar",
+    "send": "Enviar",
+    "writing": "Enviando…",
+    "success_title": "Listo",
+    "success_single": "«{{presetName}}» ya está en el slot {{toSlot}} del pedal.",
+    "success_multi": "{{count}} presets de «{{songName}}» ya están en los slots {{from}}..{{to}}.",
+    "partialProgress": "Ya escribimos los slots: {{slots}}.",
+    "done": "Cerrar",
+    "login_link": "Iniciar sesión",
+    "errors": {
+      "pedalDisconnected": "El pedal se desconectó. Vuelve a conectarlo y reintenta.",
+      "busy": "El pedal está ocupado. Espera un momento y reintenta.",
+      "timeout": "El pedal no respondió a tiempo. Reintenta.",
+      "writeNotConfirmed": "El pedal no confirmó la escritura. Revisa la conexión e inténtalo de nuevo.",
+      "writeRejected": "El pedal rechazó la escritura. Inténtalo de nuevo.",
+      "connectionLost": "El pedal se desconectó mientras escribíamos. Ya guardamos algunos presets; revisa el pedal antes de reintentar.",
+      "unexpected": "No se pudo escribir en el pedal. Vuelve a intentarlo.",
+      "songNotFound": "Esta canción ya no está en tu biblioteca.",
+      "sessionExpired": "Tu sesión caducó. Inicia sesión de nuevo.",
+      "network": "No se pudo contactar con el servidor. Revisa tu conexión y vuelve a intentarlo.",
+      "corruptFile": "El servidor devolvió un preset dañado. Vuelve a leerlo."
+    }
+  },
+  "writeToSlot": {
+    "help": "0..99 (entero entre 0 y 99)",
+    "errors": {
+      "outOfRange": "El slot debe estar entre 0 y 99.",
+      "notEnoughRoom": "«{{N}}» presets no caben desde el slot {{M}} (quedan {{available}} slots)."
+    },
+    "summary_range": "Slots {{from}}..{{to}} — {{count}} presets"
   },
   "saveSong": {
     "open": "Guardar como canción",
