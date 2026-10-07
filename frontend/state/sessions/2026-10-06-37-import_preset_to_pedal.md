@@ -3,7 +3,7 @@ session_id: 37
 feature: import_preset_to_pedal
 agent: leader -> implementer (claude-fable-5-1)
 started_at: 2026-10-06T01:36:51.000Z
-closed_at:
+closed_at: 2026-10-07T06:19:49.000Z
 ---
 
 ## Plan
@@ -35,3 +35,9 @@ closed_at:
 
 ## Next Step
 - T23 manual check by Ricardo, then reviewer
+
+## Verification
+direnv exec . ./init.sh green: 1176 tests / 34 files (only WARN = best-effort mirror sync, HTTP 404 PGRST125). T4/R49 hardware round-trip PASSED 2026-10-07: captured, saved and read-back 466-byte bodies all SHA-256 c4a522ffd7f83754507548aea81f42ea825850521adf645e726d6505fddc8303. T23 manual check (375/1280, light/dark, numeric keyboard on phone) approved by Ricardo 2026-10-07. Reviewer approved after review fixes (progress/review_f5.md).
+
+## Closure
+F5 import_preset_to_pedal done: Send to pedal on /songs song cards opens a dialog that fetches the stored .prst (getSongPreset), decodes it, and writes raw.body/raw.nameField byte-identically via writePreset (encodeWriteRequest uses raw verbatim). Supports single-preset and write-all-in-order modes, sequential writes, partial progress, and mapped failures. Accepted deviations: R45 header byte 0x1D superseded by F28 (chunk count 0x1A, stop-and-wait); R49 read-back used progress/gp5_t4_roundtrip.html instead of gp5_webmidi_backup_all.html (Program Change ignored by GP-5, F24). Open non-blocking follow-ups: (1) the invalid-slot red border is probably overridden by border-slate-300 from the design class list; (2) entering -1 disables Send without showing the out-of-range message. Also not done: handlePortStateChange should restore only from not-connected (nit, skipped). Next: F26 removes the dialog's inline connect button.
