@@ -18,78 +18,72 @@ app.html header ── nav-songs link ─ … ─ language ─ dark mode ─ moc
         │                                              PedalPresetsStore (root) ── readPresets() (deduped)
         │                                                presets / loadState / error   ▲ mirrored by PresetBrowserPage
         ▼
-/songs        SongsPage        → SongsApi.listSongs()  → GET /songs
+/songs        SongsPage (F5 page, extended) → SongsApi.listSongs() → GET /songs
   └ New song  <app-save-song-dialog> (F4, unchanged) ← snapshot of PedalPresetsStore.savableSnapshot()
-  └ card ×N   <app-song-cover> → SongsApi.getCover(id) → GET /songs/:id/files/cover (blob)
+  └ card ×N   <li song-card> ─ <app-song-cover> → SongsApi.getCover(id) → GET /songs/:id/files/cover (blob)
+  │                         ─ <a song-card-link> name → /songs/:id
+  │                         ─ <button song-card-send-to-pedal> (F5) → <app-write-to-pedal-dialog> (F5, copy change only)
 /songs/:id    SongDetailPage   → SongsApi.getSong(id)  → GET /songs/:id
                                  <app-song-cover [hasCover]>
 /pedal/presets PresetBrowserPage (read moves into PedalPresetsStore; page mirrors it; F4 dialog unchanged)
 ```
 
-The library pages never inject `WebMidiPedalConnection` or `MockPresetsStore`, and the song list/cards never read any
-pedal state (R56, R57, R69). The only pedal-derived input on the library page is the "New song" snapshot, taken from
-`PedalPresetsStore` at the moment the button is activated (R60, R68). Pedal and backend meet only inside the F4
-dialog, exactly as `docs/architecture.md` "Data Flow" prescribes.
+The library pages themselves never inject `WebMidiPedalConnection` or `MockPresetsStore`, and the song list/cards
+never read any pedal state (R56, R57, R69). The F5 write dialog the library page hosts does inject
+`WebMidiPedalConnection` and reads `connectionState` — for writing only; it never feeds the card list (R57 holds).
+The only pedal-derived input on the library page is the "New song" snapshot, taken from `PedalPresetsStore` at the
+moment the button is activated (R60, R68). Pedal and backend meet only inside the F4 and F5 dialogs, exactly as
+`docs/architecture.md` "Data Flow" prescribes.
+
+**Revision 3 baseline (2026-10-07).** `dev` now contains F5 (`import_preset_to_pedal`) and F28 (write pacing fix).
+F5 already shipped a working `SongsPage`, `songs-page.spec.ts`, `Song`/`SongPreset`, `SongsApi.listSongs()`/
+`getSongPreset()`, `withFetch()` in `app.config.ts`, and eight `songs.*` keys. Every section below says *extend*
+where F5 code exists; F5's tests stay green except the assertions this design names as legitimately changing.
 
 ## 1. Models — `src/app/songs/song.ts`
 
-Keep `CreatedSong` (F4). Add, mirroring the backend DTOs field-for-field (contract §GET /songs, §GET /songs/:id):
+Keep `CreatedSong` (F4). **Keep F5's `SongPreset` and `Song` exactly as they are** (all fields `readonly`; `artist?`,
+`extraConfig?`, `createdAt?`, `updatedAt?` and the preset metadata fields optional; `presets: readonly SongPreset[]`).
+Do not re-declare them and do not make the optional fields required: F5's fixtures omit them, and F26 reads only
+`id`, `name`, `artist`, `presets[].sortOrder` and `presets[].name`, all of which tolerate the optionality
+(`isBlank(undefined)` is `true`). Add, mirroring the backend detail DTO (contract §GET /songs/:id) in F5's style:
 
 ```ts
-export interface SongPreset {
-  id: string;
-  sortOrder: number;
-  name: string;
-  originalFilename: string;
-  mimeType: string;
-  byteSize: number;
-  createdAt: string;
-}
-
-export interface Song {
-  id: string;
-  name: string;
-  artist: string | null;
-  extraConfig: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-  presets: SongPreset[];
-}
-
 export interface SongFile {
-  id: string;
-  kind: 'ir' | 'nam' | 'cover';
-  originalFilename: string;
-  mimeType: string;
-  byteSize: number;
-  sortOrder: number;
-  createdAt: string;
+  readonly id: string;
+  readonly kind: 'ir' | 'nam' | 'cover';
+  readonly originalFilename: string;
+  readonly mimeType: string;
+  readonly byteSize: number;
+  readonly sortOrder: number;
+  readonly createdAt: string;
 }
 
 export interface SongDetail extends Song {
-  files: SongFile[];
+  readonly files: readonly SongFile[];
 }
 ```
 
 Pure helpers in the same file (TestBed-free tests):
 
 ```ts
-export function orderedPresets(presets: readonly SongPreset[]): SongPreset[]; // copy sorted by sortOrder asc (R31)
+export function orderedPresets(presets: readonly SongPreset[]): SongPreset[]; // copy sorted by sortOrder asc (R31, R80)
 export function hasCoverFile(files: readonly SongFile[]): boolean;           // some kind === 'cover' (R35, R36)
 export function isBlank(value: string | null | undefined): boolean;          // R7, R8, R30
 ```
 
 ## 2. API — `src/app/songs/songs-api.service.ts`
 
-Extend the existing `SongsApi` (do not create a parallel service):
+Extend the existing `SongsApi` (do not create a parallel service). `listSongs()` already exists (F5) and is kept
+as-is; it only lacks a unit test, which F26 adds. New:
 
 ```ts
-listSongs(): Promise<Song[]>                 // GET  ${apiBaseUrl}/songs
 getSong(id: string): Promise<SongDetail>     // GET  ${apiBaseUrl}/songs/${encodeURIComponent(id)}
 getCover(id: string): Promise<Blob>          // GET  ${apiBaseUrl}/songs/${encodeURIComponent(id)}/files/cover, responseType 'blob'
 ```
 
-All via `firstValueFrom`. `authInterceptor` adds the Bearer token and clears `AuthStore` on 401 — unchanged. Covers
+`getCover` mirrors F5's `getSongPreset` (same `responseType: 'blob'` pattern). `withFetch()` is already in
+`app.config.ts` (F5) — no config change. All via `firstValueFrom`. `authInterceptor` adds the Bearer token and clears `AuthStore` on 401 — unchanged. Covers
 cannot be `<img src="…/files/cover">` because an `<img>` request carries no `Authorization` header (contract §Auth).
 
 ## 3. Error classification — `src/app/songs/library-load-error.ts` (pure)
@@ -149,30 +143,65 @@ optional field to `Song`, change this one function's body, update its unit test.
 No concurrency limiter: the browser already queues per-host connections, and plan limits keep `free`/`basic` lists at
 1-2 songs. See "Discarded alternatives".
 
-## 5. Library page — `src/app/songs/songs-page/songs-page.{ts,html}` (rewrite of the placeholder)
+## 5. Library page — `src/app/songs/songs-page/songs-page.{ts,html}` (extend F5's page)
+
+The page is F5 code, not a placeholder. **Preserve verbatim:** the `'empty'` member of `LibraryState` (F26 uses it
+for R11/R12 instead of `loaded` + empty array), the load in the constructor (R2 holds; no move to `ngOnInit`),
+`writeDialog` + `openWriteDialog()` + `closeWriteDialog()`, the `#sendButton` template ref read by
+`viewChildren('sendButton')`, the `data-song-id` attribute on the `<li>` and the `closest('[data-testid="song-card"]')`
+lookup that returns focus to the opening card's button (F5 R32), the `<app-write-to-pedal-dialog>` host block, and
+F5's `songs-loading` / `songs-session-expired` testids and translated text. Update the file's header comment so it no
+longer describes itself as an F5 stub. **Add** next to them:
 
 ```ts
-type LibraryState = 'loading' | 'loaded' | 'error' | 'session_expired';
-readonly state = signal<LibraryState>('loading');
-readonly songs = signal<Song[]>([]);
-readonly errorKey = signal<string | null>(null);
-// Snapshot taken once per open; null while closed (R60, R68, R71, R74).
+type LibraryState = 'loading' | 'loaded' | 'empty' | 'error' | 'session_expired';   // F5's union, unchanged
+readonly errorMessage = signal<string | null>(null);   // F5's name kept (holds a full translation key)
+// Snapshot taken once per open; null while closed (R60, R68, R71, R74). Sits next to F5's `writeDialog`.
 readonly newSong = signal<{ initial: readonly Preset[]; available: readonly Preset[] } | null>(null);
-private readonly api = inject(SongsApi);
 private readonly pedalPresets = inject(PedalPresetsStore);
 readonly connectFlow = inject(PedalConnectFlow);   // only for the empty-state CTA (R12)
 
-ngOnInit(): void { void this.load(); }             // R2
-async load(): Promise<void>;                        // R2, R23, R61 — sets 'loading' then result
-retry(): void;                                      // R23
+retry(): void;          // void this.load()   (R23)
 openNewSong(): void;    // newSong.set({ initial: [], available: this.pedalPresets.savableSnapshot() })
 closeNewSong(): void;   // newSong.set(null); void load()   (R61)
+readonly coverHint = coverHintForListSong;          // template access (§4)
+readonly isBlank = isBlank;                          // template access (R7, R8)
 ```
 
-- `loaded` + empty array → empty state (R11, R12); `loaded` + items → grid (R5, R10). `songs-new` renders in both
-  (R59).
-- Each card is an `<a [routerLink]="['/songs', song.id]">` (R25) — native link semantics, keyboard-reachable.
+- `load()`'s inline `HttpErrorResponse` branching is replaced by `classifyLoadError(err)` (§3), mapping
+  `unreachable` → `songs.errors.unreachable` / `'error'`, `session_expired` → `songs.errors.session_expired` /
+  `'session_expired'`, anything else (incl. `not_found`) → `songs.errors.load_failed` / `'error'`. Same observable
+  behavior as F5's code.
+- `'empty'` → empty state (R11, R12; F5's `songs-empty` markup is extended with the CTA, not replaced);
+  `'loaded'` → grid (R5, R10). `songs-new` renders in the title row in both `'empty'` and `'loaded'` (R59), never
+  inside `songs-empty` (F5's empty-state test asserts that element's text does not contain "Send to pedal").
+- **Card structure (Revision 3, R25, R75-R78).** The card is not a link (Ricardo, 2026-10-07):
+
+  ```html
+  <li data-testid="song-card" [attr.data-song-id]="song.id" class="…">
+    <app-song-cover [songId]="song.id" [songName]="song.name" [hasCover]="coverHint(song)" />
+    <a data-testid="song-card-link" [routerLink]="['/songs', song.id]" class="…">{{ song.name }}</a>
+    @if (!isBlank(song.artist)) { <p data-testid="song-card-artist">…</p> }
+    <p data-testid="song-card-count">…</p>
+    <button #sendButton type="button" data-testid="song-card-send-to-pedal" …>  <!-- F5, unchanged -->
+  </li>
+  ```
+
+  The cover, artist and count are not interactive. F5's inner bordered `<div>` wrapper is dropped (it was F5's
+  minimum stand-in; no F5 test reads it). The send button keeps F5's class string, `aria-label`, testid and
+  `(click)="$event.stopPropagation(); openWriteDialog(song)"`; `stopPropagation` is now harmless rather than
+  necessary (F5 R53 assumed the card navigated), and is kept so F5's code and tests stay untouched.
+- **Write dialog order (R80).** `openWriteDialog(song)` maps `orderedPresets(song.presets)` instead of `song.presets`
+  (one-line change) so positions 1..N follow `sortOrder` even if the backend order changes (audit #15).
+- **Error state (R20-R22, R79).** `songs-error` (`role="alert"`) becomes a container holding
+  `<p data-testid="songs-error-message">{{ t(errorMessage() ?? 'songs.errors.load_failed') }}</p>` and the
+  `songs-retry` button. The message element's trimmed text equals the translation, which is what F5's two exact-text
+  tests now target (T19).
+- **Loading state (R4).** `songs-loading` becomes the skeleton grid (Visual direction) whose **only** text node is the
+  `sr-only` `songs.loading` label, so F5's test `textContent.trim() === 'Loading your songs…'` stays green.
 - Renders songs in response order (backend: newest first). No client re-sort (R5).
+- The write dialog's `closed` does not reload the list (F5 behavior kept: writing to the pedal never changes saved
+  songs, R56's spirit). Only the F4 dialog's `closed` reloads (R61).
 - The F4 dialog is reused as-is, bound to the snapshot: `@if (newSong(); as n) { <app-save-song-dialog
   [initialPresets]="n.initial" [availablePresets]="n.available" [testMode]="false" (closed)="closeNewSong()"> }`.
 - **Mixing sources is already F4 behavior, not new code.** Checked in `src/app/songs/save-song-dialog/save-song-dialog.ts`:
@@ -194,6 +223,24 @@ closeNewSong(): void;   // newSong.set(null); void load()   (R61)
   on `raw` (mocks have none) (R69).
 - Reloading on every `closed` (cancel included) is deliberate: the dialog exposes no "saved" output, and one extra
   GET is cheaper than changing the F4 component's API.
+
+## 5b. Write dialog (F5) — copy change only (R81-R84)
+
+Ricardo, 2026-10-07: **keep** F5's inline `write-to-pedal-connect` button. It is the only connect path reachable
+while the modal dialog is open (its `fixed inset-0 z-50` backdrop covers the header), and it connects without
+navigating or reading presets — unlike the header button, which navigates to `/pedal/presets` and reads (R51, R65).
+This supersedes the 2026-10-07 follow-up note asking to remove it.
+
+- **No source change** to `write-to-pedal-dialog.{ts,html}`. `onConnect()` keeps calling `pedal.connect()` directly
+  (not `PedalConnectFlow.start()`, which would navigate and read) and keeps swallowing rejections.
+- **Copy change** (R81): `writeToPedal.not_connected` no longer says "from the header" / "desde el encabezado", since
+  the button that connects sits right below it. `writeToPedal.connect` / `writeToPedal.connecting` are kept.
+- **Tests only** (R82-R84): F5 already tests that the button renders and calls `connect()` once
+  (`write-to-pedal-dialog.spec.ts`, "renders the "Connect GP-5" button inside the not-connected reminder…"); F26 adds
+  two assertions with a `Router` spy: URL unchanged after the click, and `readPresets` not called after `connect()`
+  resolves. F5's `i18n-parity.spec.ts` test for `writeToPedal.connect`/`connecting` stays.
+- Doc sync: the F5 spec's copy table row (`specs/import_preset_to_pedal/design.md`, `writeToPedal.not_connected`) and
+  its "user does that from the header" sentences are updated to the new copy / to mention the inline button.
 
 ## 6. Detail page — `src/app/songs/song-detail-page/song-detail-page.{ts,html}` (new)
 
@@ -276,6 +323,17 @@ export class PedalPresetsStore {
 - `read()` moves the body of `PresetBrowserPage.loadPresets()` here (same error mapping: `not_connected` →
   `not_connected_error`). It never sets presets from mocks and never touches HTTP (R56).
 - `savableSnapshot()` returns a **new** array each call (R68 "new array"; R71 relies on the page storing it).
+- **Shared MIDI channel (F28, Revision 3).** Reads and F5 writes share one `pendingOperation` in
+  `WebMidiPedalConnection`; a read started while a write runs rejects with `request_in_progress`. The store keeps the
+  page's raw-message mapping, so this surfaces as the existing `presetBrowser.request_in_progress` key on
+  `/pedal/presets` (reachable only via browser Back during a write — the modal dialog blocks everything else). No new
+  key. F26 never calls `writePreset`, so F28's `write_timeout` / `write_rejected` / `decodeWriteReply` don't affect it.
+- **Silent reconnect (F28).** `handlePortStateChange` restores `connected` when the ports come back, without a new
+  read. The store deliberately keeps the last read in that case: same pedal, and the `raw` bytes are exactly what was
+  read, so a later "New song" snapshot (R68) still offers them. R72/R73 are unaffected (they use the snapshot).
+- **Public surface for feature 29.** `loadState()` / `presets()` / `error()` are what F29's sync feedback on
+  `/pedal/presets` should consume. `loadState` reaches `'loaded'` only from a real read — mock loads never touch the
+  store — so F29 can tell the two apart.
 
 **`PresetBrowserPage` change (source edit, behavior-preserving):** `loadPresets()` becomes `void this.store.read()`;
 an `effect` mirrors `store.loadState()` / `store.presets()` / `store.error()` into the page's existing `loadState`,
@@ -302,25 +360,40 @@ Selector `app-pedal-connect-button`. Injects `PedalConnectFlow`. Label key compu
   button (R44, R45). The mock link stays visible as today.
 - Below the header, `@if (flow.error(); as e)` renders the connect error strip (R53) with a dismiss button (R54).
 - `loadMockPresets()`: `mockPresetsStore.load()` then, if `router.url` is not `/pedal/presets`,
-  `router.navigateByUrl('/pedal/presets')` (R58). Without this, clicking it on `/songs` did nothing visible.
+  `router.navigateByUrl('/pedal/presets')` (R58). Without this, clicking it on `/songs` did nothing visible. That is
+  the whole F26 change to the link: on `/pedal/presets` after a real read, the page's mock `effect` still ignores
+  mocks (`loadState === 'loaded'`) — fixing that is feature 29's acceptance item #3, not F26's. Recommended to the
+  leader: `set-depends-on pedal_page_sync_feedback_and_list library_first_startup`.
 
 ## 11. i18n — `public/i18n/{es,en}.json`
 
-Replace `songs.placeholder` (removed) with the keys in "UI copy" below; add namespaces `songDetail` and
-`pedalButton`. The existing `src/app/songs/i18n-parity.spec.ts` pattern is extended to cover `songs`, `songDetail`,
-`pedalButton` (R62). Reused existing keys: `pedal.midi_access_denied`, `pedal.gp5_not_found`, `pedal.unsupported`,
-`pedal.unknown`, `presetBrowser.load_test_presets`.
+F5 already added, with the same copy as "UI copy" below: `songs.loading`, `songs.empty_title`, `songs.empty_body`,
+`songs.retry`, `songs.login_again`, `songs.errors.{unreachable,load_failed,session_expired}`, plus F5's own
+`songs.card.{send_to_pedal,send_to_pedal_aria}` (kept). `songs.title` predates both. **Add only the missing keys:**
+`songs.new`, `songs.preset_count_one`, `songs.preset_count_other`, `songs.cover_alt`, `songs.empty_connect`, every
+`songDetail.*` and every `pedalButton.*`. **Change** `writeToPedal.not_connected` (R81). **Remove**
+`songs.placeholder` (unused since F5). Do not add a duplicate for any key whose meaning already exists (e.g. no
+`songDetail.retry` — the detail page uses `songs.retry`; no new busy key — `presetBrowser.request_in_progress`).
+
+Parity (R62): extend F5's `src/app/songs/i18n-parity.spec.ts` rather than adding a new file — (a) add the namespaces
+`songDetail` and `pedalButton` to its es/en key-set parity check, and (b) add `song-detail-page.html`,
+`song-cover.html`, `pedal-connect-button.html` and `src/app/app.html` to the existing source scanner's file list and
+`songDetail|pedalButton` to its key regex, so any key used but undefined fails. F5's scanner already covers
+`songs-page.{html,ts}`. Reused existing keys: `pedal.midi_access_denied`, `pedal.gp5_not_found`, `pedal.unsupported`,
+`pedal.unknown`, `presetBrowser.load_test_presets`, `presetBrowser.request_in_progress`.
 
 ## 12. Files touched
 
 | File | Change |
 |---|---|
-| `src/app/songs/song.ts` | + `SongPreset`, `Song`, `SongFile`, `SongDetail`, `orderedPresets`, `hasCoverFile`, `isBlank`, `coverHintForListSong` |
+| `src/app/songs/song.ts` | keep F5's `SongPreset`, `Song`; + `SongFile`, `SongDetail`, `orderedPresets`, `hasCoverFile`, `isBlank`, `coverHintForListSong` |
 | `src/app/songs/song.spec.ts` | new — pure helper tests |
-| `src/app/songs/songs-api.service.ts` / `.spec.ts` | + `listSongs`, `getSong`, `getCover` |
+| `src/app/songs/songs-api.service.ts` / `.spec.ts` | + `getSong`, `getCover`; + missing `listSongs` test (method exists, F5) |
 | `src/app/songs/library-load-error.ts` / `.spec.ts` | new |
 | `src/app/songs/song-cover/song-cover.{ts,html,spec.ts}` | new |
-| `src/app/songs/songs-page/songs-page.{ts,html}` + new `songs-page.spec.ts` | rewrite |
+| `src/app/songs/songs-page/songs-page.{ts,html}` | extend F5's page (§5): card link, cover, artist, count, empty CTA, `songs-new`, retry, `songs-error-message`, `orderedPresets` in `openWriteDialog`, `classifyLoadError` |
+| `src/app/songs/songs-page/songs-page.spec.ts` | extend F5's spec: add F26 tests; add new keys to its in-memory translations; retarget the two exact-text error assertions to `songs-error-message` (T19). All other F5 tests unchanged |
+| `src/app/songs/write-to-pedal-dialog/write-to-pedal-dialog.spec.ts` | + R83/R84 tests; no change to existing tests. Component files not modified |
 | `src/app/songs/song-detail-page/song-detail-page.{ts,html,spec.ts}` | new |
 | `src/app/pedals/pedal-connect-flow.service.ts` / `.spec.ts` | new |
 | `src/app/pedals/pedal-connect-button/pedal-connect-button.{ts,html,spec.ts}` | new |
@@ -329,10 +402,12 @@ Replace `songs.placeholder` (removed) with the keys in "UI copy" below; add name
 | `src/app/pedals/pedal-presets.store.ts` / `.spec.ts` | new — deduped read, snapshot (§8b) |
 | `src/app/pedals/preset-browser-page/preset-browser-page.ts` | `loadPresets()` delegates to the store + mirroring `effect` (§8b); template unchanged |
 | `src/app/pedals/preset-browser-page/preset-browser-page.spec.ts` | + R55/R56/R64/R66 tests; existing tests stay green |
-| `src/app/songs/i18n-parity.spec.ts` | extend namespaces |
-| `public/i18n/es.json`, `public/i18n/en.json` | keys |
+| `src/app/songs/i18n-parity.spec.ts` | extend F5's file: namespaces + scanner sources (§11); + R81 exact-copy test |
+| `public/i18n/es.json`, `public/i18n/en.json` | missing keys only; `writeToPedal.not_connected` changed; `songs.placeholder` removed |
+| `specs/import_preset_to_pedal/design.md` | doc sync of the `writeToPedal.not_connected` copy row and "from the header" wording (§5b) |
 
-`preset-browser-page.html`, `src/app/songs/save-song-dialog/*` and the `/pedal` page are not modified.
+`preset-browser-page.html`, `src/app/songs/save-song-dialog/*`, `write-to-pedal-dialog.{ts,html}`,
+`app.config.ts` and the `/pedal` page are not modified.
 
 ## 13. Error paths
 
@@ -349,6 +424,9 @@ Replace `songs.placeholder` (removed) with the keys in "UI copy" below; add name
 | `connect()` rejects | header error strip, dismissible (R53, R54); no navigation |
 | Header-triggered fresh read fails | store `error`; `/pedal/presets` shows its existing `preset-error` message via the mirror (R66) |
 | Pedal unplugged while the library "New song" dialog is open | dialog stays open with its rows; save uploads the in-memory bytes (R72, R73) |
+| Read requested while an F5 write holds the MIDI channel | `readPresets()` rejects `request_in_progress`; store `error` → `presetBrowser.request_in_progress` on `/pedal/presets` (§8b) |
+| Ports come back after an unplug (F28 silent reconnect) | `connected` again, no new read; store keeps the last read (§8b) |
+| Not connected inside the write dialog | F5 reminder (new copy, R81) + inline connect button; connects in place, no navigation, no read (R82-R84) |
 
 ## Discarded alternatives
 
@@ -374,12 +452,26 @@ Replace `songs.placeholder` (removed) with the keys in "UI copy" below; add name
 9. **Bind the library dialog to `PedalPresetsStore.presets()` live** (so a reconnect during the dialog adds presets).
    Rejected: the F4 dialog re-seeds its rows whenever its inputs change (constructor `effect`), which would wipe the
    user's work; F4 R26 already chose the snapshot model.
+10. **Whole card as an `<a>` (Revision 2's design).** Rejected in Revision 3: F5's "Send to pedal" `<button>` lives
+    inside the card (F5 R53), and a button inside a link is invalid interactive nesting (unpredictable activation,
+    screen readers announce a link containing a button). Ricardo chose the name as the only link (2026-10-07).
+11. **"Stretched link"** (name link with an `after:absolute after:inset-0` overlay so the whole card is clickable,
+    send button raised with `relative z-10`). Rejected: it makes the card behave as a link again, against Ricardo's
+    decision, and puts a navigation target millimetres from the write action on a 375px screen.
+12. **Remove F5's inline connect button and point users to the header** (the 2026-10-07 follow-up). Rejected by
+    Ricardo the same day: the modal backdrop covers the header, and the header button navigates to `/pedal/presets`
+    and reads 100 presets, so the user would lose the dialog to connect. The button stays; only its reminder copy
+    changes (R81).
+13. **Make F5's optional `Song` fields required.** Rejected: every F5 fixture omits them and F26 reads none of them
+    besides `artist`, which `isBlank` already treats as blank when `undefined`.
 
 ## Visual direction
 
 Written by the spec author with the `frontend-design:frontend-design` skill loaded. Constraint: the app has a settled
 language (slate neutrals, indigo action color, `rounded-md`/`rounded-lg`, dashed borders for "add", F4's dialog);
-this screen must belong to it, not introduce a new look.
+this screen must belong to it, not introduce a new look. Revision 3's card changes were also written with the skill
+loaded: the card stops being one big hover target and becomes a quiet stack (cover, name link, artist, count, F5's
+send button), so the covers stay the memorable element.
 
 **The one memorable element: covers.** The library reads like a crate of records — square cover art first, name and
 artist under it, nothing else competing. Songs without a cover get a quiet in-house guitar-pick mark, so the grid
@@ -400,18 +492,19 @@ disciplined. The detail page's numbered rows are justified: a song's presets *ar
 | Library title row | `flex flex-wrap items-center justify-between gap-3`; `<h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">` (`songs.title`) |
 | "New song" (`songs-new`) | same as F4 page entry button: `inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600 hover:bg-indigo-50 dark:bg-slate-900 dark:text-indigo-300 dark:ring-indigo-400 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600` with `<span aria-hidden="true">+</span>` |
 | Grid (`songs-grid`) | `mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4` (R10) |
-| Card (`song-card`, `<a>`) | `group block rounded-lg p-1.5 -m-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500` |
+| Card (`song-card`, `<li>`, not interactive — Revision 3) | `flex min-w-0 flex-col` (no hover background, no focus ring: the card itself is not a control) |
 | Cover tile (`song-cover`, size `tile`) | `relative aspect-square w-full overflow-hidden rounded-md bg-slate-200 ring-1 ring-inset ring-slate-900/5 dark:bg-slate-800 dark:ring-white/10` |
 | Cover hero (size `hero`) | `relative aspect-square w-32 shrink-0 overflow-hidden rounded-lg bg-slate-200 ring-1 ring-inset ring-slate-900/5 sm:w-40 dark:bg-slate-800 dark:ring-white/10` |
 | Cover image | `absolute inset-0 size-full object-cover` |
 | Cover loading (append to tile/hero) | `animate-pulse motion-reduce:animate-none` |
 | Cover placeholder mark (`none` and `error`, `aria-hidden="true"`) | centered SVG `absolute inset-0 m-auto size-1/3 text-slate-400 dark:text-slate-500` — a guitar-pick outline drawn in-house: `viewBox="0 0 24 24"`, path `M12 21c-1.6 0-7-6.8-7-11.6C5 5.6 8.1 3 12 3s7 2.6 7 6.4C19 14.2 13.6 21 12 21z`, `fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"` |
-| Card name | `mt-2 truncate text-sm font-medium text-slate-900 group-hover:text-indigo-700 dark:text-slate-100 dark:group-hover:text-indigo-300` |
+| Card name link (`song-card-link`, `<a>`) | `mt-2 block truncate rounded-sm text-sm font-medium text-slate-900 underline-offset-2 hover:text-indigo-700 hover:underline dark:text-slate-100 dark:hover:text-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500` |
 | Card artist (`song-card-artist`) | `truncate text-xs text-slate-600 dark:text-slate-400` |
-| Card preset count | `mt-0.5 text-xs tabular-nums text-slate-500 dark:text-slate-500` |
-| Loading (`songs-loading`) | the grid with 4 skeleton cards: each a cover tile + `animate-pulse motion-reduce:animate-none` + two bars `mt-2 h-3 w-3/4 rounded bg-slate-200 dark:bg-slate-800` and `mt-1 h-3 w-1/2 rounded bg-slate-200 dark:bg-slate-800`; container gets `aria-busy="true"` and an `sr-only` `songs.loading` |
+| Card preset count (`song-card-count`) | `mt-0.5 text-xs tabular-nums text-slate-500 dark:text-slate-500` |
+| Card "Send to pedal" (`song-card-send-to-pedal`, F5) | F5's class string unchanged, plus `mt-2` (it already has `self-start`); last element of the card, below the count |
+| Loading (`songs-loading`) | the grid with 4 skeleton cards: each a cover tile + `animate-pulse motion-reduce:animate-none` + two bars `mt-2 h-3 w-3/4 rounded bg-slate-200 dark:bg-slate-800` and `mt-1 h-3 w-1/2 rounded bg-slate-200 dark:bg-slate-800`; container gets `aria-busy="true"` and an `sr-only` `songs.loading`. The skeleton elements carry no text, so the `sr-only` label is the container's only text (F5's loading test compares the trimmed `textContent` to the copy) |
 | Empty state (`songs-empty`) | `mt-6 rounded-lg border border-dashed border-slate-300 px-6 py-12 text-center dark:border-slate-600`; pick mark `mx-auto size-10 text-slate-400 dark:text-slate-500`; title `mt-3 text-base font-semibold text-slate-900 dark:text-slate-100`; body `mx-auto mt-1 max-w-sm text-sm text-slate-600 dark:text-slate-400`; CTA `songs-empty-connect` = connect-button classes + `mt-5` |
-| Error state (`songs-error`, `song-detail-error`, `role="alert"`) | `mt-6 flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900` |
+| Error state (`songs-error`, `song-detail-error`, `role="alert"`) | `mt-6 flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900`; the message is a `<p>` (`songs-error-message` on the library page, R79) with no extra classes, followed by the retry button |
 | Retry (`songs-retry`, `song-detail-retry`) | `rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600` |
 | Session expired (`songs-session-expired`, `song-detail-session-expired`, `role="status"`) | `mt-6 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900`; link `ml-1 font-medium underline` → `/login`, text `songs.login_again` |
 | Back link (`song-detail-back`) | `inline-flex items-center gap-1 rounded-md text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500`; leading chevron SVG `size-4` path `M10 4 6 8l4 4`, `aria-hidden="true"` |
@@ -449,12 +542,16 @@ Detail < 640: back link, hero cover (w-32) stacked above title/artist, then the 
 Detail ≥ 640: hero cover (w-40) left, title/artist bottom-aligned to its right; list below, full container width.
 ```
 
+Each library card ends with F5's "Send to pedal" button below the preset count (not drawn above); at 375px it fits
+the two-column tile width (`text-xs`, `px-3`).
+
 No horizontal scroll at 375px: header wraps (`flex-wrap`), names `truncate`, detail title `break-words`.
 
 ### Interaction states
 
-- Card: hover `bg-slate-100`/`dark:bg-slate-800` behind the whole card and the name turns indigo; focus-visible
-  indigo outline on the `<a>`. No selected state (navigation, not selection).
+- Card (Revision 3): the card has no hover or focus state of its own. The name link turns indigo and underlines on
+  hover and gets the indigo focus-visible outline; the "Send to pedal" button keeps F5's hover/focus. Tab order per
+  card: name link, then "Send to pedal". No selected state (navigation, not selection). The cover is not clickable.
 - Connect button: hover `bg-indigo-500`; disabled (`connecting`, unsupported) `opacity-50 cursor-not-allowed`;
   connected shows the emerald dot before the label.
 - Retry/dismiss/back/new: hover per palette; focus-visible outlines on every control.
@@ -466,32 +563,37 @@ entrance animations, no hover transitions beyond color.
 
 ### UI copy
 
-| Key | es | en |
-|---|---|---|
-| `songs.title` | Mis canciones | My songs |
-| `songs.new` | Nueva canción | New song |
-| `songs.loading` | Cargando tus canciones… | Loading your songs… |
-| `songs.preset_count_one` | 1 preset | 1 preset |
-| `songs.preset_count_other` | {{count}} presets | {{count}} presets |
-| `songs.cover_alt` | Portada de {{name}} | Cover of {{name}} |
-| `songs.empty_title` | Aún no tienes canciones | No songs yet |
-| `songs.empty_body` | Conecta tu GP-5, elige los presets que usas en una canción y guárdalos juntos. También puedes crear una canción desde archivos .prst. | Connect your GP-5, pick the presets you use in a song and save them together. You can also create a song from .prst files. |
-| `songs.empty_connect` | Conectar al GP-5 | Connect to GP-5 |
-| `songs.retry` | Reintentar | Try again |
-| `songs.login_again` | Iniciar sesión | Log in |
-| `songs.errors.unreachable` | No se pudo contactar con el servidor. Revisa tu conexión e inténtalo de nuevo. | Couldn't reach the server. Check your connection and try again. |
-| `songs.errors.load_failed` | No se pudieron cargar tus canciones. | Your songs couldn't be loaded. |
-| `songs.errors.session_expired` | Tu sesión ha caducado. | Your session has expired. |
-| `songDetail.presets_heading` | Presets, en orden de uso | Presets, in running order |
-| `songDetail.reference_note` | Cada nombre viene del propio archivo de preset y es solo una referencia: no se compara con lo que tenga ahora tu pedal. | Each name comes from the preset file itself and is for reference only: it is never compared with what your pedal holds now. |
-| `songDetail.not_found` | Esta canción no existe o ya no está en tu librería. | This song doesn't exist or is no longer in your library. |
-| `pedalButton.connect` | Conectar al GP-5 | Connect to GP-5 |
-| `pedalButton.connecting` | Conectando… | Connecting… |
-| `pedalButton.reading` | Leyendo presets… | Reading presets… |
-| `pedalButton.read` | Leer presets del GP-5 | Read GP-5 presets |
-| `pedalButton.unsupported_hint` | Tu navegador no soporta Web MIDI | Your browser doesn't support Web MIDI |
-| `pedalButton.dismiss_error` | Cerrar aviso | Dismiss |
+"Status" column (Revision 3): **exists** = already in `es.json`/`en.json` with this copy (F5 or earlier), do not
+re-add; **new** = add; **changed** = replace the current value.
+
+| Key | es | en | Status |
+|---|---|---|---|
+| `songs.title` | Mis canciones | My songs | exists |
+| `songs.new` | Nueva canción | New song | new |
+| `songs.loading` | Cargando tus canciones… | Loading your songs… | exists |
+| `songs.preset_count_one` | 1 preset | 1 preset | new |
+| `songs.preset_count_other` | {{count}} presets | {{count}} presets | new |
+| `songs.cover_alt` | Portada de {{name}} | Cover of {{name}} | new |
+| `songs.empty_title` | Aún no tienes canciones | No songs yet | exists |
+| `songs.empty_body` | Conecta tu GP-5, elige los presets que usas en una canción y guárdalos juntos. También puedes crear una canción desde archivos .prst. | Connect your GP-5, pick the presets you use in a song and save them together. You can also create a song from .prst files. | exists |
+| `songs.empty_connect` | Conectar al GP-5 | Connect to GP-5 | new |
+| `songs.retry` | Reintentar | Try again | exists |
+| `songs.login_again` | Iniciar sesión | Log in | exists |
+| `songs.errors.unreachable` | No se pudo contactar con el servidor. Revisa tu conexión e inténtalo de nuevo. | Couldn't reach the server. Check your connection and try again. | exists |
+| `songs.errors.load_failed` | No se pudieron cargar tus canciones. | Your songs couldn't be loaded. | exists |
+| `songs.errors.session_expired` | Tu sesión ha caducado. | Your session has expired. | exists |
+| `songDetail.presets_heading` | Presets, en orden de uso | Presets, in running order | new |
+| `songDetail.reference_note` | Cada nombre viene del propio archivo de preset y es solo una referencia: no se compara con lo que tenga ahora tu pedal. | Each name comes from the preset file itself and is for reference only: it is never compared with what your pedal holds now. | new |
+| `songDetail.not_found` | Esta canción no existe o ya no está en tu librería. | This song doesn't exist or is no longer in your library. | new |
+| `pedalButton.connect` | Conectar al GP-5 | Connect to GP-5 | new |
+| `pedalButton.connecting` | Conectando… | Connecting… | new |
+| `pedalButton.reading` | Leyendo presets… | Reading presets… | new |
+| `pedalButton.read` | Leer presets del GP-5 | Read GP-5 presets | new |
+| `pedalButton.unsupported_hint` | Tu navegador no soporta Web MIDI | Your browser doesn't support Web MIDI | new |
+| `pedalButton.dismiss_error` | Cerrar aviso | Dismiss | new |
+| `writeToPedal.not_connected` (F5 key, R81) | Conecta el GP-5 para poder escribir en el pedal. | Connect your GP-5 to write to the pedal. | changed (was "…desde el encabezado…" / "…from the header…") |
 
 Count: Transloco has no plural support configured, so the template picks `songs.preset_count_one` when
 `presets.length === 1` and `songs.preset_count_other` (with `count`) otherwise. The `songs.placeholder` key is
-removed.
+removed. F5's `songs.card.send_to_pedal` / `send_to_pedal_aria` and `writeToPedal.connect` / `connecting` are kept
+unchanged.
