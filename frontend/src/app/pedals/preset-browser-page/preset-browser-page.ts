@@ -103,6 +103,35 @@ export class PresetBrowserPage implements OnInit {
   readonly saveDialog = signal<SaveDialogState | null>(null);
   private readonly saveButton = viewChild<ElementRef<HTMLButtonElement>>('saveSongButton');
 
+  // F29: the user can dismiss both the success and error banners; this
+  // flag clears them on click of the "×" control. New state transitions
+  // reset it so a fresh success/error re-shows.
+  readonly statusDismissed = signal(false);
+
+  // F29: which banner is visible right now. `'success'` shows the
+  // preset-count message; `'error'` shows the translated error;
+  // `null` hides both. Used by the template's `@if` instead of inlined
+  // signal reads so dismiss works for both banners with one flag.
+  readonly visibleStatus = computed<'success' | 'error' | null>(() => {
+    if (this.statusDismissed()) return null;
+    if (this.loadState() === 'error') return 'error';
+    if (this.loadState() === 'loaded' && this.presets().length > 0) return 'success';
+    return null;
+  });
+
+  // F29: the i18n key for the visible success message; the template
+  // resolves it through `t(...)`. `null` hides the banner.
+  readonly successKey = computed<string | null>(() => {
+    if (this.visibleStatus() !== 'success') return null;
+    const total = this.presets().length;
+    const fromMocks = this.mockPresets.presets().length > 0;
+    const base = fromMocks ? 'presetBrowser.loaded_mocks' : 'presetBrowser.loaded_count';
+    return total === 1 ? `${base}_one` : `${base}_other`;
+  });
+
+  // F29: count passed to the success message's plural translation.
+  readonly successCount = computed<number>(() => this.presets().length);
+
   constructor() {
     // v6: when mock data is loaded via the header button, mirror it into
     // the page-level `presets` signal so the main area picks it up. The
@@ -140,6 +169,14 @@ export class PresetBrowserPage implements OnInit {
         this.error.set(this.pedalPresets.error());
         this.loadState.set('error');
       }
+    });
+    // F29: when the page transitions into a new read lifecycle
+    // (`loading`/`loaded`/`error`), clear the user's prior dismiss so the
+    // fresh status re-shows. Reading `loadState()` inside the effect
+    // makes it reactive without a circular write.
+    effect(() => {
+      this.loadState();
+      this.statusDismissed.set(false);
     });
   }
 
@@ -202,6 +239,19 @@ export class PresetBrowserPage implements OnInit {
   nameFor(slot: number): string {
     const p = this.presets().find((x) => x.slot === slot);
     return p?.name ?? '—';
+  }
+
+  // F29: hide the success/error banner until the next read lifecycle.
+  dismissStatus(): void {
+    this.statusDismissed.set(true);
+  }
+
+  // F29 fix v2: the page used to render only the error banner when the
+  // very first read failed (no presets yet to fall back to). Re-trigger
+  // the shared store's read; the mirror effect picks up the transition
+  // through loading → loaded/error.
+  retryRead(): void {
+    void this.pedalPresets.read();
   }
 
   onExportMarkChange(slot: number): void {
