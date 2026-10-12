@@ -3,27 +3,75 @@
     <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="unsupported-message">
       {{ t('pedal.unsupported') }}
     </p>
-  } @else if (connectionState() !== 'connected') {
-    <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="not-connected-message">
-      {{ t('presetBrowser.not_connected') }}
-    </p>
   } @else {
     @if (loadState() === 'loading') {
       <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="loading">
         {{ t('presetBrowser.loading') }}
       </p>
     }
-    @if (loadState() === 'error') {
-      <p class="mt-4 px-4 text-sm text-red-600 dark:text-red-400" data-testid="preset-error">
-        {{ t('presetBrowser.' + error()) }}
+    @if (visibleStatus() === 'error') {
+      <div
+        class="mt-4 mx-4 flex items-center justify-between gap-3 border-l-2 border-red-500 bg-slate-100/80 px-4 py-2.5 dark:border-red-400 dark:bg-slate-800/70"
+        data-testid="preset-error"
+        role="alert"
+      >
+        <div class="flex min-w-0 items-center gap-3">
+          <span class="size-1.5 shrink-0 rounded-full bg-red-500 dark:bg-red-400" aria-hidden="true"></span>
+          <span
+            class="min-w-0 truncate text-sm text-slate-700 dark:text-slate-300"
+            data-testid="preset-error-message"
+          >{{ t('presetBrowser.' + error()) }}</span>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 text-xs text-slate-500 underline-offset-4 hover:text-slate-900 hover:underline dark:text-slate-400 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
+          [attr.aria-label]="t('presetBrowser.dismiss_status')"
+          data-testid="preset-error-dismiss"
+          (click)="dismissStatus()"
+        >{{ t('presetBrowser.dismiss_status') }}</button>
+      </div>
+    }
+    @if (successKey()) {
+      <div
+        class="mt-4 mx-4 flex items-center justify-between gap-4 border-l-2 border-emerald-500 bg-slate-100/80 px-4 py-2.5 dark:border-emerald-400 dark:bg-slate-800/70"
+        data-testid="preset-success"
+        role="status"
+      >
+        <div class="flex min-w-0 items-baseline gap-3">
+          <span
+            class="shrink-0 font-mono text-xl font-semibold leading-none tabular-nums text-slate-900 dark:text-slate-100"
+            data-testid="preset-success-count"
+          >{{ successCount() }}</span>
+          <span
+            class="min-w-0 truncate text-sm text-slate-700 dark:text-slate-300"
+            data-testid="preset-success-message"
+          >{{ t(successKey()!, { count: successCount() }) }}</span>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 text-xs text-slate-500 underline-offset-4 hover:text-slate-900 hover:underline dark:text-slate-400 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500"
+          [attr.aria-label]="t('presetBrowser.dismiss_status')"
+          data-testid="preset-success-dismiss"
+          (click)="dismissStatus()"
+        >{{ t('presetBrowser.dismiss_status') }}</button>
+      </div>
+    }
+    @if (connectionState() !== 'connected' && presets().length === 0) {
+      <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="not-connected-message">
+        {{ t('presetBrowser.not_connected') }}
       </p>
     }
-    @if (loadState() === 'loaded' || loadState() === 'idle') {
+    @if (loadState() === 'loaded' || loadState() === 'idle' || loadState() === 'error') {
       <!-- v6: chip-based navigation. The top row holds one chip per
            selected preset, plus a "Browse presets" pill. Below the chips
            the main area renders the active preset's chain board (or an
            empty-state hint that triggers the picker). No drawer, no
-           compact list, no sticky toolbar. -->
+           compact list, no sticky toolbar.
+
+           The gate also opens when the read errored and no presets are
+           loaded yet — without it, the user sees only the error banner
+           and the page looks stuck. The main-empty fallback handles the
+           error+empty case with a contextual retry affordance. -->
       <div class="mt-4 flex flex-col gap-4" data-testid="preset-layout">
         <header
           class="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2 dark:border-slate-700"
@@ -141,12 +189,33 @@
               {{ t('presetBrowser.export_label') }}
             </label>
           } @else {
-            <p
-              class="text-sm text-slate-500 dark:text-slate-400"
-              data-testid="main-empty"
-            >
-              {{ t('presetBrowser.browse_presets') }}
-            </p>
+            @if (loadState() === 'error') {
+              <div
+                class="flex flex-col items-start gap-2"
+                data-testid="main-empty-error"
+              >
+                <p
+                  class="text-sm text-slate-500 dark:text-slate-400"
+                  data-testid="main-empty-error-hint"
+                >
+                  {{ t('presetBrowser.error_empty_hint') }}
+                </p>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600 hover:bg-indigo-50 dark:bg-slate-900 dark:text-indigo-300 dark:ring-indigo-400 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  [attr.aria-label]="t('presetBrowser.error_empty_retry')"
+                  data-testid="main-empty-error-retry"
+                  (click)="retryRead()"
+                >{{ t('presetBrowser.error_empty_retry') }}</button>
+              </div>
+            } @else {
+              <p
+                class="text-sm text-slate-500 dark:text-slate-400"
+                data-testid="main-empty"
+              >
+                {{ t('presetBrowser.browse_presets') }}
+              </p>
+            }
           }
         </main>
       </div>
@@ -163,25 +232,63 @@
       (click)="closePicker()"
     >
       <div
-        class="w-full max-w-md rounded-lg bg-white p-2 shadow-xl dark:bg-slate-800"
+        class="flex w-full max-w-md max-h-[80vh] flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-slate-800"
         data-testid="picker-card"
+        role="dialog"
+        aria-modal="true"
+        [attr.aria-label]="t('presetBrowser.picker_title')"
         (click)="$event.stopPropagation()"
       >
-        <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+        <header class="flex items-baseline justify-between gap-3 border-b border-slate-200 px-4 py-2.5 dark:border-slate-700">
+          <h2
+            class="text-sm font-semibold text-slate-900 dark:text-slate-100"
+            data-testid="picker-title"
+          >{{ t('presetBrowser.picker_title') }}</h2>
+          <span
+            class="font-mono text-xs tabular-nums text-slate-400 dark:text-slate-500"
+            data-testid="picker-count"
+          >
+            @if (presets().length === 1) {
+              {{ t('songs.preset_count_one') }}
+            } @else {
+              {{ t('songs.preset_count_other', { count: presets().length }) }}
+            }
+          </span>
+        </header>
+        <ul
+          class="flex-1 overflow-y-auto max-h-[60vh] sm:max-h-[70vh]"
+          data-testid="picker-list"
+        >
           @for (preset of presets(); track preset.slot) {
-            <li>
+            <li class="border-b border-slate-100 last:border-b-0 dark:border-slate-700/50">
               <button
                 type="button"
-                class="flex w-full items-center gap-3 rounded px-2 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                class="grid w-full grid-cols-[2.5rem_1fr] items-baseline gap-x-3 px-4 py-2 text-left hover:bg-slate-50 focus-visible:bg-slate-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-indigo-500 dark:hover:bg-slate-700/40 dark:focus-visible:bg-slate-700"
                 [attr.data-testid]="'picker-row-' + preset.slot"
                 (click)="onPickerRow(preset)"
               >
-                <span class="font-mono text-xs opacity-70">{{ preset.slot }}</span>
-                <span class="font-medium">{{ preset.name }}</span>
+                <span class="font-mono text-xs tabular-nums text-slate-400 dark:text-slate-500">{{ preset.slot }}</span>
+                <span class="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{{ preset.name }}</span>
               </button>
+            </li>
+          } @empty {
+            <li class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400" data-testid="picker-empty">
+              {{ t('presetBrowser.no_presets') }}
             </li>
           }
         </ul>
+        <footer class="flex items-center justify-between gap-3 border-t border-slate-200 px-4 py-2 dark:border-slate-700">
+          <span
+            class="font-mono text-xs tabular-nums text-slate-400 dark:text-slate-500"
+            data-testid="picker-slot-range"
+          >{{ t('presetBrowser.picker_slot_range') }}</span>
+          <button
+            type="button"
+            class="text-xs text-slate-500 underline-offset-4 hover:text-slate-900 hover:underline dark:text-slate-400 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+            data-testid="picker-close"
+            (click)="closePicker()"
+          >{{ t('presetBrowser.picker_close') }}</button>
+        </footer>
       </div>
     </div>
   }

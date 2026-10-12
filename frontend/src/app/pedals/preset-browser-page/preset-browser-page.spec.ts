@@ -12,6 +12,7 @@ import {
 import { PresetExportSelection } from '../preset-export-selection.service';
 import { PresetComparisonStore } from '../preset-comparison.service';
 import { MockPresetsStore } from '../mock-presets.store';
+import { PedalPresetsStore } from '../pedal-presets.store';
 import { appConfig } from '../../app.config';
 import type { PedalConnectionState } from '../../midi/pedal-connection';
 import type { PresetRestoreWarning } from '../../midi/web-midi-pedal-connection';
@@ -79,6 +80,17 @@ const esTranslations = {
       'No se pudo volver al preset que tenías activo: no coincide con ningún preset guardado (quizá tenía cambios sin guardar). El pedal quedó en el último preset leído.',
     restore_ambiguous:
       'No se pudo volver al preset que tenías activo: coincide con varios presets guardados. El pedal quedó en el último preset leído.',
+    loaded_count_one: 'preset del GP-5',
+    loaded_count_other: 'presets del GP-5',
+    loaded_mocks_one: 'preset de prueba',
+    loaded_mocks_other: 'presets de prueba',
+    dismiss_status: 'Cerrar',
+    picker_title: 'Todos los presets',
+    picker_close: 'Cerrar',
+    picker_slot_range: 'Slots 0 a 99',
+    error_empty_hint:
+      'No se pudieron leer los presets del pedal. Vuelve a intentarlo o carga presets de prueba desde el encabezado.',
+    error_empty_retry: 'Volver a leer',
   },
   chainBoard: {
     title: 'Cadena de señal',
@@ -584,6 +596,306 @@ describe('PresetBrowserPage (v6)', () => {
     expect(fakeCompare.add).not.toHaveBeenCalled();
     expect(fakeCompare.remove).not.toHaveBeenCalled();
     expect(fakeCompare.clear).not.toHaveBeenCalled();
+  });
+
+  // ---- F29: visible success state with preset count --------------------
+
+  it('F29 — shows a success banner with the preset count after a real read completes', async () => {
+    const fixture: Preset[] = [
+      { slot: 1, name: 'A', chain: [] },
+      { slot: 2, name: 'B', chain: [] },
+      { slot: 3, name: 'C', chain: [] },
+    ];
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    const success = compiled.querySelector('[data-testid="preset-success"]');
+    expect(success).not.toBeNull();
+    // Big mono count + qualifier (accepting "3" / "del GP-5" either side).
+    expect(success?.querySelector('[data-testid="preset-success-count"]')?.textContent).toContain('3');
+    expect(success?.querySelector('[data-testid="preset-success-message"]')?.textContent).toContain('presets del GP-5');
+  });
+
+  it('F29 — shows the singular form when exactly one preset is read', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = [{ slot: 1, name: 'A', chain: [] }];
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    const success = compiled.querySelector('[data-testid="preset-success"]');
+    expect(success).not.toBeNull();
+    expect(success?.querySelector('[data-testid="preset-success-count"]')?.textContent).toContain('1');
+    // Singular form: "preset del GP-5" (not "presets").
+    expect(success?.querySelector('[data-testid="preset-success-message"]')?.textContent).toContain('preset del GP-5');
+  });
+
+  it('F29 — shows a mock-data success banner when the header link populated the mock store', async () => {
+    // No pedal connection — the mock flow only stays visible when the
+    // user isn't connected, because `ngOnInit` skips `loadPresets()` in
+    // that state. When connected, the real read would overwrite the
+    // mocks (and the F26 test for that path covers it).
+    const fake = new FakePedal();
+    const httpMock = setup(fake);
+
+    // Simulate the header "Cargar presets de prueba" click: the mock
+    // store is populated before the page mounts.
+    const mockStore = TestBed.inject(MockPresetsStore);
+    mockStore.load();
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    const success = compiled.querySelector('[data-testid="preset-success"]');
+    expect(success).not.toBeNull();
+    expect(success?.querySelector('[data-testid="preset-success-count"]')?.textContent).toContain('6');
+    expect(success?.querySelector('[data-testid="preset-success-message"]')?.textContent).toContain('presets de prueba');
+  });
+
+  it('F29 — hides the success banner when the user clicks the dismiss button', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = [{ slot: 1, name: 'A', chain: [] }];
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    expect(compiled.querySelector('[data-testid="preset-success"]')).not.toBeNull();
+    const dismiss = compiled.querySelector('[data-testid="preset-success-dismiss"]') as HTMLButtonElement;
+    dismiss.click();
+    component.detectChanges();
+    expect(compiled.querySelector('[data-testid="preset-success"]')).toBeNull();
+  });
+
+  it('F29 — renders the existing error banner with a dismiss control when the read fails', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = new Error('request_in_progress');
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    const err = compiled.querySelector('[data-testid="preset-error"]');
+    expect(err).not.toBeNull();
+    expect(err?.textContent).toContain('Ya hay una operación MIDI en curso.');
+    // Dismiss button is present and hides the banner on click.
+    const dismiss = compiled.querySelector('[data-testid="preset-error-dismiss"]') as HTMLButtonElement;
+    expect(dismiss).not.toBeNull();
+    dismiss.click();
+    component.detectChanges();
+    expect(compiled.querySelector('[data-testid="preset-error"]')).toBeNull();
+  });
+
+  // Regression for the F29 design-polish pass: the user previously had
+  // presets loaded (so the page's `presets` signal still holds them), then
+  // a re-read timed out and put the page into `loadState === 'error'`.
+  // The error banner must surface, but the previously loaded presets,
+  // the chip row, and the main area must remain visible — the user must
+  // not lose their working surface to a transient read failure.
+  it('regression — keeps the previously loaded presets, chips and main area when a re-read fails (F29 polish)', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = [
+      { slot: 1, name: 'A', chain: [] },
+      { slot: 2, name: 'B', chain: [] },
+      { slot: 3, name: 'C', chain: [] },
+    ];
+    const fakeCompare = new FakePresetComparisonStore();
+    fakeCompare.add(1);
+    fakeCompare.add(3);
+    const httpMock = setup(fake, undefined, fakeCompare);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    // Sanity: after the first successful read, the success banner, the
+    // two chips and the main area are all in the DOM.
+    expect(compiled.querySelector('[data-testid="preset-success"]')).not.toBeNull();
+    expect(compiled.querySelectorAll('[data-testid^="preset-chip-"]').length).toBe(2);
+    expect(compiled.querySelector('[data-testid="main-area"]')).not.toBeNull();
+
+    // Now the pedal stalls on a re-read. The shared store transitions to
+    // 'error', the page's mirror effect mirrors that, and `loadState`
+    // becomes 'error'. The page's `presets` signal is NOT cleared by the
+    // mirror effect — it still holds the previously loaded presets.
+    fake.resolveWith = new Error('read_timeout');
+    const store = TestBed.inject(PedalPresetsStore);
+    await store.read();
+    component.detectChanges();
+
+    // The error banner is shown.
+    const err = compiled.querySelector('[data-testid="preset-error"]');
+    expect(err).not.toBeNull();
+    expect(err?.textContent).toContain('La lectura de presets ha expirado.');
+
+    // The previously loaded presets, chips, and main area are STILL
+    // visible — the user must keep their working surface even when the
+    // read fails.
+    expect(compiled.querySelectorAll('[data-testid^="preset-chip-"]').length).toBe(2);
+    expect(compiled.querySelector('[data-testid="main-area"]')).not.toBeNull();
+  });
+
+  // Regression for the F29 fix v2: the user opens the page fresh, the
+  // FIRST read times out (no presets were ever loaded). The previous
+  // fix kept the page working when presets WERE loaded then a re-read
+  // failed; this is the case the previous fix missed. The page must
+  // show something actionable besides the error banner — at minimum
+  // the chip row with the Browse pill and a main-empty affordance
+  // with a retry button — and clicking retry must drive the page
+  // through the loading → loaded lifecycle.
+  it('regression — first read fails, presets empty: page shell + retry affordance visible, retry recovers the page (F29 fix v2)', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    // The very first read times out — no presets were ever loaded.
+    fake.resolveWith = new Error('read_timeout');
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+
+    // The error banner is shown — the regression symptom is visible.
+    const err = compiled.querySelector('[data-testid="preset-error"]');
+    expect(err).not.toBeNull();
+    expect(err?.textContent).toContain('La lectura de presets ha expirado.');
+
+    // The page shell is now visible — chip row + Browse pill + main
+    // area with an error+empty hint and a retry button. This is what
+    // the previous fix missed.
+    expect(compiled.querySelector('[data-testid="chip-row"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="browse-presets"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="main-area"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="main-empty"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="main-empty-error"]')).not.toBeNull();
+    const hint = compiled.querySelector('[data-testid="main-empty-error-hint"]');
+    expect(hint?.textContent).toContain(
+      'No se pudieron leer los presets del pedal.',
+    );
+    const retry = compiled.querySelector(
+      '[data-testid="main-empty-error-retry"]',
+    ) as HTMLButtonElement;
+    expect(retry).not.toBeNull();
+    expect(retry.textContent).toContain('Volver a leer');
+
+    // Flip the fake so the next read succeeds. Clicking retry must
+    // drive the page through loading → loaded: the error banner and
+    // the error+empty hint disappear, the success banner appears.
+    fake.resolveWith = [{ slot: 0, name: 'Recovered', chain: [] }];
+    retry.click();
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    expect(compiled.querySelector('[data-testid="preset-error"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="main-empty-error"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="preset-success"]')).not.toBeNull();
+  });
+
+  // ---- F29: scrollable preset list at 375px and 1280px ---------------
+
+  it('F29 — picker overlay list has its own scroll container', async () => {
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = [{ slot: 0, name: 'A', chain: [] }];
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    (compiled.querySelector('[data-testid="browse-presets"]') as HTMLButtonElement).click();
+    component.detectChanges();
+
+    const list = compiled.querySelector('[data-testid="picker-list"]') as HTMLElement;
+    expect(list).not.toBeNull();
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.className).toMatch(/max-h-\[(60|70)vh\]/);
+  });
+
+  it('F29 — picker overlay list reaches preset 0 and preset 99 when 100 presets load', async () => {
+    const fixture: Preset[] = Array.from({ length: 100 }, (_, i) => ({
+      slot: i,
+      name: `Preset ${i}`,
+      chain: [],
+    }));
+    const fake = new FakePedal();
+    fake.setConnectionState('connected');
+    fake.resolveWith = fixture;
+    const httpMock = setup(fake);
+
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await Promise.resolve();
+    component.detectChanges();
+
+    const compiled = component.nativeElement as HTMLElement;
+    (compiled.querySelector('[data-testid="browse-presets"]') as HTMLButtonElement).click();
+    component.detectChanges();
+
+    const list = compiled.querySelector('[data-testid="picker-list"]') as HTMLElement;
+    expect(list).not.toBeNull();
+    // Both ends of a 100-preset list must be in the DOM; the scroll
+    // container is what keeps the picker card within the viewport at
+    // 375px and 1280px alike.
+    expect(list.querySelector('[data-testid="picker-row-0"]')).not.toBeNull();
+    expect(list.querySelector('[data-testid="picker-row-99"]')).not.toBeNull();
+    // Card itself is bounded by viewport height.
+    const card = compiled.querySelector('[data-testid="picker-card"]') as HTMLElement;
+    expect(card.className).toContain('max-h-[80vh]');
   });
 });
 
