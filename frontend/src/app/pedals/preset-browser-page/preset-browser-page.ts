@@ -19,6 +19,7 @@ import { ChainBoard, type ChainBlockClicked } from '../chain-board/chain-board';
 import { BlockDetail } from '../block-detail/block-detail';
 import { MockPresetsStore } from '../mock-presets.store';
 import { SaveSongDialog } from '../../songs/save-song-dialog/save-song-dialog';
+import { PedalPresetsStore } from '../pedal-presets.store';
 
 type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
 
@@ -44,6 +45,7 @@ interface SaveDialogState {
 export class PresetBrowserPage implements OnInit {
   private readonly pedal = inject(WebMidiPedalConnection);
   private readonly mockPresets = inject(MockPresetsStore);
+  private readonly pedalPresets = inject(PedalPresetsStore);
   readonly exportSelection = inject(PresetExportSelection);
   readonly comparison = inject(PresetComparisonStore);
 
@@ -112,6 +114,31 @@ export class PresetBrowserPage implements OnInit {
         this.presets.set(mock);
         this.loadState.set('loaded');
         this.error.set(null);
+      }
+    });
+    // F26 R55, R64, R66: mirror the shared `PedalPresetsStore` so a
+    // header-triggered read lands here too (the page no longer owns the
+    // `readPresets()` call — `PedalPresetsStore` does). `loadPresets()` in
+    // the store already clears `mockPresets` on success (F17 v6), so the
+    // mock-mirror effect below only fires when the read failed.
+    effect(() => {
+      const storeState = this.pedalPresets.loadState();
+      const storePresets = this.pedalPresets.presets();
+      if (storeState === 'loading') {
+        this.loadState.set('loading');
+        this.error.set(null);
+        return;
+      }
+      if (storeState === 'loaded') {
+        this.presets.set([...storePresets]);
+        this.mockPresets.clear();
+        this.loadState.set('loaded');
+        this.error.set(null);
+        return;
+      }
+      if (storeState === 'error') {
+        this.error.set(this.pedalPresets.error());
+        this.loadState.set('error');
       }
     });
   }
@@ -242,18 +269,10 @@ export class PresetBrowserPage implements OnInit {
   }
 
   private async loadPresets(): Promise<void> {
-    this.loadState.set('loading');
-    this.error.set(null);
-    try {
-      const real = await this.pedal.readPresets();
-      // Real read overrides any mock data loaded via the header button.
-      this.presets.set(real);
-      this.mockPresets.clear();
-      this.loadState.set('loaded');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'unknown';
-      this.error.set(message === 'not_connected' ? 'not_connected_error' : message);
-      this.loadState.set('error');
-    }
+    // F26: delegate to the shared store. The store clears mocks on
+    // success and surfaces its own error mapping — the mirror effect
+    // above picks up the result. The shared store also dedupes against
+    // a header-triggered read already in flight.
+    await this.pedalPresets.read();
   }
 }

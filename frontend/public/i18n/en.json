@@ -15,10 +15,14 @@
   },
   "songs": {
     "title": "My songs",
-    "placeholder": "Your saved preset library will live here.",
     "loading": "Loading your songs…",
+    "new": "New song",
+    "preset_count_one": "1 preset",
+    "preset_count_other": "{{count}} presets",
+    "cover_alt": "Cover of {{name}}",
     "empty_title": "No songs yet",
     "empty_body": "Connect your GP-5, pick the presets you use in a song and save them together. You can also create a song from .prst files.",
+    "empty_connect": "Connect to GP-5",
     "retry": "Try again",
     "login_again": "Log in",
     "errors": {
@@ -31,6 +35,19 @@
       "send_to_pedal_aria": "Send song “{{name}}” to the pedal"
     }
   },
+  "songDetail": {
+    "presets_heading": "Presets, in running order",
+    "reference_note": "Each name comes from the preset file itself and is for reference only: it is never compared with what your pedal holds now.",
+    "not_found": "This song doesn't exist or is no longer in your library."
+  },
+  "pedalButton": {
+    "connect": "Connect to GP-5",
+    "connecting": "Connecting…",
+    "reading": "Reading presets…",
+    "read": "Read GP-5 presets",
+    "unsupported_hint": "Your browser doesn't support Web MIDI",
+    "dismiss_error": "Dismiss"
+  },
   "writeToPedal": {
     "title": "Send to pedal",
     "close": "Close",
@@ -40,7 +57,7 @@
     "target_slot": "Target slot",
     "write_all": "Write all in order",
     "write_all_help": "Sends the song's presets to consecutive slots starting at the target slot.",
-    "not_connected": "Connect your GP-5 from the header to write to the pedal.",
+    "not_connected": "Connect your GP-5 to write to the pedal.",
     "connect": "Connect GP-5",
     "connecting": "Connecting…",
     "cancel": "Cancel",

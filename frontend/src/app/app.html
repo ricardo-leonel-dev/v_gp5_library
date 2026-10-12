@@ -1,10 +1,16 @@
 <div *transloco="let t" class="min-h-screen bg-slate-50 dark:bg-slate-900">
-  <header class="flex items-center justify-end gap-2 border-b border-slate-200 px-4 py-2 dark:border-slate-700">
+  <header class="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2 dark:border-slate-700">
+    @if (isAuthenticated()) {
+      <a
+        routerLink="/songs"
+        data-testid="nav-songs"
+        class="mr-auto rounded-md px-1 text-sm font-semibold text-slate-900 hover:text-indigo-700 dark:text-slate-100 dark:hover:text-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+      >{{ t('songs.title') }}</a>
+    } @else {
+      <span class="mr-auto"></span>
+    }
     <app-language-switcher />
     <app-dark-mode-toggle />
-    <!-- v6 ghost-link mock-data control (chrome variant A winner from
-         the playground). Replaces v5's indigo filled button; now lives
-         in the page header so the production chrome stays clean. -->
     <button
       type="button"
       class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
@@ -16,6 +22,27 @@
       </svg>
       <span>{{ t('presetBrowser.load_test_presets') }}</span>
     </button>
+    @if (isAuthenticated()) {
+      <app-pedal-connect-button />
+    }
   </header>
+
+  @if (flowError(); as e) {
+    <div
+      class="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+      data-testid="pedal-connect-error"
+      role="alert"
+    >
+      <span>{{ t('pedal.' + e) }}</span>
+      <button
+        type="button"
+        class="shrink-0 rounded p-0.5 text-red-600 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+        [attr.aria-label]="t('pedalButton.dismiss_error')"
+        data-testid="pedal-connect-error-dismiss"
+        (click)="dismissConnectError()"
+      >×</button>
+    </div>
+  }
+
   <router-outlet />
 </div>

@@ -18,6 +18,14 @@ export const routes: Routes = [
     loadComponent: () => import('./songs/songs-page/songs-page').then((m) => m.SongsPage),
   },
   {
+    // F26 R26, R27. The detail page is guarded by the same `authGuard` as
+    // the list page; an unauthenticated navigation redirects to `/login`.
+    path: 'songs/:id',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./songs/song-detail-page/song-detail-page').then((m) => m.SongDetailPage),
+  },
+  {
     path: 'pedal',
     canActivate: [authGuard],
     loadComponent: () =>
