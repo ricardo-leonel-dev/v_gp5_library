@@ -15,10 +15,14 @@
   },
   "songs": {
     "title": "Mis canciones",
-    "placeholder": "Aquí vivirá tu librería de presets guardados.",
     "loading": "Cargando tus canciones…",
+    "new": "Nueva canción",
+    "preset_count_one": "1 preset",
+    "preset_count_other": "{{count}} presets",
+    "cover_alt": "Portada de {{name}}",
     "empty_title": "Aún no tienes canciones",
     "empty_body": "Conecta tu GP-5, elige los presets que usas en una canción y guárdalos juntos. También puedes crear una canción desde archivos .prst.",
+    "empty_connect": "Conectar al GP-5",
     "retry": "Reintentar",
     "login_again": "Iniciar sesión",
     "errors": {
@@ -31,6 +35,19 @@
       "send_to_pedal_aria": "Enviar al pedal la canción «{{name}}»"
     }
   },
+  "songDetail": {
+    "presets_heading": "Presets, en orden de uso",
+    "reference_note": "Cada nombre viene del propio archivo de preset y es solo una referencia: no se compara con lo que tenga ahora tu pedal.",
+    "not_found": "Esta canción no existe o ya no está en tu librería."
+  },
+  "pedalButton": {
+    "connect": "Conectar al GP-5",
+    "connecting": "Conectando…",
+    "reading": "Leyendo presets…",
+    "read": "Leer presets del GP-5",
+    "unsupported_hint": "Tu navegador no soporta Web MIDI",
+    "dismiss_error": "Cerrar aviso"
+  },
   "writeToPedal": {
     "title": "Enviar al pedal",
     "close": "Cerrar",
@@ -40,7 +57,7 @@
     "target_slot": "Slot de destino",
     "write_all": "Escribir todos en orden",
     "write_all_help": "Envía los presets de la canción a slots consecutivos empezando por el de destino.",
-    "not_connected": "Conecta el GP-5 desde el encabezado para poder escribir.",
+    "not_connected": "Conecta el GP-5 para poder escribir en el pedal.",
     "connect": "Conectar GP-5",
     "connecting": "Conectando…",
     "cancel": "Cancelar",

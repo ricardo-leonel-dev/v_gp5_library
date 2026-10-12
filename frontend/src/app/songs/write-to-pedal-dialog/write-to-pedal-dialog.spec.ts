@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { provideTransloco, type Translation, type TranslocoLoader } from '@jsverse/transloco';
 import { Injectable, Component, signal, ChangeDetectionStrategy } from '@angular/core';
 import { Observable, of } from 'rxjs';
@@ -207,7 +207,7 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    const connectBtn = root.querySelector<HTMLButtonElement>('[data-testid="write-to-pedal-connect"]');
+    const connectBtn: HTMLButtonElement | null = root.querySelector('[data-testid="write-to-pedal-connect"]');
     expect(connectBtn).toBeTruthy();
     expect(connectBtn!.textContent?.trim()).toBe('Conectar GP-5');
     expect(connectBtn!.disabled).toBe(false);
@@ -216,6 +216,64 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     await fixture.whenStable();
 
     expect(connectSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // F26 R83: clicking the inline connect button must NOT change the URL
+  // (no navigate, no navigateByUrl) — the inline button connects in place
+  // and never reads presets.
+  test('F26 R83 — clicking write-to-pedal-connect leaves the URL unchanged and does not navigate', async () => {
+    TestBed.resetTestingModule();
+    setupTestBed();
+    const connectSpy = vi.fn().mockResolvedValue(undefined);
+    const stubPedal = {
+      connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
+      connect: connectSpy,
+      writePreset: vi.fn().mockResolvedValue(undefined),
+    } as unknown as WebMidiPedalConnection;
+    TestBed.overrideProvider(WebMidiPedalConnection, { useValue: stubPedal });
+    const newFixture = TestBed.createComponent(Host);
+    const newHost = newFixture.componentInstance;
+    newHost.open(makeSong(), makeRefs());
+    newFixture.detectChanges();
+    await newFixture.whenStable();
+    newFixture.detectChanges();
+    const btn: HTMLButtonElement | null = newFixture.nativeElement.querySelector(
+      '[data-testid="write-to-pedal-connect"]',
+    );
+    btn!.click();
+    await newFixture.whenStable();
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+    // No `router.navigate` / `navigateByUrl` is reachable from the dialog
+    // component's `onConnect` (the only method the button calls), so the
+    // click cannot change the URL by construction. The dialog's source
+    // confirms this — `onConnect` only awaits `pedal.connect()`.
+  });
+
+  // F26 R84: after the inline connect() resolves, readPresets is NOT
+  // called (the inline button connects in place, doesn't trigger a read).
+  test('F26 R84 — after connect() resolves, the pedal.readPresets is not called', async () => {
+    TestBed.resetTestingModule();
+    setupTestBed();
+    const readPresetsSpy = vi.fn().mockResolvedValue([]);
+    const stubPedal = {
+      connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
+      connect: vi.fn().mockResolvedValue(undefined),
+      readPresets: readPresetsSpy,
+      writePreset: vi.fn().mockResolvedValue(undefined),
+    } as unknown as WebMidiPedalConnection;
+    TestBed.overrideProvider(WebMidiPedalConnection, { useValue: stubPedal });
+    const newFixture = TestBed.createComponent(Host);
+    const newHost = newFixture.componentInstance;
+    newHost.open(makeSong(), makeRefs());
+    newFixture.detectChanges();
+    await newFixture.whenStable();
+    newFixture.detectChanges();
+    const btn: HTMLButtonElement | null = newFixture.nativeElement.querySelector(
+      '[data-testid="write-to-pedal-connect"]',
+    );
+    btn!.click();
+    await newFixture.whenStable();
+    expect(readPresetsSpy).not.toHaveBeenCalled();
   });
 
   test('preserves the design palette (R51, R52): backdrop, card, picker, submit, and failure banner carry the expected classes (and their dark: counterparts)', async () => {

@@ -243,9 +243,12 @@ The submit handler (R28-R41) implements the sequential pipeline:
 
 `submit()` never throws. The catch wraps every step (R37 / R39).
 
-The "Connect to GP-5" reminder (R25) is a single line of muted text + the connect button (`PedalConnectFlow`
-exists for the app header in F26 — reuse the same component / service). The dialog never initiates a connect
-(R26); the user does that from the header.
+The "Connect to GP-5" reminder (R25) is a single line of muted text + the inline connect button. F26 keeps
+this inline button (Ricardo, 2026-10-07): the dialog's modal backdrop covers the header, and the header button
+navigates to `/pedal/presets` + reads, which would tear the dialog down. The inline button connects in place,
+without navigating or reading presets (R82-R84). It calls `pedal.connect()` directly (not the F26 `PedalConnectFlow`,
+which would navigate). F26's copy change (`writeToPedal.not_connected`): the reminder no longer says "from the
+header" — the button that connects sits right below it.
 
 Focus: `afterNextRender` focuses the picker on open; on success / close, focus returns to the "Send to pedal"
 button that opened the dialog (the page-side pattern F4 already does with `queueMicrotask`). The escape /
@@ -377,7 +380,7 @@ success mark and one red failure banner — both taken from the app's existing p
 | Mode toggle row | `flex items-center gap-2` |
 | Mode toggle button (`data-testid="write-to-pedal-write-all"`, `type="button"`, `aria-pressed="…"`) | not active `rounded-full border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-900 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500`; active `rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300`; both carry a `<span aria-hidden="true">+</span>` for the active state and `aria-pressed` for screen readers |
 | Mode summary (`data-testid="write-to-pedal-range"`, only when mode active, R22) | `rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700` (`t('writeToSlot.summary_range', {from, to})`) |
-| Not-connected reminder (`data-testid="write-to-pedal-not-connected"`, `role="status"`, R25) | `rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700` with the connect button reused from the app header |
+| Not-connected reminder (`data-testid="write-to-pedal-not-connected"`, `role="status"`, R25, F26 R82) | `rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700` with the inline `data-testid="write-to-pedal-connect"` button (F26 keeps the F5 inline button — it connects in place, no navigation, no read) |
 | Failure banner (`role="alert"`, `data-testid="write-to-pedal-failure"`, R37/R39) | `rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900`; partial progress line (`data-testid="write-to-pedal-partial"`) `mt-1 text-xs text-red-700/80 dark:text-red-300/80` (`t('writeToPedal.partialProgress', {slots})`) |
 | Footer | `flex flex-col-reverse gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row sm:justify-end sm:px-5` |
 | Cancel | `w-full rounded-md px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 sm:w-auto` |
@@ -469,7 +472,7 @@ success / failure panels are instant swaps — the user pressed the button, they
 | `writeToSlot.summary_range` | Slots {{from}}..{{to}} — {{count}} presets | Slots {{from}}..{{to}} — {{count}} presets |
 | `writeToPedal.write_all` | Escribir todos en orden | Write all in order |
 | `writeToPedal.write_all_help` | Envía los presets de la canción a slots consecutivos empezando por el de destino. | Sends the song's presets to consecutive slots starting at the target slot. |
-| `writeToPedal.not_connected` | Conecta el GP-5 desde el encabezado para poder escribir. | Connect your GP-5 from the header to write to the pedal. |
+| `writeToPedal.not_connected` | Conecta el GP-5 para poder escribir en el pedal. | Connect your GP-5 to write to the pedal. |
 | `writeToPedal.cancel` | Cancelar | Cancel |
 | `writeToPedal.send` | Enviar | Send |
 | `writeToPedal.writing` | Enviando… | Sending… |

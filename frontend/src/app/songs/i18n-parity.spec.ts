@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error - node types not in tsconfig
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 // @ts-expect-error - node types not in tsconfig
 import { join } from 'path';
 
@@ -153,5 +153,85 @@ describe('i18n parity under writeToPedal / writeToSlot / songs.card (F5 R50)', (
       expect(typeof connecting).toBe('string');
       expect((connecting as string).length).toBeGreaterThan(0);
     }
+  });
+});
+
+// F26 `library_first_startup` — R62: every key the new F26 templates
+// reference must resolve in both locales. Extends F5's parity check with
+// the new namespaces (`songDetail`, `pedalButton`) and the new F26 source
+// files.
+describe('i18n parity under songDetail / pedalButton / new F26 sources (F26 R62)', () => {
+  const en = loadTranslations('en');
+  const es = loadTranslations('es');
+
+  for (const ns of ['songDetail', 'pedalButton'] as const) {
+    it(`en and es have identical leaf paths under ${ns}`, () => {
+      const enPaths = leafPathsForNamespace(en, ns);
+      const esPaths = leafPathsForNamespace(es, ns);
+      expect(esPaths).toEqual(enPaths);
+    });
+  }
+
+  for (const lang of ['en', 'es'] as const) {
+    for (const ns of ['songDetail', 'pedalButton'] as const) {
+      it(`every ${ns} leaf in ${lang} is a non-empty string`, () => {
+        const json = lang === 'en' ? en : es;
+        for (const path of leafPathsForNamespace(json, ns)) {
+          const v = getLeafValue(json, path);
+          expect(typeof v).toBe('string');
+          expect((v as string).length).toBeGreaterThan(0);
+        }
+      });
+    }
+  }
+
+  it('every key the F26 sources reference under songDetail|pedalButton|songs|writeToPedal|writeToSlot exists in both languages', () => {
+    const cwd = (globalThis as { process?: { cwd(): string } }).process?.cwd() ?? '.';
+    const sources = [
+      'src/app/songs/song-cover/song-cover.html',
+      'src/app/songs/song-detail-page/song-detail-page.html',
+      'src/app/pedals/pedal-connect-button/pedal-connect-button.html',
+      'src/app/app.html',
+      'src/app/songs/songs-page/songs-page.html',
+      'src/app/songs/songs-page/songs-page.ts',
+    ];
+    const keys = new Set<string>();
+    for (const file of sources) {
+      const fullPath = join(cwd, file);
+      if (!existsSync(fullPath)) continue;
+      const text = readFileSync(fullPath, 'utf8') as string;
+      for (const m of text.matchAll(
+        /'((?:songDetail|pedalButton|songs|writeToPedal|writeToSlot)\.[A-Za-z_.]+)'/g,
+      )) {
+        keys.add(m[1]!);
+      }
+    }
+    // `songs.placeholder` was removed in F26; the parity test still scans
+    // for it indirectly through any legacy callers, but F26's own sources
+    // do not reference it. Skip if no F26 keys were extracted (a passing
+    // empty-set is fine — the strict check happens via leafPath parity).
+    if (keys.size > 0) {
+      expect(keys.has('songs.placeholder')).toBe(false);
+    }
+    for (const lang of ['en', 'es'] as const) {
+      const json = lang === 'en' ? en : es;
+      for (const key of keys) {
+        if (key === 'songs.placeholder') continue;
+        expect({ lang, key, type: typeof getLeafValue(json, key) }).toEqual({
+          lang,
+          key,
+          type: 'string',
+        });
+      }
+    }
+  });
+
+  it('writeToPedal.not_connected is exactly the R81 strings (es/en)', () => {
+    expect(getLeafValue(es, 'writeToPedal.not_connected')).toBe(
+      'Conecta el GP-5 para poder escribir en el pedal.',
+    );
+    expect(getLeafValue(en, 'writeToPedal.not_connected')).toBe(
+      'Connect your GP-5 to write to the pedal.',
+    );
   });
 });

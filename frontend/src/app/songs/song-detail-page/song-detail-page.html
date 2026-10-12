@@ -1,0 +1,110 @@
+<div *transloco="let t" class="mx-auto max-w-5xl px-4 py-8 sm:py-10">
+  <a
+    routerLink="/songs"
+    data-testid="song-detail-back"
+    class="inline-flex items-center gap-1 rounded-md text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+  >
+    <svg viewBox="0 0 16 16" class="size-4" aria-hidden="true">
+      <path d="M10 4 L6 8 L10 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+    <span>{{ t('songs.title') }}</span>
+  </a>
+
+  @switch (state()) {
+    @case ('loading') {
+      <div
+        class="mt-6 flex flex-col gap-4 sm:flex-row sm:items-end"
+        data-testid="song-detail-loading"
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <div class="aspect-square w-32 shrink-0 animate-pulse rounded-lg bg-slate-200 motion-reduce:animate-none dark:bg-slate-800 sm:w-40"></div>
+        <div class="flex-1 space-y-2">
+          <div class="h-6 w-2/3 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-800"></div>
+          <div class="h-4 w-1/3 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-800"></div>
+        </div>
+      </div>
+    }
+    @case ('loaded') {
+      @if (song(); as s) {
+        <div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+          <app-song-cover
+            [songId]="s.id"
+            [songName]="s.name"
+            [hasCover]="hasCover()"
+            size="hero"
+          />
+          <div class="flex-1 min-w-0">
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+              {{ s.name }}
+            </h1>
+            @if (showArtist()) {
+              <p class="mt-1 text-sm text-slate-600 dark:text-slate-400" data-testid="song-detail-artist">
+                {{ s.artist }}
+              </p>
+            }
+          </div>
+        </div>
+
+        <h2 class="mt-8 text-sm font-medium text-slate-700 dark:text-slate-300">
+          {{ t('songDetail.presets_heading') }}
+        </h2>
+        <ol
+          class="mt-2 divide-y divide-slate-200 rounded-lg bg-white ring-1 ring-inset ring-slate-200 dark:divide-slate-700 dark:bg-slate-800 dark:ring-slate-700"
+          data-testid="song-detail-presets"
+        >
+          @for (p of presets(); track p.id; let i = $index) {
+            <li
+              class="grid grid-cols-[1.5rem_1fr] items-baseline gap-x-2 px-3 py-2.5"
+              data-testid="song-preset-row"
+            >
+              <span class="text-right text-sm font-semibold tabular-nums text-slate-400 dark:text-slate-500" aria-hidden="true">
+                {{ i + 1 }}
+              </span>
+              <span class="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{{ p.name }}</span>
+            </li>
+          }
+        </ol>
+
+        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400" data-testid="song-reference-note">
+          {{ t('songDetail.reference_note') }}
+        </p>
+      }
+    }
+    @case ('not_found') {
+      <div
+        class="mt-6 rounded-lg border border-dashed border-slate-300 px-6 py-10 text-center text-sm text-slate-600 dark:border-slate-600 dark:text-slate-400"
+        data-testid="song-detail-not-found"
+      >
+        {{ t(errorKey() ?? 'songDetail.not_found') }}
+      </div>
+    }
+    @case ('error') {
+      <div
+        class="mt-6 flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+        data-testid="song-detail-error"
+        role="alert"
+      >
+        <p class="m-0" data-testid="song-detail-error-message">{{ t(errorKey() ?? 'songs.errors.load_failed') }}</p>
+        <button
+          type="button"
+          class="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+          data-testid="song-detail-retry"
+          (click)="retry()"
+        >
+          {{ t('songs.retry') }}
+        </button>
+      </div>
+    }
+    @case ('session_expired') {
+      <p
+        class="mt-6 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+        data-testid="song-detail-session-expired"
+        role="status"
+      >
+        {{ t(errorKey() ?? 'songs.errors.session_expired') }}
+        <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songs.login_again') }}</a>
+      </p>
+    }
+  }
+</div>

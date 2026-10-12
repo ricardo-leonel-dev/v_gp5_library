@@ -35,3 +35,54 @@ export interface Song {
   readonly updatedAt?: string;
   readonly presets: readonly SongPreset[];
 }
+
+// F26 R24. Mirrors the non-preset rows in `GET /songs/:id`'s `files`
+// array (backend `SongFileDto` with `kind` filtered out to non-preset
+// kinds — backend `song-service.ts:323`). `presets` are not returned
+// here; they live on the inherited `Song.presets`.
+export interface SongFile {
+  readonly id: string;
+  readonly kind: 'ir' | 'nam' | 'cover';
+  readonly originalFilename: string;
+  readonly mimeType: string;
+  readonly byteSize: number;
+  readonly sortOrder: number;
+  readonly createdAt: string;
+}
+
+// F26 R26, R27, R35. Detail DTO — `Song` plus the `files` array that
+// the list DTO omits. The list DTO has no cover indicator today
+// (`backend/src/songs/song-service.ts:51-59`); `coverHintForListSong`
+// returns `undefined` until a `hasCover` field is added to `SongDto`
+// (proposed backend card — design §4).
+export interface SongDetail extends Song {
+  readonly files: readonly SongFile[];
+}
+
+// F26 R31, R80. Pure: never mutates input. Returns a new array sorted
+// by `sortOrder` ascending.
+export function orderedPresets(presets: readonly SongPreset[]): SongPreset[] {
+  return presets.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+// F26 R35, R36. The detail page uses this to decide whether to
+// request `/files/cover` (R35) or render the placeholder with no
+// request (R36).
+export function hasCoverFile(files: readonly SongFile[]): boolean {
+  return files.some((f) => f.kind === 'cover');
+}
+
+// F26 R7, R8, R30. Blank = `null`, empty, or only whitespace.
+export function isBlank(value: string | null | undefined): value is undefined {
+  return value === null || value === undefined || value.trim() === '';
+}
+
+// F26 R13, R35, R36. The list DTO has no cover indicator today
+// (backend F15), so the library always requests the cover and treats
+// 404 as "none" (R14/R17). When the backend gains a `hasCover`
+// field on `SongDto`, this function returns it and the rest of the
+// pipeline (none) already handles both branches. No component, template
+// or API change required.
+export function coverHintForListSong(_song: Song): boolean | undefined {
+  return undefined;
+}
