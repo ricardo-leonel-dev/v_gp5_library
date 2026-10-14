@@ -54,14 +54,112 @@
           data-testid="song-detail-presets"
         >
           @for (p of presets(); track p.id; let i = $index) {
-            <li
-              class="grid grid-cols-[1.5rem_1fr] items-baseline gap-x-2 px-3 py-2.5"
-              data-testid="song-preset-row"
-            >
-              <span class="text-right text-sm font-semibold tabular-nums text-slate-400 dark:text-slate-500" aria-hidden="true">
-                {{ i + 1 }}
-              </span>
-              <span class="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{{ p.name }}</span>
+            <li data-testid="song-preset-row">
+              <button
+                type="button"
+                class="grid w-full grid-cols-[1.5rem_1fr_auto] items-center gap-x-2 px-3 py-2.5 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-indigo-500 dark:hover:bg-slate-700/40 dark:focus-visible:bg-slate-700/40"
+                [attr.aria-expanded]="isExpanded(p.sortOrder)"
+                [attr.aria-controls]="'song-preset-panel-' + p.sortOrder"
+                [attr.aria-label]="isExpanded(p.sortOrder)
+                  ? t('songDetail.hide_chain_aria', { name: p.name })
+                  : t('songDetail.view_chain_aria', { name: p.name })"
+                [attr.data-testid]="'song-preset-toggle-' + p.sortOrder"
+                (click)="toggleRow(p.sortOrder, p.name)"
+              >
+                <span class="text-right text-sm font-semibold tabular-nums text-slate-400 dark:text-slate-500" aria-hidden="true">
+                  {{ i + 1 }}
+                </span>
+                <span class="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{{ p.name }}</span>
+                <svg
+                  viewBox="0 0 16 16"
+                  class="size-4 shrink-0 text-slate-400 transition-transform motion-reduce:transition-none dark:text-slate-500"
+                  [class.rotate-180]="isExpanded(p.sortOrder)"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6 L8 11 L13 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+              <!-- F30 — read-only chain board beneath the row. The same
+                   chain-board component is used on /pedal/presets so the
+                   visual model matches across pages; no edit / duplicate /
+                   export / write-to-pedal actions here (F27 owns those). -->
+              @if (isExpanded(p.sortOrder)) {
+                <div
+                  [id]="'song-preset-panel-' + p.sortOrder"
+                  role="region"
+                  class="border-t border-slate-100 px-3 py-4 dark:border-slate-700/50"
+                  data-testid="song-preset-panel"
+                >
+                  <p class="mb-2 text-sm font-medium text-slate-900 dark:text-slate-100" data-testid="song-preset-headline">
+                    {{ chainHeadline() }}
+                  </p>
+                  @switch (expandedStatus()) {
+                    @case ('loading') {
+                      <div
+                        class="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-3 text-xs text-slate-500 dark:bg-slate-900/40 dark:text-slate-400 motion-reduce:animate-none"
+                        data-testid="song-preset-loading"
+                        aria-live="polite"
+                        aria-busy="true"
+                      >
+                        <span class="size-2 animate-pulse rounded-full bg-slate-400 dark:bg-slate-500 motion-reduce:animate-none" aria-hidden="true"></span>
+                        <span>{{ t('songDetail.chain_loading') }}</span>
+                      </div>
+                    }
+                    @case ('failed') {
+                      <div
+                        class="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+                        data-testid="song-preset-load-failed"
+                        role="alert"
+                      >
+                        <span class="min-w-0 truncate">{{ t(decodeErrorKey()) }}</span>
+                        <button
+                          type="button"
+                          class="shrink-0 rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+                          [attr.data-testid]="'song-preset-retry-' + p.sortOrder"
+                          (click)="retryChain()"
+                        >
+                          {{ t('songDetail.chain_retry') }}
+                        </button>
+                      </div>
+                    }
+                    @case ('invalid') {
+                      <p
+                        class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+                        data-testid="song-preset-invalid"
+                        role="status"
+                      >
+                        {{ t('songDetail.chain_invalid') }}
+                      </p>
+                    }
+                    @case ('loaded') {
+                      @if (expanded(); as e) {
+                        <div class="flex flex-col gap-3 lg:flex-row lg:items-start">
+                          <div class="min-w-0 lg:flex-[3]">
+                            <app-chain-board
+                              [chain]="e.chain"
+                              [presetName]="e.name"
+                              (blockClicked)="onBlockClicked(p.sortOrder, $event)"
+                            ></app-chain-board>
+                          </div>
+                          @if (e.selectedBlock; as block) {
+                            @if (block.slot) {
+                              <div class="min-w-0 lg:flex-[1]" data-testid="song-preset-block-detail">
+                                <app-block-detail
+                                  [slot]="block.slot"
+                                  (closed)="onBlockClicked(p.sortOrder, block)"
+                                ></app-block-detail>
+                              </div>
+                            }
+                          }
+                        </div>
+                        <p class="mt-2 text-[11px] text-slate-400 dark:text-slate-500" data-testid="song-preset-readonly-note">
+                          {{ t('songDetail.chain_unverified_footnote') }}
+                        </p>
+                      }
+                    }
+                  }
+                </div>
+              }
             </li>
           }
         </ol>
