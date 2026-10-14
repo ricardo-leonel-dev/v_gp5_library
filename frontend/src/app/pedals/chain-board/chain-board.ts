@@ -41,7 +41,7 @@ export function chassisKind(categoryIndex: number): PedalGlyphKind | null {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ChainBoard {
-  readonly chain = input.required<PresetSlot[]>();
+  readonly chain = input.required<readonly PresetSlot[]>();
   readonly selectedIndex = input<number | null>(null);
   // v5: each row's chain-board carries its own preset name so the
   // page can route the click to the right per-row block-detail panel.

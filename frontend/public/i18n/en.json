@@ -38,7 +38,16 @@
   "songDetail": {
     "presets_heading": "Presets, in running order",
     "reference_note": "Each name comes from the preset file itself and is for reference only: it is never compared with what your pedal holds now.",
-    "not_found": "This song doesn't exist or is no longer in your library."
+    "not_found": "This song doesn't exist or is no longer in your library.",
+    "view_chain": "View chain",
+    "hide_chain": "Hide chain",
+    "view_chain_aria": "View chain for preset {{name}}",
+    "hide_chain_aria": "Hide chain for preset {{name}}",
+    "chain_loading": "Loading preset…",
+    "chain_load_failed": "Couldn't read this preset. Try again.",
+    "chain_retry": "Try again",
+    "chain_invalid": "This preset is damaged and can't be shown.",
+    "chain_unverified_footnote": "This chain is read-only: names and page numbers come from the original preset, not from the pedal."
   },
   "pedalButton": {
     "connect": "Connect to GP-5",
