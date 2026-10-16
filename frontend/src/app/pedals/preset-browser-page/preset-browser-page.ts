@@ -20,6 +20,7 @@ import { BlockDetail } from '../block-detail/block-detail';
 import { MockPresetsStore } from '../mock-presets.store';
 import { SaveSongDialog } from '../../songs/save-song-dialog/save-song-dialog';
 import { PedalPresetsStore } from '../pedal-presets.store';
+import { UnsupportedBrowserMessage } from '../../shared/unsupported-browser-message/unsupported-browser-message';
 
 type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
 
@@ -38,7 +39,7 @@ interface SaveDialogState {
 // (R25-R27) opens when "Browse presets" is clicked.
 @Component({
   selector: 'app-preset-browser-page',
-  imports: [TranslocoDirective, ChainBoard, BlockDetail, SaveSongDialog],
+  imports: [TranslocoDirective, ChainBoard, BlockDetail, SaveSongDialog, UnsupportedBrowserMessage],
   templateUrl: './preset-browser-page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -50,6 +51,7 @@ export class PresetBrowserPage implements OnInit {
   readonly comparison = inject(PresetComparisonStore);
 
   readonly supported = this.pedal.isSupported();
+  readonly hasMockPresets = computed(() => this.mockPresets.presets().length > 0);
   readonly connectionState = this.pedal.connectionState;
   readonly restoreWarning = this.pedal.restoreWarning;
   readonly loadState = signal<LoadState>('idle');
@@ -251,6 +253,7 @@ export class PresetBrowserPage implements OnInit {
   // the shared store's read; the mirror effect picks up the transition
   // through loading → loaded/error.
   retryRead(): void {
+    if (!this.supported) return;
     void this.pedalPresets.read();
   }
 

@@ -181,7 +181,11 @@
             </p>
           }
 
-          @if (connectionState() !== 'connected') {
+          @if (!supported) {
+            <div class="rounded-md bg-slate-50 px-3 py-2 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
+              <app-unsupported-browser-message variant="compact" />
+            </div>
+          } @else if (connectionState() !== 'connected') {
             <div class="rounded-md bg-slate-50 px-3 py-2 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
               <p
                 class="text-sm text-slate-700 dark:text-slate-200"

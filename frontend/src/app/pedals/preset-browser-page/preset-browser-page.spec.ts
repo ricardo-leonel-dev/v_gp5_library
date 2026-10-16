@@ -124,6 +124,14 @@ const esTranslations = {
     c1: { f0: 'Compresor clásico' },
     c4: { f0: 'Amplificador tweed clásico' },
   },
+  unsupportedBrowser: {
+    title: 'Este navegador no puede conectarse al GP-5.',
+    body: 'Conectar el pedal y leer o escribir sus presets requiere Web MIDI.',
+    browsers: 'Abre la app en Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
+    footnote: 'Tus canciones guardadas siguen disponibles en este navegador.',
+    insecure_body: 'Esta página se abrió sin conexión segura (http://).',
+    insecure_compact: 'Ábrela desde una dirección https:// o desde localhost.',
+  },
 };
 
 type ReadPresetsResult = Promise<Preset[]>;
@@ -896,6 +904,95 @@ describe('PresetBrowserPage (v6)', () => {
     // Card itself is bounded by viewport height.
     const card = compiled.querySelector('[data-testid="picker-card"]') as HTMLElement;
     expect(card.className).toContain('max-h-[80vh]');
+  });
+});
+
+describe('PresetBrowserPage — F9 unsupported browser', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  async function mountUnsupported(opts: { mocks?: boolean } = {}) {
+    const fake = new FakePedal();
+    fake.isSupportedResult = false;
+    fake.setConnectionState('connected');
+    const httpMock = setup(fake);
+    const read = vi.spyOn(TestBed.inject(PedalPresetsStore), 'read');
+    const mockStore = TestBed.inject(MockPresetsStore);
+    if (opts.mocks) mockStore.load();
+    const component = TestBed.createComponent(PresetBrowserPage);
+    component.detectChanges();
+    flushI18n(httpMock);
+    component.detectChanges();
+    await component.whenStable();
+    component.detectChanges();
+    return { component, read, mockStore, compiled: component.nativeElement as HTMLElement };
+  }
+
+  function message(compiled: HTMLElement): HTMLElement | null {
+    return compiled.querySelector('[data-testid="unsupported-browser-message"]');
+  }
+
+  it('R14 — no test presets: full shared message replaces the old unsupported-message <p>', async () => {
+    const { compiled } = await mountUnsupported();
+    expect(message(compiled)).not.toBeNull();
+    expect(message(compiled)?.getAttribute('data-variant')).toBe('full');
+    expect(message(compiled)?.querySelector('h2')?.textContent).toContain('Este navegador no puede conectarse al GP-5.');
+    expect(compiled.querySelector('[data-testid="unsupported-message"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="preset-layout"]')).toBeNull();
+  });
+
+  it('R15 — unsupported: PedalPresetsStore.read() is not called on creation/ngOnInit, even when "connected"', async () => {
+    const { read } = await mountUnsupported();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('R26 — test presets loaded: compact message above the normal layout, picker lists the mock presets', async () => {
+    const { compiled, component, read } = await mountUnsupported({ mocks: true });
+    expect(message(compiled)?.getAttribute('data-variant')).toBe('compact');
+    expect(compiled.querySelectorAll('[data-testid="unsupported-browser-message"]')).toHaveLength(1);
+    expect(compiled.querySelector('h2')).toBeNull();
+    for (const id of ['preset-layout', 'chip-row', 'browse-presets', 'main-area']) {
+      expect(compiled.querySelector(`[data-testid="${id}"]`)).not.toBeNull();
+    }
+    // Compact message precedes the layout in document order.
+    const layout = compiled.querySelector('[data-testid="preset-layout"]')!;
+    expect(message(compiled)!.compareDocumentPosition(layout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    (compiled.querySelector('[data-testid="browse-presets"]') as HTMLButtonElement).click();
+    component.detectChanges();
+    const list = compiled.querySelector('[data-testid="picker-list"]') as HTMLElement;
+    expect(list).not.toBeNull();
+    expect(list.querySelector('[data-testid="picker-row-0"]')).not.toBeNull();
+    expect(list.querySelector('[data-testid="picker-row-5"]')).not.toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('R27 — loading test presets while the page is open switches full -> compact + layout without reload', async () => {
+    const { compiled, component, mockStore } = await mountUnsupported();
+    expect(message(compiled)?.getAttribute('data-variant')).toBe('full');
+
+    mockStore.load();
+    component.detectChanges();
+    await component.whenStable();
+    component.detectChanges();
+
+    expect(message(compiled)?.getAttribute('data-variant')).toBe('compact');
+    expect(compiled.querySelector('[data-testid="preset-layout"]')).not.toBeNull();
+    expect(compiled.querySelector('h2')).toBeNull();
+  });
+
+  it('R28 — no not-connected-message (with or without test presets) and retryRead() never reads', async () => {
+    const withMocks = await mountUnsupported({ mocks: true });
+    expect(withMocks.compiled.querySelector('[data-testid="not-connected-message"]')).toBeNull();
+    withMocks.component.componentInstance.retryRead();
+    expect(withMocks.read).not.toHaveBeenCalled();
+
+    TestBed.resetTestingModule();
+    const empty = await mountUnsupported();
+    expect(empty.compiled.querySelector('[data-testid="not-connected-message"]')).toBeNull();
+    empty.component.componentInstance.retryRead();
+    expect(empty.read).not.toHaveBeenCalled();
   });
 });
 

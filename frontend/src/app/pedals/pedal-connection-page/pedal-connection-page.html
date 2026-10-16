@@ -2,7 +2,7 @@
   <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ t('pedal.title') }}</h1>
 
   @if (!supported) {
-    <p class="mt-4 text-sm text-slate-600 dark:text-slate-400">{{ t('pedal.unsupported') }}</p>
+    <app-unsupported-browser-message />
   } @else {
     <button
       type="button"

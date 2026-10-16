@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error - node types not in tsconfig
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 // @ts-expect-error - node types not in tsconfig
 import { join } from 'path';
 
@@ -233,5 +233,86 @@ describe('i18n parity under songDetail / pedalButton / new F26 sources (F26 R62)
     expect(getLeafValue(en, 'writeToPedal.not_connected')).toBe(
       'Connect your GP-5 to write to the pedal.',
     );
+  });
+});
+
+describe('i18n parity — F9 unsupportedBrowser', () => {
+  const en = loadTranslations('en');
+  const es = loadTranslations('es');
+  const cwd = (globalThis as { process?: { cwd(): string } }).process?.cwd() ?? '.';
+  const COMPONENT_HTML = 'src/app/shared/unsupported-browser-message/unsupported-browser-message.html';
+
+  it('R23 — en and es have identical non-empty leaf paths under unsupportedBrowser', () => {
+    const enPaths = leafPathsForNamespace(en, 'unsupportedBrowser');
+    const esPaths = leafPathsForNamespace(es, 'unsupportedBrowser');
+    expect(esPaths).toEqual(enPaths);
+    expect(enPaths.length).toBeGreaterThan(0);
+    for (const json of [en, es]) {
+      for (const path of enPaths) {
+        const v = getLeafValue(json, path);
+        expect(typeof v).toBe('string');
+        expect((v as string).length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('R24 — every unsupportedBrowser|pedal|pedalButton key in the F9-touched templates resolves in en and es', () => {
+    const sources = [
+      COMPONENT_HTML,
+      'src/app/pedals/pedal-connection-page/pedal-connection-page.html',
+      'src/app/pedals/preset-browser-page/preset-browser-page.html',
+      'src/app/songs/write-to-pedal-dialog/write-to-pedal-dialog.html',
+      'src/app/songs/songs-page/songs-page.html',
+      'src/app/pedals/pedal-connect-button/pedal-connect-button.html',
+      'src/app/app.html',
+    ];
+    const keys = new Set<string>();
+    for (const file of sources) {
+      const text = readFileSync(join(cwd, file), 'utf8') as string;
+      for (const m of text.matchAll(/'((?:unsupportedBrowser|pedalButton|pedal)\.[A-Za-z_.]+)'/g)) {
+        keys.add(m[1]!);
+      }
+    }
+    expect(keys.has('unsupportedBrowser.title')).toBe(true);
+    for (const lang of ['en', 'es'] as const) {
+      const json = lang === 'en' ? en : es;
+      for (const key of keys) {
+        expect({ lang, key, type: typeof getLeafValue(json, key) }).toEqual({ lang, key, type: 'string' });
+      }
+    }
+  });
+
+  it('R25 — pedal.unsupported and pedalButton.unsupported_hint stay non-empty in en and es', () => {
+    for (const json of [en, es]) {
+      for (const key of ['pedal.unsupported', 'pedalButton.unsupported_hint']) {
+        const v = getLeafValue(json, key);
+        expect(typeof v).toBe('string');
+        expect((v as string).length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('R10 — only the shared component template references unsupportedBrowser.* under src/app/', () => {
+    const offenders: string[] = [];
+    let scanned = 0;
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(join(cwd, dir)) as string[]) {
+        const rel = `${dir}/${entry}`;
+        if (statSync(join(cwd, rel)).isDirectory()) {
+          walk(rel);
+          continue;
+        }
+        if (!/\.(html|ts)$/.test(rel) || rel.endsWith('.spec.ts')) continue;
+        scanned++;
+        if (rel === COMPONENT_HTML) continue;
+        if ((readFileSync(join(cwd, rel), 'utf8') as string).includes('unsupportedBrowser.')) {
+          offenders.push(rel);
+        }
+      }
+    };
+    walk('src/app');
+    expect(scanned).toBeGreaterThan(10);
+    expect(readFileSync(join(cwd, COMPONENT_HTML), 'utf8')).toContain('unsupportedBrowser.');
+    expect(offenders).toEqual([]);
   });
 });

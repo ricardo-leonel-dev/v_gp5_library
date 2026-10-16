@@ -42,6 +42,14 @@ const esTranslations = {
     unknown: 'No se pudo conectar con el pedal.',
     view_presets: 'Ver presets',
   },
+  unsupportedBrowser: {
+    title: 'Este navegador no puede conectarse al GP-5.',
+    body: 'Conectar el pedal y leer o escribir sus presets requiere Web MIDI.',
+    browsers: 'Abre la app en Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
+    footnote: 'Tus canciones guardadas siguen disponibles en este navegador.',
+    insecure_body: 'Esta página se abrió sin conexión segura (http://).',
+    insecure_compact: 'Ábrela desde una dirección https:// o desde localhost.',
+  },
 };
 
 class FakePedal {
@@ -93,7 +101,7 @@ describe('PedalConnectionPage', () => {
     TestBed.resetTestingModule();
   });
 
-  it('renders the unsupported message instead of the connect control when isSupported() is false (R12)', () => {
+  it('F9 R11, R12 — unsupported: <h1> + shared message, no connect/state/presets/error controls', () => {
     const fake = new FakePedal();
     fake.isSupportedResult = false;
     const httpMock = setup(fake);
@@ -104,8 +112,36 @@ describe('PedalConnectionPage', () => {
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('h1')?.textContent).toContain('Conexión del pedal');
+    const message = compiled.querySelector('[data-testid="unsupported-browser-message"]');
+    expect(message).not.toBeNull();
+    expect(message?.getAttribute('data-variant')).toBe('full');
+    expect(message?.querySelector('h2')?.textContent).toContain('Este navegador no puede conectarse al GP-5.');
     expect(compiled.querySelector('[data-testid="connect-button"]')).toBeNull();
-    expect(compiled.textContent).toContain('Tu navegador no soporta la Web MIDI API');
+    expect(compiled.querySelector('[data-testid="connection-state"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="presets-link"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="connection-error"]')).toBeNull();
+    expect(compiled.textContent).not.toContain('Tu navegador no soporta la Web MIDI API');
+  });
+
+  it('F9 R13 — supported but MIDI access denied: connection-error, no unsupported message', async () => {
+    const fake = new FakePedal();
+    fake.connectError = 'midi_access_denied';
+    const httpMock = setup(fake);
+
+    const fixture = TestBed.createComponent(PedalConnectionPage);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector('[data-testid="connect-button"]') as HTMLButtonElement;
+    button.click();
+    await fixture.componentInstance.connect();
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('[data-testid="connection-error"]')?.textContent).toContain('Se denegó el acceso MIDI');
+    expect(compiled.querySelector('[data-testid="unsupported-browser-message"]')).toBeNull();
   });
 
   it('renders the connect control and the translated state label when Web MIDI is supported (R11)', () => {
@@ -120,6 +156,7 @@ describe('PedalConnectionPage', () => {
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('[data-testid="connect-button"]')).not.toBeNull();
     expect(compiled.querySelector('[data-testid="connection-state"]')?.textContent).toContain('No conectado');
+    expect(compiled.querySelector('[data-testid="unsupported-browser-message"]')).toBeNull();
   });
 
   it('calls connect() when the button is clicked and reflects the connected state (R11, R6)', async () => {

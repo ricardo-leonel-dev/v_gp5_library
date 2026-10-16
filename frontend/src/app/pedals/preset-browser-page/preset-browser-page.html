@@ -1,9 +1,12 @@
 <div *transloco="let t" class="mx-auto max-w-6xl py-6">
-  @if (!supported) {
-    <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="unsupported-message">
-      {{ t('pedal.unsupported') }}
-    </p>
+  @if (!supported && !hasMockPresets()) {
+    <app-unsupported-browser-message />
   } @else {
+    @if (!supported) {
+      <div class="mt-4 px-4">
+        <app-unsupported-browser-message variant="compact" />
+      </div>
+    }
     @if (loadState() === 'loading') {
       <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="loading">
         {{ t('presetBrowser.loading') }}
@@ -56,7 +59,7 @@
         >{{ t('presetBrowser.dismiss_status') }}</button>
       </div>
     }
-    @if (connectionState() !== 'connected' && presets().length === 0) {
+    @if (supported && connectionState() !== 'connected' && presets().length === 0) {
       <p class="mt-4 px-4 text-sm text-slate-600 dark:text-slate-400" data-testid="not-connected-message">
         {{ t('presetBrowser.not_connected') }}
       </p>

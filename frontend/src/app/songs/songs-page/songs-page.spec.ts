@@ -15,6 +15,14 @@ import { Gp5SysexPresetCodec } from '../../midi/gp5-sysex-preset-codec';
 // Inline i18n fixture — Transloco's HTTP loader doesn't run in jsdom, so
 // the F4 spec uses an in-memory loader (mirrored here).
 const minimalTranslations: Translation = {
+  unsupportedBrowser: {
+    title: "This browser can't connect to the GP-5.",
+    body: 'Connecting the pedal needs Web MIDI.',
+    browsers: 'Open the app in Chrome, Edge, Opera, Samsung Internet, or Firefox 108+.',
+    footnote: 'Your saved songs are still available in this browser.',
+    insecure_body: 'This page was opened over an insecure connection (http://).',
+    insecure_compact: 'Open it from an https:// address or from localhost.',
+  },
   songs: {
     title: 'My songs',
     loading: 'Loading your songs…',
@@ -514,17 +522,20 @@ function setupF26(opts: {
   savable?: Preset[];
   mocks?: Preset[];
   navSpy?: ReturnType<typeof vi.fn>;
+  supported?: boolean;
 } = {}): {
   httpMock: HttpTestingController;
+  pedal: { connect: ReturnType<typeof vi.fn>; readPresets: ReturnType<typeof vi.fn> };
   pedalPresets: { savableSnapshot: () => Preset[]; presets: ReturnType<typeof signal<Preset[]>>; loadState: ReturnType<typeof signal<string>>; read: () => Promise<void> };
   connectFlow: { start: () => Promise<void>; error: ReturnType<typeof signal<string | null>> };
   mocks: { load: () => void };
   navSpy: ReturnType<typeof vi.fn>;
 } {
   const pedalState = opts.pedalState ?? 'not-connected';
+  const supported = opts.supported ?? true;
   const pedal = {
     connectionState: signal(pedalState),
-    isSupported: vi.fn(() => true),
+    isSupported: vi.fn(() => supported),
     connect: vi.fn(),
     readPresets: vi.fn(),
   } as unknown as WebMidiPedalConnection;
@@ -546,6 +557,7 @@ function setupF26(opts: {
     },
   };
   const connectFlow = {
+    supported,
     start: vi.fn().mockResolvedValue(undefined),
     error: signal<string | null>(null),
   };
@@ -573,6 +585,7 @@ function setupF26(opts: {
   });
   return {
     httpMock: TestBed.inject(HttpTestingController),
+    pedal: pedal as unknown as { connect: ReturnType<typeof vi.fn>; readPresets: ReturnType<typeof vi.fn> },
     pedalPresets: pedalPresets as unknown as { savableSnapshot: () => Preset[]; presets: ReturnType<typeof signal<Preset[]>>; loadState: ReturnType<typeof signal<string>>; read: () => Promise<void> },
     connectFlow: connectFlow as unknown as { start: () => Promise<void>; error: ReturnType<typeof signal<string | null>> },
     mocks: mocks as unknown as { load: () => void },
@@ -745,6 +758,7 @@ describe('SongsPage (F26 R2-R25, R75-R78, R80)', () => {
     const root = fixture.nativeElement as HTMLElement;
     const empty = root.querySelector('[data-testid="songs-empty"]')!;
     expect(empty.textContent).toContain('No songs yet');
+    expect(root.querySelector('[data-testid="unsupported-browser-message"]')).toBeNull();
     const cta = root.querySelector<HTMLButtonElement>('[data-testid="songs-empty-connect"]')!;
     cta.click();
     await Promise.resolve();
@@ -1132,5 +1146,64 @@ describe('SongsPage (F26 R2-R25, R75-R78, R80)', () => {
     expect(rows[0]?.getAttribute('aria-label')).toContain('Position 1');
     expect(rows[1]?.textContent).toContain('Second');
     expect(rows[1]?.getAttribute('aria-label')).toContain('Position 2');
+  });
+});
+
+describe('SongsPage — F9 unsupported browser', () => {
+  const twoSongs: Song[] = [
+    { id: 'song-1', name: 'One', presets: [{ id: 'p0', sortOrder: 0, name: 'A' }] },
+    { id: 'song-2', name: 'Two', presets: [{ id: 'p0', sortOrder: 0, name: 'B' }] },
+  ];
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  async function mountUnsupported(
+    respond: (req: ReturnType<HttpTestingController['expectOne']>) => void,
+  ) {
+    const setup = setupF26({ supported: false });
+    const fixture = TestBed.createComponent(SongsPage);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    respond(setup.httpMock.expectOne(`${environment.apiBaseUrl}/songs`));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { ...setup, fixture, root: fixture.nativeElement as HTMLElement };
+  }
+
+  function expectNoPedalIo(s: Awaited<ReturnType<typeof mountUnsupported>>): void {
+    expect(s.pedal.connect).not.toHaveBeenCalled();
+    expect(s.pedal.readPresets).not.toHaveBeenCalled();
+    expect(s.pedalPresets.read).not.toHaveBeenCalled();
+    expect(s.connectFlow.start).not.toHaveBeenCalled();
+  }
+
+  test('R19, R21 — empty library: compact message replaces the connect CTA; no pedal I/O', async () => {
+    const s = await mountUnsupported((req) => req.flush([]));
+    const empty = s.root.querySelector('[data-testid="songs-empty"]')!;
+    expect(empty).not.toBeNull();
+    const message = empty.querySelector('[data-testid="unsupported-browser-message"]');
+    expect(message).not.toBeNull();
+    expect(message?.getAttribute('data-variant')).toBe('compact');
+    expect(message?.textContent).toContain("This browser can't connect to the GP-5.");
+    expect(s.root.querySelector('[data-testid="songs-empty-connect"]')).toBeNull();
+    expectNoPedalIo(s);
+  });
+
+  test('R20, R21 — songs returned: one song-card per song, no unsupported message, no pedal I/O', async () => {
+    const s = await mountUnsupported((req) => req.flush(twoSongs));
+    expect(s.root.querySelectorAll('[data-testid="song-card"]')).toHaveLength(2);
+    expect(s.root.querySelector('[data-testid="unsupported-browser-message"]')).toBeNull();
+    expectNoPedalIo(s);
+  });
+
+  test('R21 — load error: error state renders, no pedal I/O', async () => {
+    const s = await mountUnsupported((req) =>
+      req.flush('boom', { status: 500, statusText: 'Server Error' }),
+    );
+    expect(s.root.querySelector('[data-testid="songs-error-message"]')).not.toBeNull();
+    expectNoPedalIo(s);
   });
 });

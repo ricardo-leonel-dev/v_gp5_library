@@ -35,6 +35,7 @@ import { SaveSongDialog } from '../save-song-dialog/save-song-dialog';
 import { SongCover } from '../song-cover/song-cover';
 import { PedalPresetsStore } from '../../pedals/pedal-presets.store';
 import { PedalConnectFlow } from '../../pedals/pedal-connect-flow.service';
+import { UnsupportedBrowserMessage } from '../../shared/unsupported-browser-message/unsupported-browser-message';
 
 type LibraryState = 'loading' | 'loaded' | 'error' | 'session_expired' | 'empty';
 
@@ -46,6 +47,7 @@ type LibraryState = 'loading' | 'loaded' | 'error' | 'session_expired' | 'empty'
     WriteToPedalDialog,
     SaveSongDialog,
     SongCover,
+    UnsupportedBrowserMessage,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './songs-page.html',
@@ -55,6 +57,8 @@ export class SongsPage {
   private readonly pedalPresets = inject(PedalPresetsStore);
   private readonly connectFlow = inject(PedalConnectFlow);
   private readonly router = inject(Router);
+
+  readonly supported = this.connectFlow.supported;
 
   readonly state = signal<LibraryState>('loading');
   readonly songs = signal<readonly Song[]>([]);

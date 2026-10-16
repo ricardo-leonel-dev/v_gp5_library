@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router';
 import { TranslocoDirective } from '@jsverse/transloco';
 import type { PedalConnectionState } from '../../midi/pedal-connection';
 import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
+import { UnsupportedBrowserMessage } from '../../shared/unsupported-browser-message/unsupported-browser-message';
 
 const STATE_LABEL_KEYS: Record<PedalConnectionState, string> = {
   'not-connected': 'state_not_connected',
@@ -13,7 +14,7 @@ const STATE_LABEL_KEYS: Record<PedalConnectionState, string> = {
 
 @Component({
   selector: 'app-pedal-connection-page',
-  imports: [RouterLink, TranslocoDirective],
+  imports: [RouterLink, TranslocoDirective, UnsupportedBrowserMessage],
   templateUrl: './pedal-connection-page.html',
 })
 export class PedalConnectionPage {
