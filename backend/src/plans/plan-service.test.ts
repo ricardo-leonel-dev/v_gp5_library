@@ -5,6 +5,7 @@ import {
   PlanError,
   PlanLimitError,
   checkPlanLimits,
+  checkPresetsPerSongLimit,
   getPlanSummary,
   isPlan,
   setUserPlan,
@@ -74,6 +75,24 @@ describe("checkPlanLimits", () => {
 
   test("premium: 100 songs, 50 presets is allowed (R10)", () => {
     expect(() => checkPlanLimits("premium", 100, 50)).not.toThrow();
+  });
+});
+
+describe("checkPresetsPerSongLimit (F21 T1)", () => {
+  test("free: 1 preset is allowed, 2 throws plan_preset_limit with limit 1", () => {
+    expect(() => checkPresetsPerSongLimit("free", 1)).not.toThrow();
+    expectLimitError(() => checkPresetsPerSongLimit("free", 2), "plan_preset_limit", "free", 1);
+  });
+
+  test("basic: 2 presets is allowed, 3 throws plan_preset_limit with limit 2", () => {
+    expect(() => checkPresetsPerSongLimit("basic", 2)).not.toThrow();
+    expectLimitError(() => checkPresetsPerSongLimit("basic", 3), "plan_preset_limit", "basic", 2);
+  });
+
+  test("premium: never throws, regardless of preset count", () => {
+    for (const n of [0, 1, 5, 100, 1_000_000]) {
+      expect(() => checkPresetsPerSongLimit("premium", n)).not.toThrow();
+    }
   });
 });
 

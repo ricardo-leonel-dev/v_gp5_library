@@ -1,6 +1,6 @@
 import type { CreateSongInput, UploadedFile } from "./song-service";
 
-type FormValue = string | File | (string | File)[] | undefined;
+export type FormValue = string | File | (string | File)[] | undefined;
 
 async function toUploadedFiles(value: FormValue): Promise<UploadedFile[]> {
   const entries = value === undefined ? [] : Array.isArray(value) ? value : [value];
@@ -30,4 +30,13 @@ export async function parseCreateSongMultipart(
     nam: await toUploadedFiles(body.nam),
     cover: await toUploadedFiles(body.cover),
   };
+}
+
+// F21 R14, R15, R27: extracts only `preset` file parts from the body. A `preset`
+// part sent as a plain string is not a preset part (filter `toUploadedFiles`
+// already drops non-File values), so it counts as zero parts -> 400 in the route.
+export async function parsePresetMultipart(
+  body: Record<string, FormValue>,
+): Promise<UploadedFile[]> {
+  return toUploadedFiles(body.preset);
 }

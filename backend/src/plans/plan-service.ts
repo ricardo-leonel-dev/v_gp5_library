@@ -65,6 +65,18 @@ export async function countLiveSongs(db: SQL, userId: string): Promise<number> {
   return row!.count;
 }
 
+export function checkPresetsPerSongLimit(plan: Plan, presetCount: number): void {
+  const limits = PLAN_LIMITS[plan];
+  if (limits.presetsPerSong !== null && presetCount > limits.presetsPerSong) {
+    throw new PlanLimitError(
+      `plan '${plan}' is limited to ${limits.presetsPerSong} presets per song`,
+      "plan_preset_limit",
+      plan,
+      limits.presetsPerSong,
+    );
+  }
+}
+
 export function checkPlanLimits(plan: Plan, liveSongCount: number, presetCount: number): void {
   const limits = PLAN_LIMITS[plan];
   if (limits.songs !== null && liveSongCount >= limits.songs) {
@@ -75,14 +87,7 @@ export function checkPlanLimits(plan: Plan, liveSongCount: number, presetCount: 
       limits.songs,
     );
   }
-  if (limits.presetsPerSong !== null && presetCount > limits.presetsPerSong) {
-    throw new PlanLimitError(
-      `plan '${plan}' is limited to ${limits.presetsPerSong} presets per song`,
-      "plan_preset_limit",
-      plan,
-      limits.presetsPerSong,
-    );
-  }
+  checkPresetsPerSongLimit(plan, presetCount);
 }
 
 export async function getPlanSummary(userId: string): Promise<PlanSummaryDto> {

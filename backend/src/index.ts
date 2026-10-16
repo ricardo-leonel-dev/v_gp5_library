@@ -8,8 +8,18 @@ import { jsonNotFound } from "./middleware/not-found";
 import { createUnknownRouteGuard } from "./middleware/unknown-route-guard";
 import { resolveAllowedOrigins } from "./config/stage";
 import { register, login, getMe, findUserByEmail, AuthError } from "./auth/user-service";
-import { createSong, listSongs, getSongById, deleteSong, getSongFile, SongError } from "./songs/song-service";
-import { parseCreateSongMultipart } from "./songs/parse-multipart";
+import {
+  addSongPreset,
+  createSong,
+  deleteSong,
+  deleteSongPreset,
+  getSongById,
+  getSongFile,
+  listSongs,
+  replaceSongPreset,
+  SongError,
+} from "./songs/song-service";
+import { parseCreateSongMultipart, parsePresetMultipart, type FormValue } from "./songs/parse-multipart";
 import { createPedal, listPedals, PedalError } from "./pedals/pedal-service";
 import { getPlanSummary, setUserPlan, PlanError, PlanLimitError } from "./plans/plan-service";
 import { parseCreatePedalMultipart } from "./pedals/parse-multipart";
@@ -116,6 +126,52 @@ protectedRouter.get("/songs/:id", async (c) => {
 protectedRouter.delete("/songs/:id", async (c) => {
   try {
     await deleteSong(c.get("userId"), c.req.param("id"));
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.post("/songs/:id/presets", async (c) => {
+  const body = await c.req.parseBody({ all: true });
+  const files = await parsePresetMultipart(body as Record<string, FormValue>);
+  try {
+    const preset = await addSongPreset(c.get("userId"), c.req.param("id"), files);
+    return c.json(preset, 201);
+  } catch (err) {
+    if (err instanceof PlanLimitError) {
+      return c.json({ error: err.message, code: err.code, plan: err.plan, limit: err.limit }, 402);
+    }
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.put("/songs/:id/presets/:sortOrder", async (c) => {
+  const body = await c.req.parseBody({ all: true });
+  const files = await parsePresetMultipart(body as Record<string, FormValue>);
+  try {
+    const preset = await replaceSongPreset(
+      c.get("userId"),
+      c.req.param("id"),
+      c.req.param("sortOrder"),
+      files,
+    );
+    return c.json(preset, 200);
+  } catch (err) {
+    if (err instanceof SongError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.delete("/songs/:id/presets/:sortOrder", async (c) => {
+  try {
+    await deleteSongPreset(
+      c.get("userId"),
+      c.req.param("id"),
+      c.req.param("sortOrder"),
+    );
     return c.body(null, 204);
   } catch (err) {
     if (err instanceof SongError) return c.json({ error: err.message }, err.status);

@@ -1185,3 +1185,216 @@ describe("block_soft_deleted_users_auth — protected routes lose access on soft
     expect(await res.json()).toEqual({ error: "Invalid or expired token" });
   });
 });
+
+// F21: HTTP-level tests for POST/PUT/DELETE /songs/:id/presets[/:sortOrder].
+
+function newNamePreset(name: string, filename = "new.prst"): File {
+  const bytes = new Uint8Array(fixtureBytes[0]!);
+  bytes[25] = 0;
+  for (let i = 0; i < 16; i++) bytes[25 + i] = 0;
+  for (let i = 0; i < Math.min(name.length, 16); i++) bytes[25 + i] = name.charCodeAt(i);
+  return new File([bytes], filename, { type: "application/octet-stream" });
+}
+
+describe("POST /songs/:id/presets auth (F21 R1)", () => {
+  test("without bearer token -> 401", async () => {
+    const fd = new FormData();
+    fd.append("preset", presetPart());
+    const res = await app.request(`/songs/${crypto.randomUUID()}/presets`, {
+      method: "POST",
+      body: fd,
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("PUT /songs/:id/presets/:sortOrder auth (F21 R1)", () => {
+  test("without bearer token -> 401", async () => {
+    const fd = new FormData();
+    fd.append("preset", presetPart());
+    const res = await app.request(`/songs/${crypto.randomUUID()}/presets/0`, {
+      method: "PUT",
+      body: fd,
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("DELETE /songs/:id/presets/:sortOrder auth (F21 R1)", () => {
+  test("without bearer token -> 401", async () => {
+    const res = await app.request(`/songs/${crypto.randomUUID()}/presets/0`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("GET/PATCH on the new preset routes return 404 with token (F21 R8)", () => {
+  test("GET/PUT/DELETE /songs/:id/presets and GET/POST/PATCH /songs/:id/presets/0 with a valid token -> 404 JSON, presets unchanged", async () => {
+    const { token } = await makeUserToken("f21-methods");
+    const song = await createThreePresetSong(token);
+    const auth = { Authorization: `Bearer ${token}` };
+    const db = getDb();
+    const snapshot = () =>
+      db<{ id: string; sort_order: number }[]>`
+        SELECT id, sort_order FROM song_files
+        WHERE song_id = ${song.id} AND kind = 'preset' AND deleted_at IS NULL
+        ORDER BY sort_order
+      `;
+    const before = await snapshot();
+
+    const attempts: Array<[string, string]> = [
+      ["GET", `/songs/${song.id}/presets`],
+      ["PUT", `/songs/${song.id}/presets`],
+      ["DELETE", `/songs/${song.id}/presets`],
+      ["GET", `/songs/${song.id}/presets/0`],
+      ["POST", `/songs/${song.id}/presets/0`],
+      ["PATCH", `/songs/${song.id}/presets/0`],
+    ];
+    for (const [method, url] of attempts) {
+      const fd = new FormData();
+      fd.append("preset", presetPart(2, "p.prst"));
+      const res = await app.request(url, { method, headers: auth, body: fd });
+      expect([method, url, res.status]).toEqual([method, url, 404]);
+      expect(await res.json()).toEqual({ error: "Not found" });
+    }
+
+    expect(await snapshot()).toEqual(before);
+  });
+});
+
+describe("POST/PUT/DELETE /songs/:id/presets round trip (F21 R5, R9, R24, R33)", () => {
+  test("end-to-end: POST 201 -> PUT 200 -> DELETE 204 -> GET /songs/:id shows expected presets, error bodies are {error}", async () => {
+    const db = getDb();
+    const email = `f21-e2e-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', 'premium') RETURNING id
+    `;
+    const token = await issueToken(user.id, "premium");
+
+    const seedFd = new FormData();
+    seedFd.append("name", "Round Trip");
+    for (const i of [0, 1]) seedFd.append("preset", presetPart(i, PRESET_FIXTURES[i]!.file));
+    const createRes = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: seedFd,
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as SongBody;
+    expect(created.presets.map((p) => p.sortOrder)).toEqual([0, 1]);
+
+    const auth = { Authorization: `Bearer ${token}` };
+
+    // POST: add a 3rd preset (new name).
+    const addFd = new FormData();
+    addFd.append("preset", newNamePreset("TL ADDED", "added.prst"));
+    const addRes = await app.request(`/songs/${created.id}/presets`, {
+      method: "POST",
+      headers: auth,
+      body: addFd,
+    });
+    expect(addRes.status).toBe(201);
+    const added = (await addRes.json()) as PresetBody;
+    expect(added.sortOrder).toBe(2);
+    expect(added.name).toBe("TL ADDED");
+    expect(added.originalFilename).toBe("added.prst");
+    expect(Object.keys(added).sort()).toEqual([
+      "byteSize", "createdAt", "id", "mimeType", "name", "originalFilename", "sortOrder",
+    ]);
+
+    // PUT: replace sortOrder 0 with a different name.
+    const putFd = new FormData();
+    putFd.append("preset", newNamePreset("TL REPLACED", "rep.prst"));
+    const putRes = await app.request(`/songs/${created.id}/presets/0`, {
+      method: "PUT",
+      headers: auth,
+      body: putFd,
+    });
+    expect(putRes.status).toBe(200);
+    const replaced = (await putRes.json()) as PresetBody;
+    expect(replaced.sortOrder).toBe(0);
+    expect(replaced.name).toBe("TL REPLACED");
+    expect(replaced.id).toBe(created.presets[0]!.id);
+
+    // DELETE: remove sortOrder 1 (the original 1).
+    const delRes = await app.request(`/songs/${created.id}/presets/1`, {
+      method: "DELETE",
+      headers: auth,
+    });
+    expect(delRes.status).toBe(204);
+    expect(await delRes.text()).toBe("");
+
+    // GET /songs/:id: presets are [TL REPLACED (sortOrder 0), TL ADDED (sortOrder 1)].
+    const getRes = await app.request(`/songs/${created.id}`, { headers: auth });
+    expect(getRes.status).toBe(200);
+    const fetched = (await getRes.json()) as SongBody;
+    expect(fetched.presets.map((p) => [p.sortOrder, p.name])).toEqual([
+      [0, "TL REPLACED"],
+      [1, "TL ADDED"],
+    ]);
+
+    // Error bodies are exactly {error}.
+    // After PUT + DELETE the live presets are [TL REPLACED (sortOrder 0), TL ADDED (sortOrder 1)].
+    // Upload a preset named "TL REPLACED" to trigger the R20 collision -> 409 with body {error}.
+    const dupFd = new FormData();
+    dupFd.append("preset", newNamePreset("TL REPLACED", "dup.prst"));
+    const dupRes = await app.request(`/songs/${created.id}/presets`, {
+      method: "POST",
+      headers: auth,
+      body: dupFd,
+    });
+    expect(dupRes.status).toBe(409);
+    const dupBody = (await dupRes.json()) as Record<string, unknown>;
+    expect(Object.keys(dupBody)).toEqual(["error"]);
+    expect(typeof dupBody.error).toBe("string");
+    expect((dupBody.error as string).length).toBeGreaterThan(0);
+
+    const notFoundRes = await app.request(`/songs/${created.id}/presets/9`, {
+      method: "PUT",
+      headers: auth,
+      body: addFd,
+    });
+    expect(notFoundRes.status).toBe(404);
+    const notFoundBody = (await notFoundRes.json()) as Record<string, unknown>;
+    expect(Object.keys(notFoundBody)).toEqual(["error"]);
+  });
+});
+
+describe("POST /songs/:id/presets plan-limit 402 body shape (F21 R18)", () => {
+  test("free user with 1 preset -> 402 with exactly {error, code, plan, limit}", async () => {
+    const db = getDb();
+    const email = `f21-plan-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', 'free') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const seedFd = new FormData();
+    seedFd.append("name", "Plan Limit");
+    seedFd.append("preset", presetPart());
+    const createRes = await app.request("/songs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: seedFd,
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as SongBody;
+
+    const addFd = new FormData();
+    addFd.append("preset", newNamePreset("TL NEW", "n.prst"));
+    const addRes = await app.request(`/songs/${created.id}/presets`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: addFd,
+    });
+    expect(addRes.status).toBe(402);
+    const body = (await addRes.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["code", "error", "limit", "plan"]);
+    expect(body.code).toBe("plan_preset_limit");
+    expect(body.plan).toBe("free");
+    expect(body.limit).toBe(1);
+    expect(typeof body.error).toBe("string");
+    expect((body.error as string).length).toBeGreaterThan(0);
+  });
+});
