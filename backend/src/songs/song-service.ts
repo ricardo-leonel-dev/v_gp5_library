@@ -1,13 +1,19 @@
 import type { SQL } from "bun";
 import { getDb } from "../db/client";
 import { isUuid } from "../db/uuid";
-import { PLAN_LIMITS, checkPlanLimits, countLiveSongs, getUserPlan } from "../plans/plan-service";
+import {
+  PLAN_LIMITS,
+  checkPlanLimits,
+  checkPresetsPerSongLimit,
+  countLiveSongs,
+  getUserPlan,
+} from "../plans/plan-service";
 import { getStorage } from "../storage";
 import type { StorageAdapter } from "../storage/adapter";
 import { readPresetName } from "./prst-name";
 
 export class SongError extends Error {
-  constructor(message: string, public readonly status: 400 | 404) {
+  constructor(message: string, public readonly status: 400 | 404 | 409) {
     super(message);
   }
 }
@@ -65,6 +71,42 @@ export interface SongWithFilesDto extends SongDto {
 export { UUID_RE, isUuid } from "../db/uuid";
 
 export const MAX_EXTRA_CONFIG_BYTES = 32768; // 32 KiB — R3
+
+export const MAX_SORT_ORDER = 2147483647;
+
+// GP-5 .prst file size (F21 R39, R40). Defined here next to the only code that
+// enforces it. createSong does not check the size (feature 15 scope).
+export const PRST_BYTE_SIZE = 507;
+
+export function parseSortOrderParam(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n > MAX_SORT_ORDER) return null;
+  return n;
+}
+
+export interface ValidatedPreset {
+  file: UploadedFile;
+  name: string;
+}
+
+export function validateSinglePreset(files: UploadedFile[]): ValidatedPreset {
+  if (files.length === 0) {
+    throw new SongError("a preset file is required", 400);
+  }
+  if (files.length > 1) {
+    throw new SongError("exactly one preset file is allowed", 400);
+  }
+  const file = files[0]!;
+  if (file.bytes.byteLength !== PRST_BYTE_SIZE) {
+    throw new SongError("preset file must be exactly 507 bytes", 400);
+  }
+  const name = readPresetName(file.bytes);
+  if (name === null) {
+    throw new SongError("preset file has no readable GP-5 preset name", 400);
+  }
+  return { file, name };
+}
 
 const SONG_FILE_KINDS = ["preset", "ir", "nam", "cover"] as const;
 type SongFileKind = (typeof SONG_FILE_KINDS)[number];
@@ -127,6 +169,10 @@ function toSongDto(row: SongRow, presets: SongPresetDto[]): SongDto {
   };
 }
 
+function toIsoTimestamp(value: string | Date): string {
+  return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+
 function toSongPresetDto(row: SongPresetRow): SongPresetDto {
   return {
     id: row.id,
@@ -135,7 +181,7 @@ function toSongPresetDto(row: SongPresetRow): SongPresetDto {
     originalFilename: row.original_filename,
     mimeType: row.mime_type,
     byteSize: row.byte_size,
-    createdAt: String(row.created_at),
+    createdAt: toIsoTimestamp(row.created_at),
   };
 }
 
@@ -442,4 +488,221 @@ export async function getSongFile(
   }
 
   return { bytes, mimeType: row.mime_type, originalFilename: row.original_filename };
+}
+
+// F21 addSongPreset (R2, R7, R9–R12, R17, R18, R20, R23): adds one preset row
+// to an owned live song. The check order is enforced here: validateSinglePreset
+// first (path/body, no DB), then the user-plan check, then the song lock +
+// name check + insert.
+export async function addSongPreset(
+  userId: string,
+  songId: string,
+  files: UploadedFile[],
+  storage: StorageAdapter = getStorage(),
+): Promise<SongPresetDto> {
+  if (!isUuid(songId)) {
+    throw new SongError("song not found", 404);
+  }
+
+  const { file, name } = validateSinglePreset(files);
+
+  const db: SQL = getDb();
+  const plan = await getUserPlan(db, userId);
+  if (plan === null) {
+    throw new SongError("user not found", 404);
+  }
+
+  const result = await db.begin(async (tx) => {
+    const [song] = await tx`
+      SELECT id FROM songs
+      WHERE id = ${songId} AND user_id = ${userId} AND deleted_at IS NULL
+      FOR UPDATE
+    `;
+    if (!song) {
+      throw new SongError("song not found", 404);
+    }
+
+    const rows = await tx<{ sort_order: number; pedal_preset_name: string }[]>`
+      SELECT sort_order, pedal_preset_name FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+    `;
+
+    checkPresetsPerSongLimit(plan, rows.length + 1);
+
+    if (rows.some((r) => r.pedal_preset_name === name)) {
+      throw new SongError(`a preset named '${name}' already exists in this song`, 409);
+    }
+
+    const sortOrder = rows.length === 0 ? 0 : Math.max(...rows.map((r) => r.sort_order)) + 1;
+    const storageKey = `songs/${songId}/${crypto.randomUUID()}`;
+    await storage.put(storageKey, file.bytes);
+
+    const [inserted] = await tx<SongPresetRow[]>`
+      INSERT INTO song_files (
+        id, song_id, kind, storage_key, original_filename, mime_type, byte_size,
+        sort_order, pedal_preset_name
+      )
+      VALUES (
+        ${crypto.randomUUID()}, ${songId}, 'preset', ${storageKey},
+        ${file.filename}, ${file.mimeType}, ${file.bytes.byteLength},
+        ${sortOrder}, ${name}
+      )
+      RETURNING id, sort_order, pedal_preset_name, original_filename, mime_type,
+                byte_size, created_at
+    `;
+
+    await tx`UPDATE songs SET updated_at = NOW() WHERE id = ${songId}`;
+
+    return toSongPresetDto(inserted as SongPresetRow);
+  });
+
+  return result;
+}
+
+// F21 replaceSongPreset (R2–R4, R7, R24–R32): swaps a single preset row's
+// bytes/name/metadata, keeping its id, sortOrder and createdAt. After the
+// transaction commits, the old bytes are best-effort deleted (R31, R32): a
+// delete failure is logged and the request still returns 200.
+export async function replaceSongPreset(
+  userId: string,
+  songId: string,
+  sortOrderParam: string,
+  files: UploadedFile[],
+  storage: StorageAdapter = getStorage(),
+): Promise<SongPresetDto> {
+  if (!isUuid(songId)) {
+    throw new SongError("song not found", 404);
+  }
+  const sortOrder = parseSortOrderParam(sortOrderParam);
+  if (sortOrder === null) {
+    throw new SongError("preset not found", 404);
+  }
+
+  const { file, name } = validateSinglePreset(files);
+
+  const db: SQL = getDb();
+  let oldKey: string | null = null;
+
+  const dto = await db.begin(async (tx) => {
+    const [song] = await tx`
+      SELECT id FROM songs
+      WHERE id = ${songId} AND user_id = ${userId} AND deleted_at IS NULL
+      FOR UPDATE
+    `;
+    if (!song) {
+      throw new SongError("song not found", 404);
+    }
+
+    const [target] = await tx<{ id: string; storage_key: string; pedal_preset_name: string }[]>`
+      SELECT id, storage_key, pedal_preset_name FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND sort_order = ${sortOrder}
+        AND deleted_at IS NULL
+    `;
+    if (!target) {
+      throw new SongError("preset not found", 404);
+    }
+
+    const collisions = await tx<{ id: string }[]>`
+      SELECT id FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+        AND id <> ${target.id} AND pedal_preset_name = ${name}
+    `;
+    if (collisions.length > 0) {
+      throw new SongError(`a preset named '${name}' already exists in this song`, 409);
+    }
+
+    const newKey = `songs/${songId}/${crypto.randomUUID()}`;
+    await storage.put(newKey, file.bytes);
+
+    const [updated] = await tx<SongPresetRow[]>`
+      UPDATE song_files
+      SET storage_key = ${newKey},
+          original_filename = ${file.filename},
+          mime_type = ${file.mimeType},
+          byte_size = ${file.bytes.byteLength},
+          pedal_preset_name = ${name},
+          updated_at = NOW()
+      WHERE id = ${target.id}
+      RETURNING id, sort_order, pedal_preset_name, original_filename, mime_type,
+                byte_size, created_at
+    `;
+
+    await tx`UPDATE songs SET updated_at = NOW() WHERE id = ${songId}`;
+
+    oldKey = target.storage_key;
+    return toSongPresetDto(updated as SongPresetRow);
+  });
+
+  if (oldKey !== null) {
+    try {
+      await storage.delete(oldKey);
+    } catch (err) {
+      console.warn("failed to delete replaced preset object", oldKey, err);
+    }
+  }
+
+  return dto;
+}
+
+// F21 deleteSongPreset (R2–R4, R7, R33–R38): soft-deletes the targeted preset
+// row and shifts every higher sort_order down by one. The shift runs one row
+// at a time so the partial unique index never transiently collides (design
+// "deleteSongPreset" step 5). `storage` is accepted so the spy can record the
+// "no storage call" contract — the function never invokes it (R38).
+export async function deleteSongPreset(
+  userId: string,
+  songId: string,
+  sortOrderParam: string,
+  storage: StorageAdapter = getStorage(),
+): Promise<void> {
+  if (!isUuid(songId)) {
+    throw new SongError("song not found", 404);
+  }
+  const sortOrder = parseSortOrderParam(sortOrderParam);
+  if (sortOrder === null) {
+    throw new SongError("preset not found", 404);
+  }
+
+  const db: SQL = getDb();
+  await db.begin(async (tx) => {
+    const [song] = await tx`
+      SELECT id FROM songs
+      WHERE id = ${songId} AND user_id = ${userId} AND deleted_at IS NULL
+      FOR UPDATE
+    `;
+    if (!song) {
+      throw new SongError("song not found", 404);
+    }
+
+    const rows = await tx<{ id: string; sort_order: number }[]>`
+      SELECT id, sort_order FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order ASC
+    `;
+
+    const target = rows.find((r) => r.sort_order === sortOrder);
+    if (!target) {
+      throw new SongError("preset not found", 404);
+    }
+
+    if (rows.length === 1) {
+      throw new SongError("a song must keep at least one preset", 409);
+    }
+
+    await tx`
+      UPDATE song_files
+      SET deleted_at = NOW(), updated_at = NOW()
+      WHERE id = ${target.id}
+    `;
+
+    for (const row of rows.filter((r) => r.sort_order > sortOrder)) {
+      await tx`
+        UPDATE song_files
+        SET sort_order = ${row.sort_order - 1}, updated_at = NOW()
+        WHERE id = ${row.id}
+      `;
+    }
+
+    await tx`UPDATE songs SET updated_at = NOW() WHERE id = ${songId}`;
+  });
 }

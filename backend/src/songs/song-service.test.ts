@@ -5,19 +5,27 @@ import path from "node:path";
 import { getDb } from "../db/client";
 import { issueToken } from "../auth/jwt";
 import { LocalFsStorageAdapter } from "../storage/local-fs-adapter";
+import type { StorageAdapter } from "../storage/adapter";
 import {
+  addSongPreset,
   createSong,
   deleteSong,
+  deleteSongPreset,
   getSongById,
   getSongFile,
   isUuid,
   listSongs,
   MAX_EXTRA_CONFIG_BYTES,
+  MAX_SORT_ORDER,
+  parseSortOrderParam,
+  PRST_BYTE_SIZE,
+  replaceSongPreset,
   SongError,
   type CreateSongInput,
   type UploadedFile,
 } from "./song-service";
 import { loadFixture, PRESET_FIXTURES } from "./fixtures";
+import { PRST_NAME_OFFSET, PRST_NAME_MAX_LENGTH, readPresetName } from "./prst-name";
 import { PlanLimitError, type Plan, type PlanLimitCode } from "../plans/plan-service";
 import app from "../index";
 
@@ -35,10 +43,92 @@ function presetFile(index = 0, filename = "preset.prst"): UploadedFile {
   };
 }
 
+// F21 T4: build a 507-byte .prst with an arbitrary readable name by copying
+// fixture 0 and overwriting bytes 0x19..0x28 with the name NUL-padded. Keeps
+// the GP-5 magic intact so readPresetName returns the new name.
+function presetFileWithName(name: string, filename = "custom.prst"): UploadedFile {
+  const bytes = new Uint8Array(fixtureBytes[0]!);
+  const slot = bytes.subarray(PRST_NAME_OFFSET, PRST_NAME_OFFSET + PRST_NAME_MAX_LENGTH);
+  for (let i = 0; i < PRST_NAME_MAX_LENGTH; i++) slot[i] = 0;
+  for (let i = 0; i < Math.min(name.length, PRST_NAME_MAX_LENGTH); i++) {
+    slot[i] = name.charCodeAt(i);
+  }
+  expect(bytes.byteLength).toBe(PRST_BYTE_SIZE);
+  return { filename, mimeType: "application/octet-stream", bytes };
+}
+
+// F21 T4: storage spy wrapping LocalFsStorageAdapter — records put/delete
+// calls and can be told to throw on delete. The spy is storage-passed into
+// the service to assert the R6/R31/R32/R38/storage-failure contracts.
+class RecordingStorageAdapter implements StorageAdapter {
+  readonly puts: Array<{ key: string; bytes: Uint8Array }> = [];
+  readonly deletes: string[] = [];
+  deleteThrows = false;
+
+  constructor(private readonly inner: LocalFsStorageAdapter) {}
+
+  async put(key: string, bytes: Uint8Array): Promise<void> {
+    this.puts.push({ key, bytes });
+    await this.inner.put(key, bytes);
+  }
+
+  async get(key: string): Promise<Uint8Array | null> {
+    return this.inner.get(key);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.deletes.push(key);
+    if (this.deleteThrows) throw new Error(`simulated storage delete failure: ${key}`);
+    await this.inner.delete(key);
+  }
+}
+
+// F21 T4: "nothing changed" snapshot — song_files rows + songs.updated_at +
+// storage put/delete call counts. Used to assert that a rejected request
+// didn't mutate state.
+interface SongSnapshot {
+  files: Array<{
+    id: string;
+    kind: "preset" | "ir" | "nam" | "cover";
+    sort_order: number;
+    pedal_preset_name: string | null;
+    storage_key: string;
+    deleted_at: string | null;
+    byte_size: number;
+    original_filename: string;
+  }>;
+  updatedAt: string;
+  putCount: number;
+  deleteCount: number;
+}
+
+async function snapshotSong(
+  songId: string,
+  spy: RecordingStorageAdapter,
+): Promise<SongSnapshot> {
+  const db = getDb();
+  const files = await db<SongSnapshot["files"]>`
+    SELECT id, kind, sort_order, pedal_preset_name, storage_key, deleted_at, byte_size,
+           original_filename
+    FROM song_files WHERE song_id = ${songId} ORDER BY id
+  `;
+  const [song] = await db<{ updated_at: string }[]>`
+    SELECT updated_at FROM songs WHERE id = ${songId}
+  `;
+  return {
+    files: files.map((f) => ({ ...f, sort_order: Number(f.sort_order) })),
+    updatedAt: String(song!.updated_at),
+    putCount: spy.puts.length,
+    deleteCount: spy.deletes.length,
+  };
+}
+
 async function countStoredObjects(root: string): Promise<number> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
   return entries.filter((e) => e.isFile()).length;
 }
+
+const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 const presetDtoKeys = [
   "byteSize",
@@ -1234,4 +1324,972 @@ describe("createSong plan tiers (plan_tiers_songs_and_presets_per_song_limits)",
     expect(caught).toBeInstanceOf(SongError);
     expect((caught as SongError).status).toBe(400);
   });
+});
+
+// F21: add / replace / delete a preset on an existing song.
+
+describe("addSongPreset", () => {
+  let dir: string;
+  let storage: LocalFsStorageAdapter;
+  let spy: RecordingStorageAdapter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "add-preset-"));
+    storage = new LocalFsStorageAdapter(dir);
+    spy = new RecordingStorageAdapter(storage);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function seedTwoPresetSong(userId: string): Promise<string> {
+    const created = await createSong(
+      userId,
+      {
+        name: "Two",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst")],
+        ir: [],
+        nam: [],
+        cover: [],
+      },
+      spy,
+    );
+    return created.id;
+  }
+
+  // T7: happy path — 201, exact DTO keys, sortOrder 2, name from bytes, other rows untouched, updated_at advances.
+  test("add to a 2-preset song -> 201 with exact R9 body, sortOrder 2, bytes served, songs.updated_at advances, other rows unchanged (R2, R7, R9-R13, R6)", async () => {
+    const { userId } = await makeUser();
+    const db = getDb();
+    const songId = await seedTwoPresetSong(userId);
+    const beforeRows = await db<{ id: string; sort_order: number; byte_size: number; updated_at: string }[]>`
+      SELECT id, sort_order, byte_size, updated_at FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+    const beforeSong = await db<{ updated_at: string }[]>`SELECT updated_at FROM songs WHERE id = ${songId}`;
+
+    // Small delay so updated_at can advance unambiguously.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const newPreset = presetFileWithName("TL NEW NAME", "new.prst");
+    const dto = await addSongPreset(userId, songId, [newPreset], spy);
+
+    expect(Object.keys(dto).sort()).toEqual([
+      "byteSize", "createdAt", "id", "mimeType", "name", "originalFilename", "sortOrder",
+    ]);
+    expect(dto.sortOrder).toBe(2);
+    expect(dto.name).toBe("TL NEW NAME");
+    expect(dto.originalFilename).toBe("new.prst");
+    expect(dto.mimeType).toBe("application/octet-stream");
+    expect(dto.byteSize).toBe(PRST_BYTE_SIZE);
+    expect(typeof dto.id).toBe("string");
+    expect(dto.createdAt).toMatch(ISO_8601_RE);
+
+    const afterRows = await db<{ id: string; sort_order: number; byte_size: number; updated_at: string }[]>`
+      SELECT id, sort_order, byte_size, updated_at FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+    expect(afterRows).toHaveLength(beforeRows.length + 1);
+    for (const before of beforeRows) {
+      const match = afterRows.find((r) => r.id === before.id);
+      expect(match).toBeDefined();
+      expect(match!.byte_size).toBe(before.byte_size);
+      expect(match!.sort_order).toBe(before.sort_order);
+    }
+    const newRow = afterRows.find((r) => r.sort_order === 2)!;
+    expect(newRow.id).toBe(dto.id);
+
+    const exportBytes = await getSongFile(userId, songId, "preset", "2", spy);
+    expect(exportBytes.bytes).toEqual(newPreset.bytes);
+    expect(exportBytes.originalFilename).toBe("new.prst");
+
+    const [afterSong] = await db<{ updated_at: string }[]>`SELECT updated_at FROM songs WHERE id = ${songId}`;
+    expect(new Date(afterSong.updated_at).getTime()).toBeGreaterThan(
+      new Date(beforeSong[0]!.updated_at).getTime(),
+    );
+
+    expect(spy.puts.length).toBeGreaterThan(0);
+    expect(spy.puts.at(-1)!.bytes).toEqual(newPreset.bytes);
+  });
+
+  // T8: zero / string / two / unreadable / wrong-size parts -> 400, nothing changed.
+  test("zero, two, 507-unreadable, 506-byte and 508-byte parts -> 400 with nothing changed (R14-R16, R39, R40)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedTwoPresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    // 0 parts
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, songId, [], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("a preset file is required");
+
+    // The `preset`-as-string variant is covered over HTTP in index.test.ts
+    // (parsePresetMultipart drops non-File parts before the service).
+
+    // 2 parts
+    caught = undefined;
+    try {
+      await addSongPreset(userId, songId, [presetFile(2, "x.prst"), presetFile(2, "y.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("exactly one preset file is allowed");
+
+    // 507-byte unreadable name
+    const unreadable = new Uint8Array(PRST_BYTE_SIZE).fill(0x41);
+    caught = undefined;
+    try {
+      await addSongPreset(userId, songId, [file("u.prst", [...unreadable])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe(
+      "preset file has no readable GP-5 preset name",
+    );
+
+    // 506-byte (still has readable name)
+    const tooShort = new Uint8Array(fixtureBytes[0]!).slice(0, PRST_BYTE_SIZE - 1);
+    expect(tooShort.byteLength).toBe(506);
+    expect(readPresetName(tooShort)).toBe(PRESET_FIXTURES[0].name);
+    caught = undefined;
+    try {
+      await addSongPreset(userId, songId, [file("short.prst", [...tooShort])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file must be exactly 507 bytes");
+
+    // 508-byte
+    const tooLong = new Uint8Array(PRST_BYTE_SIZE + 1);
+    tooLong.set(fixtureBytes[0]!);
+    caught = undefined;
+    try {
+      await addSongPreset(userId, songId, [file("long.prst", [...tooLong])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file must be exactly 507 bytes");
+
+    // R40: 506-byte AND unreadable name -> still the size message (size-first).
+    const shortUnreadable = new Uint8Array(PRST_BYTE_SIZE - 1);
+    shortUnreadable[0] = 0;
+    expect(readPresetName(shortUnreadable)).toBeNull();
+    caught = undefined;
+    try {
+      await addSongPreset(userId, songId, [file("su.prst", [...shortUnreadable])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file must be exactly 507 bytes");
+
+    const after = await snapshotSong(songId, spy);
+    expect(after).toEqual(before);
+  });
+
+  // R22: a 400 in R14/R15/R16/R39 wins over plan-limit rejection.
+  test("free user with 1 preset at limit, sending a wrong-size part -> 400, not 402 (R22)", async () => {
+    // Seed with premium, then downgrade to free and trim to 1 preset so the song is exactly at the limit.
+    const { userId } = await makeUser("add-r22", "premium");
+    const db = getDb();
+    const created = await createSong(
+      userId,
+      {
+        name: "Two",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst")],
+        ir: [], nam: [], cover: [],
+      },
+      spy,
+    );
+    await db`UPDATE song_files SET deleted_at = NOW() WHERE song_id = ${created.id} AND kind = 'preset' AND sort_order = 1`;
+    await db`UPDATE users SET plan = 'free' WHERE id = ${userId}`;
+    const [{ c }] = await db<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM song_files WHERE song_id = ${created.id} AND kind = 'preset' AND deleted_at IS NULL
+    `;
+    expect(c).toBe(1);
+
+    const bad = new Uint8Array(PRST_BYTE_SIZE + 1);
+    bad.set(fixtureBytes[0]!);
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, created.id, [file("long.prst", [...bad])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+  });
+
+  // T9: plan-limit rejection.
+  test("free user with 1 preset -> 402 plan_preset_limit, exact body, nothing changed (R17, R18)", async () => {
+    const { userId } = await makeUser("add-r17", "free");
+    const created = await createSong(
+      userId,
+      { name: "One", preset: [presetFile(0)], ir: [], nam: [], cover: [] },
+      spy,
+    );
+    const before = await snapshotSong(created.id, spy);
+
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, created.id, [presetFileWithName("TL NEW", "n.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(PlanLimitError);
+    const err = caught as PlanLimitError;
+    expect(err.status).toBe(402);
+    expect(err.code).toBe("plan_preset_limit");
+    expect(err.plan).toBe("free");
+    expect(err.limit).toBe(1);
+    expect(err.message.length).toBeGreaterThan(0);
+
+    expect(await snapshotSong(created.id, spy)).toEqual(before);
+  });
+
+  // R21: duplicate name on a song already at its limit -> still 402.
+  test("free user at limit with duplicate name -> 402 wins over 409 (R21)", async () => {
+    const { userId } = await makeUser("add-r21", "free");
+    const created = await createSong(
+      userId,
+      { name: "One", preset: [presetFile(0)], ir: [], nam: [], cover: [] },
+      spy,
+    );
+    const before = await snapshotSong(created.id, spy);
+
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, created.id, [presetFile(0, "dup.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(PlanLimitError);
+
+    expect(await snapshotSong(created.id, spy)).toEqual(before);
+  });
+
+  test("basic user with 2 presets -> 402 plan_preset_limit (R17)", async () => {
+    const { userId } = await makeUser("add-r17b", "basic");
+    const created = await createSong(
+      userId,
+      {
+        name: "Two",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst")],
+        ir: [], nam: [], cover: [],
+      },
+      spy,
+    );
+    const before = await snapshotSong(created.id, spy);
+
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, created.id, [presetFile(2, "c.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(PlanLimitError);
+    const err = caught as PlanLimitError;
+    expect(err.code).toBe("plan_preset_limit");
+    expect(err.plan).toBe("basic");
+    expect(err.limit).toBe(2);
+
+    expect(await snapshotSong(created.id, spy)).toEqual(before);
+  });
+
+  test("premium user with 3 presets -> 201 (R19)", async () => {
+    const { userId } = await makeUser("add-r19", "premium");
+    const created = await createSong(
+      userId,
+      {
+        name: "Three",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst"), presetFile(2, "c.prst")],
+        ir: [], nam: [], cover: [],
+      },
+      spy,
+    );
+    const dto = await addSongPreset(userId, created.id, [presetFileWithName("TL NEW", "n.prst")], spy);
+    expect(dto.sortOrder).toBe(3);
+    expect(dto.name).toBe("TL NEW");
+  });
+
+  // T10: name collision -> 409.
+  test("upload whose readable name equals an existing preset -> 409 (R20)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedTwoPresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, songId, [presetFile(0, "dup.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(409);
+    expect((caught as SongError).message).toBe(
+      `a preset named '${PRESET_FIXTURES[0].name}' already exists in this song`,
+    );
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  // T11: 404 (non-UUID / foreign / soft-deleted).
+  test("non-UUID songId -> 404 (R2)", async () => {
+    const { userId } = await makeUser();
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, "not-a-uuid", [presetFile(0)], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+  });
+
+  test("another user's song -> 404 with nothing changed (R2)", async () => {
+    const { userId: owner } = await makeUser("add-r2-owner");
+    const { userId: other } = await makeUser("add-r2-other");
+    const songId = await seedTwoPresetSong(owner);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await addSongPreset(other, songId, [presetFile(2, "s.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("soft-deleted song -> 404 (R2)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedTwoPresetSong(userId);
+    await deleteSong(userId, songId);
+
+    let caught: unknown;
+    try {
+      await addSongPreset(userId, songId, [presetFile(2, "s.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+  });
+
+  // T12: concurrent adds on a premium song get distinct sortOrders.
+  test("two concurrent addSongPreset on a premium song -> both 201, distinct sortOrders (R23)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedTwoPresetSong(userId);
+    const [a, b] = await Promise.all([
+      addSongPreset(userId, songId, [presetFileWithName("TL NEWA", "a.prst")], spy),
+      addSongPreset(userId, songId, [presetFileWithName("TL NEWB", "b.prst")], spy),
+    ]);
+    expect(a.sortOrder).not.toBe(b.sortOrder);
+    expect([a.sortOrder, b.sortOrder].sort()).toEqual([2, 3]);
+    const db = getDb();
+    const rows = await db<{ sort_order: number }[]>`
+      SELECT sort_order FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+    expect(rows.map((r) => r.sort_order)).toEqual([0, 1, 2, 3]);
+  });
+});
+
+describe("replaceSongPreset", () => {
+  let dir: string;
+  let storage: LocalFsStorageAdapter;
+  let spy: RecordingStorageAdapter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "replace-preset-"));
+    storage = new LocalFsStorageAdapter(dir);
+    spy = new RecordingStorageAdapter(storage);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function seedThreePresetSong(userId: string): Promise<string> {
+    const created = await createSong(
+      userId,
+      {
+        name: "Three",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst"), presetFile(2, "c.prst")],
+        ir: [],
+        nam: [],
+        cover: [],
+      },
+      spy,
+    );
+    return created.id;
+  }
+
+  // T15: happy path — 200, same id/sortOrder/createdAt, new name/filename/size,
+  // export returns new bytes, other rows unchanged, songs.updated_at advances,
+  // spy records delete(oldKey).
+  test("replace preset at sortOrder 1 -> 200, same id/sortOrder/createdAt, new bytes served, old key deleted, other rows unchanged (R3, R4, R25, R26, R31, R6, R7, R24)", async () => {
+    const { userId } = await makeUser();
+    const db = getDb();
+    const songId = await seedThreePresetSong(userId);
+
+    const beforeTarget = await db<{
+      id: string; sort_order: number; byte_size: number; created_at: string; storage_key: string;
+    }[]>`
+      SELECT id, sort_order, byte_size, created_at, storage_key FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND sort_order = 1
+    `;
+    const beforeRows = await db<{
+      id: string; byte_size: number; sort_order: number; storage_key: string;
+    }[]>`
+      SELECT id, byte_size, sort_order, storage_key FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+    const beforeSong = await db<{ updated_at: string }[]>`SELECT updated_at FROM songs WHERE id = ${songId}`;
+    await new Promise((r) => setTimeout(r, 5));
+
+    const newPreset = presetFileWithName("TL REPLACED", "rep.prst");
+    const dto = await replaceSongPreset(userId, songId, "1", [newPreset], spy);
+
+    expect(Object.keys(dto).sort()).toEqual([
+      "byteSize", "createdAt", "id", "mimeType", "name", "originalFilename", "sortOrder",
+    ]);
+    expect(dto.id).toBe(beforeTarget[0]!.id);
+    expect(dto.sortOrder).toBe(1);
+    expect(dto.createdAt).toBe(new Date(beforeTarget[0]!.created_at).toISOString());
+    expect(dto.name).toBe("TL REPLACED");
+    expect(dto.originalFilename).toBe("rep.prst");
+    expect(dto.mimeType).toBe("application/octet-stream");
+    expect(dto.byteSize).toBe(PRST_BYTE_SIZE);
+
+    // Export returns the new bytes.
+    const out = await getSongFile(userId, songId, "preset", "1", spy);
+    expect(out.bytes).toEqual(newPreset.bytes);
+    expect(out.originalFilename).toBe("rep.prst");
+
+    // Other rows unchanged.
+    const afterRows = await db<{
+      id: string; byte_size: number; sort_order: number; storage_key: string;
+    }[]>`
+      SELECT id, byte_size, sort_order, storage_key FROM song_files
+      WHERE song_id = ${songId} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+    expect(afterRows).toHaveLength(beforeRows.length);
+    for (const before of beforeRows.filter((r) => r.sort_order !== 1)) {
+      const match = afterRows.find((r) => r.id === before.id);
+      expect(match).toBeDefined();
+      expect(match!.byte_size).toBe(before.byte_size);
+      expect(match!.sort_order).toBe(before.sort_order);
+      expect(match!.storage_key).toBe(before.storage_key);
+    }
+    const replaced = afterRows.find((r) => r.sort_order === 1)!;
+    expect(replaced.id).toBe(beforeTarget[0]!.id);
+    expect(replaced.byte_size).toBe(PRST_BYTE_SIZE);
+    expect(replaced.storage_key).not.toBe(beforeTarget[0]!.storage_key);
+
+    // songs.updated_at advanced.
+    const [afterSong] = await db<{ updated_at: string }[]>`SELECT updated_at FROM songs WHERE id = ${songId}`;
+    expect(new Date(afterSong.updated_at).getTime()).toBeGreaterThan(
+      new Date(beforeSong[0]!.updated_at).getTime(),
+    );
+
+    // Spy saw delete(oldKey).
+    expect(spy.deletes).toContain(beforeTarget[0]!.storage_key);
+  });
+
+  // T16: re-upload with the target's own name -> 200.
+  test("re-upload with the target's own current name -> 200 (R29)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    const dto = await replaceSongPreset(userId, songId, "1", [presetFile(1, "b.prst")], spy);
+    expect(dto.sortOrder).toBe(1);
+    expect(dto.name).toBe(PRESET_FIXTURES[1].name);
+    expect(dto.byteSize).toBe(PRST_BYTE_SIZE);
+
+    // Storage still has 3 keys (one was deleted, one new was put).
+    expect(spy.deletes.length).toBe(1);
+    const after = await snapshotSong(songId, spy);
+    expect(after.files).not.toEqual(before.files);
+    expect(after.putCount).toBeGreaterThan(before.putCount);
+    expect(after.deleteCount).toBeGreaterThan(before.deleteCount);
+  });
+
+  test("free user whose song holds 3 presets (downgraded) -> replace 200, no plan check (R30)", async () => {
+    const { userId } = await makeUser("rep-r30", "premium");
+    const db = getDb();
+    const songId = await seedThreePresetSong(userId);
+    await db`UPDATE users SET plan = 'free' WHERE id = ${userId}`;
+
+    const dto = await replaceSongPreset(
+      userId, songId, "1", [presetFileWithName("TL NEWNAME", "x.prst")], spy,
+    );
+    expect(dto.sortOrder).toBe(1);
+    expect(dto.name).toBe("TL NEWNAME");
+  });
+
+  // T17: 400 / 409 nothing changed.
+  test("zero, two, 507-unreadable, 506-byte, 508-byte parts -> 400 with nothing changed (R27)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, songId, "1", [], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+
+    caught = undefined;
+    try {
+      await replaceSongPreset(userId, songId, "1", [presetFile(0, "a.prst"), presetFile(2, "b.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("exactly one preset file is allowed");
+
+    const unreadable = new Uint8Array(PRST_BYTE_SIZE).fill(0x41);
+    caught = undefined;
+    try {
+      await replaceSongPreset(userId, songId, "1", [file("u.prst", [...unreadable])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file has no readable GP-5 preset name");
+
+    const tooShort = new Uint8Array(fixtureBytes[0]!).slice(0, PRST_BYTE_SIZE - 1);
+    caught = undefined;
+    try {
+      await replaceSongPreset(userId, songId, "1", [file("s.prst", [...tooShort])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file must be exactly 507 bytes");
+
+    const tooLong = new Uint8Array(PRST_BYTE_SIZE + 1);
+    tooLong.set(fixtureBytes[0]!);
+    caught = undefined;
+    try {
+      await replaceSongPreset(userId, songId, "1", [file("l.prst", [...tooLong])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file must be exactly 507 bytes");
+
+    // R40: 506-byte AND unreadable -> size message.
+    const shortUnreadable = new Uint8Array(PRST_BYTE_SIZE - 1);
+    shortUnreadable[0] = 0;
+    caught = undefined;
+    try {
+      await replaceSongPreset(userId, songId, "1", [file("su.prst", [...shortUnreadable])], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(400);
+    expect((caught as SongError).message).toBe("preset file must be exactly 507 bytes");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("name of a different preset -> 409, nothing changed (R28)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, songId, "1", [presetFile(0, "dup.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(409);
+    expect((caught as SongError).message).toBe(
+      `a preset named '${PRESET_FIXTURES[0].name}' already exists in this song`,
+    );
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  // T18: 404 paths.
+  test(":sortOrder abc, -1, 2147483648 -> 404 (R3)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    for (const bad of ["abc", "-1", "2147483648"]) {
+      let caught: unknown;
+      try {
+        await replaceSongPreset(userId, songId, bad, [presetFile(0, "x.prst")], spy);
+      } catch (err) { caught = err; }
+      expect(caught).toBeInstanceOf(SongError);
+      expect((caught as SongError).status).toBe(404);
+      expect((caught as SongError).message).toBe("preset not found");
+    }
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("sortOrder 5 on a 3-preset song -> 404 (R4)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, songId, "5", [presetFileWithName("TL NEW", "n.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("preset not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("storage delete throws after a successful commit -> still 200, row points at new bytes (R32)", async () => {
+    const { userId } = await makeUser();
+    const db = getDb();
+    const songId = await seedThreePresetSong(userId);
+
+    const oldKeyRow = await db<{ storage_key: string }[]>`
+      SELECT storage_key FROM song_files WHERE song_id = ${songId} AND kind = 'preset' AND sort_order = 1
+    `;
+    spy.deleteThrows = true;
+
+    const origWarn = console.warn;
+    const warnCalls: unknown[][] = [];
+    console.warn = (...args: unknown[]) => { warnCalls.push(args); };
+
+    const newPreset = presetFileWithName("TL REPLACED", "rep.prst");
+    let dto;
+    try {
+      dto = await replaceSongPreset(userId, songId, "1", [newPreset], spy);
+    } finally {
+      console.warn = origWarn;
+    }
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]).toContain(oldKeyRow[0]!.storage_key);
+    expect(spy.deletes).toEqual([oldKeyRow[0]!.storage_key]);
+
+    expect(dto.sortOrder).toBe(1);
+    expect(dto.name).toBe("TL REPLACED");
+
+    const newKeyRow = await db<{ storage_key: string }[]>`
+      SELECT storage_key FROM song_files WHERE song_id = ${songId} AND kind = 'preset' AND sort_order = 1
+    `;
+    expect(newKeyRow[0]!.storage_key).not.toBe(oldKeyRow[0]!.storage_key);
+
+    const out = await getSongFile(userId, songId, "preset", "1", spy);
+    expect(out.bytes).toEqual(newPreset.bytes);
+  });
+
+  test("non-UUID songId -> 404 (R2)", async () => {
+    const { userId } = await makeUser();
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, "not-a-uuid", "0", [presetFile(0)], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+  });
+
+  test("another user's song -> 404 with nothing changed (R2)", async () => {
+    const { userId: owner } = await makeUser("rep-r2-owner");
+    const { userId: other } = await makeUser("rep-r2-other");
+    const songId = await seedThreePresetSong(owner);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(other, songId, "1", [presetFileWithName("TL OTHER", "o.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("soft-deleted song -> 404 with nothing changed (R2)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    await deleteSong(userId, songId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, songId, "1", [presetFileWithName("TL GONE", "g.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+});
+
+describe("deleteSongPreset", () => {
+  let dir: string;
+  let storage: LocalFsStorageAdapter;
+  let spy: RecordingStorageAdapter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "delete-preset-"));
+    storage = new LocalFsStorageAdapter(dir);
+    spy = new RecordingStorageAdapter(storage);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // T21: delete sortOrder 0 of a 3-preset song + ir + cover.
+  test("delete sortOrder 0 of a 3-preset song -> 204, soft-deleted row stays, remaining presets compact to 0,1, ir/cover untouched, no storage delete, updated_at advances (R33-R36, R38, R7)", async () => {
+    const { userId } = await makeUser();
+    const db = getDb();
+    const created = await createSong(
+      userId,
+      {
+        name: "Mix",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst"), presetFile(2, "c.prst")],
+        ir: [file("i.wav", [1, 2])],
+        nam: [],
+        cover: [file("cv.jpg", [9])],
+      },
+      spy,
+    );
+
+    const beforeDelCount = spy.deletes.length;
+    const targetPreset = await db<{ id: string; storage_key: string; byte_size: number }[]>`
+      SELECT id, storage_key, byte_size FROM song_files
+      WHERE song_id = ${created.id} AND kind = 'preset' AND sort_order = 0
+    `;
+    const originalAllIds = await db<{ id: string }[]>`
+      SELECT id FROM song_files
+      WHERE song_id = ${created.id} AND kind = 'preset' AND deleted_at IS NULL
+    `;
+    const [beforeSong] = await db<{ updated_at: string }[]>`
+      SELECT updated_at FROM songs WHERE id = ${created.id}
+    `;
+    // Sleep long enough that NOW() in the next transaction is strictly later,
+    // even on a fast machine: Postgres NOW() resolves to microseconds.
+    await new Promise((r) => setTimeout(r, 15));
+
+    const result = await deleteSongPreset(userId, created.id, "0", spy);
+    expect(result).toBeUndefined();
+
+    // Deleted row still present with deleted_at set.
+    const deletedRow = await db<{ deleted_at: string | null; sort_order: number; byte_size: number }[]>`
+      SELECT deleted_at, sort_order, byte_size FROM song_files WHERE id = ${targetPreset[0]!.id}
+    `;
+    expect(deletedRow[0]!.deleted_at).not.toBeNull();
+    expect(deletedRow[0]!.sort_order).toBe(0);
+    expect(deletedRow[0]!.byte_size).toBe(targetPreset[0]!.byte_size);
+
+    // Remaining presets are contiguous 0, 1, with the former 1 and 2 ids in order.
+    const livePresets = await db<{ id: string; sort_order: number }[]>`
+      SELECT id, sort_order FROM song_files
+      WHERE song_id = ${created.id} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+    expect(livePresets.map((p) => p.sort_order)).toEqual([0, 1]);
+    // Live ids equal the pre-delete live ids with the deleted one removed.
+    const originalIdSet = originalAllIds.map((p) => p.id);
+    expect(livePresets.map((p) => p.id).sort()).toEqual(
+      originalIdSet.filter((id) => id !== targetPreset[0]!.id).sort(),
+    );
+
+    // Export sort_order=0 returns the former preset 1 bytes.
+    const out0 = await getSongFile(userId, created.id, "preset", "0", spy);
+    expect(out0.bytes).toEqual(fixtureBytes[1]);
+    expect(out0.originalFilename).toBe("b.prst");
+
+    // ir/cover rows unchanged.
+    const fileRows = await db<{ kind: string; byte_size: number; original_filename: string; deleted_at: string | null }[]>`
+      SELECT kind, byte_size, original_filename, deleted_at FROM song_files
+      WHERE song_id = ${created.id} AND kind <> 'preset'
+      ORDER BY kind, sort_order
+    `;
+    expect(fileRows).toEqual([
+      { kind: "cover", byte_size: 1, original_filename: "cv.jpg", deleted_at: null },
+      { kind: "ir", byte_size: 2, original_filename: "i.wav", deleted_at: null },
+    ]);
+
+    // No storage delete called.
+    expect(spy.deletes.length).toBe(beforeDelCount);
+
+    // songs.updated_at advanced.
+    const [afterSong] = await db<{ updated_at: string }[]>`SELECT updated_at FROM songs WHERE id = ${created.id}`;
+    expect(new Date(afterSong.updated_at).getTime()).toBeGreaterThan(
+      new Date(beforeSong!.updated_at).getTime(),
+    );
+  });
+
+  // T21 second case: delete the last position, lower rows unchanged.
+  test("delete sortOrder 2 (last) -> remaining presets 0, 1 unchanged (R35, R36)", async () => {
+    const { userId } = await makeUser();
+    const db = getDb();
+    const created = await createSong(
+      userId,
+      {
+        name: "Three",
+        preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst"), presetFile(2, "c.prst")],
+        ir: [], nam: [], cover: [],
+      },
+      spy,
+    );
+
+    const before = await db<{ id: string; sort_order: number }[]>`
+      SELECT id, sort_order FROM song_files
+      WHERE song_id = ${created.id} AND kind = 'preset' AND deleted_at IS NULL
+      ORDER BY sort_order
+    `;
+
+    await deleteSongPreset(userId, created.id, "2", spy);
+
+    const after = await db<{ id: string; sort_order: number; deleted_at: string | null }[]>`
+      SELECT id, sort_order, deleted_at FROM song_files
+      WHERE song_id = ${created.id} AND kind = 'preset'
+      ORDER BY sort_order
+    `;
+    expect(after.filter((r) => r.deleted_at === null).map((r) => r.sort_order)).toEqual([0, 1]);
+    const lowerIds = before.slice(0, 2).map((p) => p.id);
+    expect(after.filter((r) => lowerIds.includes(r.id) && r.deleted_at === null).map((r) => r.sort_order))
+      .toEqual([0, 1]);
+  });
+
+  // T22: delete the only preset -> 409.
+  test("delete the only preset -> 409, nothing changed (R37)", async () => {
+    const { userId } = await makeUser();
+    const created = await createSong(
+      userId,
+      { name: "One", preset: [presetFile(0)], ir: [], nam: [], cover: [] },
+      spy,
+    );
+    const before = await snapshotSong(created.id, spy);
+
+    let caught: unknown;
+    try {
+      await deleteSongPreset(userId, created.id, "0", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(409);
+    expect((caught as SongError).message).toBe("a song must keep at least one preset");
+
+    expect(await snapshotSong(created.id, spy)).toEqual(before);
+  });
+
+  // T22: malformed :sortOrder -> 404.
+  test("malformed :sortOrder abc, -1, 2147483648 -> 404 (R3)", async () => {
+    const { userId } = await makeUser();
+    const created = await createSong(
+      userId,
+      { name: "One", preset: [presetFile(0)], ir: [], nam: [], cover: [] },
+      spy,
+    );
+    const before = await snapshotSong(created.id, spy);
+
+    for (const bad of ["abc", "-1", "2147483648"]) {
+      let caught: unknown;
+      try {
+        await deleteSongPreset(userId, created.id, bad, spy);
+      } catch (err) { caught = err; }
+      expect(caught).toBeInstanceOf(SongError);
+      expect((caught as SongError).status).toBe(404);
+      expect((caught as SongError).message).toBe("preset not found");
+    }
+
+    expect(await snapshotSong(created.id, spy)).toEqual(before);
+  });
+
+  // T22: missing :sortOrder on a multi-preset song -> 404.
+  test("missing preset at sortOrder 5 on a 3-preset song -> 404 (R4)", async () => {
+    const { userId } = await makeUser();
+    const created = await createSong(
+      userId,
+      {
+        name: "Three",
+        preset: [presetFile(0), presetFile(1), presetFile(2)],
+        ir: [], nam: [], cover: [],
+      },
+      spy,
+    );
+    const before = await snapshotSong(created.id, spy);
+
+    let caught: unknown;
+    try {
+      await deleteSongPreset(userId, created.id, "5", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("preset not found");
+
+    expect(await snapshotSong(created.id, spy)).toEqual(before);
+  });
+
+  test("non-UUID songId -> 404 (R2)", async () => {
+    const { userId } = await makeUser();
+    let caught: unknown;
+    try {
+      await deleteSongPreset(userId, "not-a-uuid", "0", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+  });
+
+  async function seedTwoPresetSong(userId: string): Promise<string> {
+    const created = await createSong(
+      userId,
+      { name: "Two", preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst")], ir: [], nam: [], cover: [] },
+      spy,
+    );
+    return created.id;
+  }
+
+  test("another user's song -> 404 with nothing changed (R2)", async () => {
+    const { userId: owner } = await makeUser("del-r2-owner");
+    const { userId: other } = await makeUser("del-r2-other");
+    const songId = await seedTwoPresetSong(owner);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await deleteSongPreset(other, songId, "0", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("soft-deleted song -> 404 with nothing changed (R2)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedTwoPresetSong(userId);
+    await deleteSong(userId, songId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await deleteSongPreset(userId, songId, "0", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+});
+
+describe("parseSortOrderParam (F21 T2)", () => {
+  test("accepts non-negative integers up to MAX_SORT_ORDER", () => {
+    expect(parseSortOrderParam("0")).toBe(0);
+    expect(parseSortOrderParam("3")).toBe(3);
+    expect(parseSortOrderParam(String(MAX_SORT_ORDER))).toBe(MAX_SORT_ORDER);
+  });
+
+  test.each(["-1", "1.5", "abc", "", "2147483648", "+1", " 1", "1e3"])(
+    "rejects %p -> null",
+    (raw) => {
+      expect(parseSortOrderParam(raw)).toBeNull();
+    },
+  );
 });
