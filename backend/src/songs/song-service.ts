@@ -169,6 +169,10 @@ function toSongDto(row: SongRow, presets: SongPresetDto[]): SongDto {
   };
 }
 
+function toIsoTimestamp(value: string | Date): string {
+  return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+
 function toSongPresetDto(row: SongPresetRow): SongPresetDto {
   return {
     id: row.id,
@@ -177,7 +181,7 @@ function toSongPresetDto(row: SongPresetRow): SongPresetDto {
     originalFilename: row.original_filename,
     mimeType: row.mime_type,
     byteSize: row.byte_size,
-    createdAt: String(row.created_at),
+    createdAt: toIsoTimestamp(row.created_at),
   };
 }
 
@@ -487,9 +491,9 @@ export async function getSongFile(
 }
 
 // F21 addSongPreset (R2, R7, R9–R12, R17, R18, R20, R23): adds one preset row
-// to an owned live song. Order matters and is enforced in `addSongPreset`'s
-// callers: validateSinglePreset first (path/body, no DB), then the user-plan
-// check, then the song lock + name check + insert.
+// to an owned live song. The check order is enforced here: validateSinglePreset
+// first (path/body, no DB), then the user-plan check, then the song lock +
+// name check + insert.
 export async function addSongPreset(
   userId: string,
   songId: string,
@@ -701,8 +705,4 @@ export async function deleteSongPreset(
 
     await tx`UPDATE songs SET updated_at = NOW() WHERE id = ${songId}`;
   });
-
-  // R38: the soft-deleted row keeps its bytes; no storage call is made.
-  // `storage` parameter is intentional (lets tests assert the spy stays silent).
-  void storage;
 }

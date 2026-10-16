@@ -16,6 +16,8 @@ import {
   isUuid,
   listSongs,
   MAX_EXTRA_CONFIG_BYTES,
+  MAX_SORT_ORDER,
+  parseSortOrderParam,
   PRST_BYTE_SIZE,
   replaceSongPreset,
   SongError,
@@ -125,6 +127,8 @@ async function countStoredObjects(root: string): Promise<number> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
   return entries.filter((e) => e.isFile()).length;
 }
+
+const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 const presetDtoKeys = [
   "byteSize",
@@ -1381,7 +1385,7 @@ describe("addSongPreset", () => {
     expect(dto.mimeType).toBe("application/octet-stream");
     expect(dto.byteSize).toBe(PRST_BYTE_SIZE);
     expect(typeof dto.id).toBe("string");
-    expect(typeof dto.createdAt).toBe("string");
+    expect(dto.createdAt).toMatch(ISO_8601_RE);
 
     const afterRows = await db<{ id: string; sort_order: number; byte_size: number; updated_at: string }[]>`
       SELECT id, sort_order, byte_size, updated_at FROM song_files
@@ -1412,7 +1416,7 @@ describe("addSongPreset", () => {
   });
 
   // T8: zero / string / two / unreadable / wrong-size parts -> 400, nothing changed.
-  test("zero, non-file string, two, 507-unreadable, 506-byte and 508-byte parts -> 400 with nothing changed (R14-R16, R39, R40)", async () => {
+  test("zero, two, 507-unreadable, 506-byte and 508-byte parts -> 400 with nothing changed (R14-R16, R39, R40)", async () => {
     const { userId } = await makeUser();
     const songId = await seedTwoPresetSong(userId);
     const before = await snapshotSong(songId, spy);
@@ -1426,14 +1430,8 @@ describe("addSongPreset", () => {
     expect((caught as SongError).status).toBe(400);
     expect((caught as SongError).message).toBe("a preset file is required");
 
-    // String part (a `preset` field sent as a plain string) — parsed by
-    // parsePresetMultipart's toUploadedFiles, which only keeps File instances.
-    const stringOnly: UploadedFile[] = await (async () => [])(); // service sees an empty list -> 400 above
-    // Build a service-level string-part by using toUploadedFiles directly:
-    // the service takes UploadedFile[]; we mirror the route by passing [].
-    // R14 only counts file-typed parts; a plain string part is filtered out
-    // before the service sees it. The R14 requirement is therefore already
-    // exercised by the "zero parts" case above. Nothing more to test here.
+    // The `preset`-as-string variant is covered over HTTP in index.test.ts
+    // (parsePresetMultipart drops non-File parts before the service).
 
     // 2 parts
     caught = undefined;
@@ -1754,7 +1752,7 @@ describe("replaceSongPreset", () => {
     ]);
     expect(dto.id).toBe(beforeTarget[0]!.id);
     expect(dto.sortOrder).toBe(1);
-    expect(dto.createdAt).toBe(String(beforeTarget[0]!.created_at));
+    expect(dto.createdAt).toBe(new Date(beforeTarget[0]!.created_at).toISOString());
     expect(dto.name).toBe("TL REPLACED");
     expect(dto.originalFilename).toBe("rep.prst");
     expect(dto.mimeType).toBe("application/octet-stream");
@@ -1953,16 +1951,21 @@ describe("replaceSongPreset", () => {
     `;
     spy.deleteThrows = true;
 
-    // Silence the expected console.warn from replaceSongPreset's catch.
     const origWarn = console.warn;
-    const warnCalls: unknown[] = [];
-    console.warn = (...args: unknown[]) => warnCalls.push(args);
+    const warnCalls: unknown[][] = [];
+    console.warn = (...args: unknown[]) => { warnCalls.push(args); };
 
     const newPreset = presetFileWithName("TL REPLACED", "rep.prst");
-    const dto = await replaceSongPreset(
-      userId, songId, "1", [newPreset], spy,
-    );
-    console.warn = origWarn;
+    let dto;
+    try {
+      dto = await replaceSongPreset(userId, songId, "1", [newPreset], spy);
+    } finally {
+      console.warn = origWarn;
+    }
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]).toContain(oldKeyRow[0]!.storage_key);
+    expect(spy.deletes).toEqual([oldKeyRow[0]!.storage_key]);
 
     expect(dto.sortOrder).toBe(1);
     expect(dto.name).toBe("TL REPLACED");
@@ -1974,8 +1977,51 @@ describe("replaceSongPreset", () => {
 
     const out = await getSongFile(userId, songId, "preset", "1", spy);
     expect(out.bytes).toEqual(newPreset.bytes);
-    // Suppress unused-var for the collected warn calls.
-    expect(warnCalls.length).toBeGreaterThanOrEqual(0);
+  });
+
+  test("non-UUID songId -> 404 (R2)", async () => {
+    const { userId } = await makeUser();
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, "not-a-uuid", "0", [presetFile(0)], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+  });
+
+  test("another user's song -> 404 with nothing changed (R2)", async () => {
+    const { userId: owner } = await makeUser("rep-r2-owner");
+    const { userId: other } = await makeUser("rep-r2-other");
+    const songId = await seedThreePresetSong(owner);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(other, songId, "1", [presetFileWithName("TL OTHER", "o.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("soft-deleted song -> 404 with nothing changed (R2)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedThreePresetSong(userId);
+    await deleteSong(userId, songId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await replaceSongPreset(userId, songId, "1", [presetFileWithName("TL GONE", "g.prst")], spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
   });
 });
 
@@ -2188,4 +2234,62 @@ describe("deleteSongPreset", () => {
     expect((caught as SongError).status).toBe(404);
     expect((caught as SongError).message).toBe("song not found");
   });
+
+  async function seedTwoPresetSong(userId: string): Promise<string> {
+    const created = await createSong(
+      userId,
+      { name: "Two", preset: [presetFile(0, "a.prst"), presetFile(1, "b.prst")], ir: [], nam: [], cover: [] },
+      spy,
+    );
+    return created.id;
+  }
+
+  test("another user's song -> 404 with nothing changed (R2)", async () => {
+    const { userId: owner } = await makeUser("del-r2-owner");
+    const { userId: other } = await makeUser("del-r2-other");
+    const songId = await seedTwoPresetSong(owner);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await deleteSongPreset(other, songId, "0", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+
+  test("soft-deleted song -> 404 with nothing changed (R2)", async () => {
+    const { userId } = await makeUser();
+    const songId = await seedTwoPresetSong(userId);
+    await deleteSong(userId, songId);
+    const before = await snapshotSong(songId, spy);
+
+    let caught: unknown;
+    try {
+      await deleteSongPreset(userId, songId, "0", spy);
+    } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(SongError);
+    expect((caught as SongError).status).toBe(404);
+    expect((caught as SongError).message).toBe("song not found");
+
+    expect(await snapshotSong(songId, spy)).toEqual(before);
+  });
+});
+
+describe("parseSortOrderParam (F21 T2)", () => {
+  test("accepts non-negative integers up to MAX_SORT_ORDER", () => {
+    expect(parseSortOrderParam("0")).toBe(0);
+    expect(parseSortOrderParam("3")).toBe(3);
+    expect(parseSortOrderParam(String(MAX_SORT_ORDER))).toBe(MAX_SORT_ORDER);
+  });
+
+  test.each(["-1", "1.5", "abc", "", "2147483648", "+1", " 1", "1e3"])(
+    "rejects %p -> null",
+    (raw) => {
+      expect(parseSortOrderParam(raw)).toBeNull();
+    },
+  );
 });

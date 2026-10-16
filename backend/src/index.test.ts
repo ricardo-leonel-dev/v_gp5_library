@@ -1302,6 +1302,7 @@ describe("POST/PUT/DELETE /songs/:id/presets round trip (F21 R5, R9, R24, R33)",
     expect(Object.keys(added).sort()).toEqual([
       "byteSize", "createdAt", "id", "mimeType", "name", "originalFilename", "sortOrder",
     ]);
+    expect(added.createdAt).toBe(new Date(added.createdAt).toISOString());
 
     // PUT: replace sortOrder 0 with a different name.
     const putFd = new FormData();
@@ -1333,6 +1334,9 @@ describe("POST/PUT/DELETE /songs/:id/presets round trip (F21 R5, R9, R24, R33)",
       [0, "TL REPLACED"],
       [1, "TL ADDED"],
     ]);
+    for (const p of fetched.presets) {
+      expect(p.createdAt).toBe(new Date(p.createdAt).toISOString());
+    }
 
     // Error bodies are exactly {error}.
     // After PUT + DELETE the live presets are [TL REPLACED (sortOrder 0), TL ADDED (sortOrder 1)].
@@ -1358,6 +1362,54 @@ describe("POST/PUT/DELETE /songs/:id/presets round trip (F21 R5, R9, R24, R33)",
     expect(notFoundRes.status).toBe(404);
     const notFoundBody = (await notFoundRes.json()) as Record<string, unknown>;
     expect(Object.keys(notFoundBody)).toEqual(["error"]);
+  });
+});
+
+describe("POST/PUT /songs/:id/presets 400 bodies (F21 R5, R14, R40)", () => {
+  test("preset sent as a string field, a 10-byte part, and a 506-byte unreadable part -> 400 {error}, presets unchanged", async () => {
+    const { token } = await makeUserToken("f21-400");
+    const song = await createThreePresetSong(token);
+    const auth = { Authorization: `Bearer ${token}` };
+    const db = getDb();
+    const snapshot = () =>
+      db<{ id: string; sort_order: number; storage_key: string }[]>`
+        SELECT id, sort_order, storage_key FROM song_files
+        WHERE song_id = ${song.id} AND kind = 'preset' AND deleted_at IS NULL
+        ORDER BY sort_order
+      `;
+    const before = await snapshot();
+
+    const stringFd = new FormData();
+    stringFd.append("preset", "not a file");
+    const stringRes = await app.request(`/songs/${song.id}/presets`, {
+      method: "POST",
+      headers: auth,
+      body: stringFd,
+    });
+    expect(stringRes.status).toBe(400);
+    expect(await stringRes.json()).toEqual({ error: "a preset file is required" });
+
+    const tinyFd = new FormData();
+    tinyFd.append("preset", new File([new Uint8Array(10)], "tiny.prst"));
+    const tinyRes = await app.request(`/songs/${song.id}/presets`, {
+      method: "POST",
+      headers: auth,
+      body: tinyFd,
+    });
+    expect(tinyRes.status).toBe(400);
+    expect(await tinyRes.json()).toEqual({ error: "preset file must be exactly 507 bytes" });
+
+    const shortFd = new FormData();
+    shortFd.append("preset", new File([new Uint8Array(506)], "short.prst"));
+    const shortRes = await app.request(`/songs/${song.id}/presets/0`, {
+      method: "PUT",
+      headers: auth,
+      body: shortFd,
+    });
+    expect(shortRes.status).toBe(400);
+    expect(await shortRes.json()).toEqual({ error: "preset file must be exactly 507 bytes" });
+
+    expect(await snapshot()).toEqual(before);
   });
 });
 
