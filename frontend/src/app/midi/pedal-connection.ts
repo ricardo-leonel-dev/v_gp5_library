@@ -1,3 +1,11 @@
+import type { Preset } from './preset';
+
+export type PedalConnectionState =
+  | 'not-connected'
+  | 'connecting'
+  | 'connected'
+  | 'error';
+
 /**
  * Abstraction over talking to the pedal, mirroring the backend's
  * StorageAdapter swap pattern. WebMidiPedalConnection is the only
@@ -7,6 +15,6 @@
 export interface PedalConnection {
   isSupported(): boolean;
   connect(): Promise<void>;
-  readPresets(): Promise<unknown[]>;
-  writePreset(preset: unknown): Promise<void>;
+  readPresets(): Promise<Preset[]>;
+  writePreset(preset: Preset): Promise<void>;
 }

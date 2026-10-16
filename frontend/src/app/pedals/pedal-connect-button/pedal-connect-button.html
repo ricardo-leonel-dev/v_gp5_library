@@ -1,0 +1,14 @@
+<button
+  *transloco="let t"
+  type="button"
+  class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+  [attr.data-testid]="'pedal-connect'"
+  [disabled]="disabled()"
+  [attr.title]="isUnsupported() ? t('pedalButton.unsupported_hint') : null"
+  (click)="onClick()"
+>
+  @if (isConnected()) {
+    <span aria-hidden="true" class="size-1.5 rounded-full bg-emerald-300"></span>
+  }
+  <span>{{ t(label()) }}</span>
+</button>

@@ -4,14 +4,29 @@ import { getDb } from "./client";
 
 const MIGRATIONS_DIR = path.join(import.meta.dir, "migrations");
 
-async function migrate(): Promise<void> {
+async function migrate(migrationsDir: string = MIGRATIONS_DIR): Promise<void> {
   const db = getDb();
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+
+  await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename   TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  const appliedRows = await db<{ filename: string }[]>`SELECT filename FROM schema_migrations`;
+  const applied = new Set(appliedRows.map((r) => r.filename));
+
+  const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
 
   for (const file of files) {
-    const sql = await readFile(path.join(MIGRATIONS_DIR, file), "utf8");
+    if (applied.has(file)) continue;
+    const sql = await readFile(path.join(migrationsDir, file), "utf8");
     console.log(`applying ${file}`);
-    await db.unsafe(sql);
+    await db.begin(async (tx) => {
+      await tx.unsafe(sql);
+      await tx`INSERT INTO schema_migrations (filename) VALUES (${file})`;
+    });
   }
 }
 
