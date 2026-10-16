@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
+import { environment } from '../environments/environment';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'songs' },
@@ -16,4 +17,37 @@ export const routes: Routes = [
     canActivate: [authGuard],
     loadComponent: () => import('./songs/songs-page/songs-page').then((m) => m.SongsPage),
   },
+  {
+    // F26 R26, R27. The detail page is guarded by the same `authGuard` as
+    // the list page; an unauthenticated navigation redirects to `/login`.
+    path: 'songs/:id',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./songs/song-detail-page/song-detail-page').then((m) => m.SongDetailPage),
+  },
+  {
+    path: 'pedal',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pedals/pedal-connection-page/pedal-connection-page').then((m) => m.PedalConnectionPage),
+  },
+  {
+    path: 'pedal/presets',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pedals/preset-browser-page/preset-browser-page').then((m) => m.PresetBrowserPage),
+  },
+  // F17 v6 pick surface — dev-only. The `environment.production` check is
+  // resolved at build time: production builds swap `environment.ts` for
+  // `environment.production.ts` (see angular.json `fileReplacements`),
+  // which sets `production: true` and tree-shakes this route out.
+  ...(environment.production
+    ? []
+    : [
+        {
+          path: 'playground',
+          loadComponent: () =>
+            import('./playground/playground-page').then((m) => m.PlaygroundF17V6),
+        },
+      ]),
 ];

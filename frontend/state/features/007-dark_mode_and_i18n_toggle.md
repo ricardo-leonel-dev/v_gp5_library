@@ -4,7 +4,7 @@ name: dark_mode_and_i18n_toggle
 title: Polish dark mode + es/en toggle across every screen
 status: pending
 created_at: 2026-09-21T04:18:56.000Z
-updated_at: 2026-09-21T04:29:14.000Z
+updated_at: 2026-09-22T08:01:26.000Z
 ---
 
 ## Description

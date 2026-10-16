@@ -1,0 +1,137 @@
+<div class="pg-root">
+  <header class="pg-picksbar" data-testid="pg-picksbar">
+    <div class="pg-picksbar-inner">
+      <p class="pg-picksbar-h">Picks</p>
+      <p class="pg-picksbar-body" data-testid="pg-picks-summary">
+        @if (summary(); as s) {
+          {{ s }}
+        } @else {
+          <span class="pg-picksbar-empty">Click a "Pick" button on any variant. Your selection shows here.</span>
+        }
+      </p>
+    </div>
+  </header>
+
+  <div class="pg-layout">
+    <aside class="pg-toc" aria-label="Surface navigation">
+      <p class="pg-toc-h">Surfaces</p>
+      <ul>
+        @for (s of surfaces; track s.id) {
+          <li><a [href]="'#pg-' + s.id">{{ s.title }}</a></li>
+        }
+      </ul>
+    </aside>
+
+    <main class="pg-main">
+      <header class="pg-hero">
+        <p class="pg-eyebrow">F17 v6 pick surface</p>
+        <h1 class="pg-hero-h">Pedal-style chunk&nbsp;sandbox</h1>
+        <p class="pg-hero-sub">
+          Five surfaces &times; three variants. Pick the winner for each before
+          v6 spec work begins. Production code is untouched &mdash; this route
+          ships only in <code>ng serve</code>.
+        </p>
+      </header>
+
+      @for (s of surfaces; track s.id) {
+        <section [id]="'pg-' + s.id" class="pg-section">
+          <header class="pg-section-h">
+            <h2 class="pg-section-title">{{ s.title }}</h2>
+            <p class="pg-section-desc">{{ s.description }}</p>
+          </header>
+
+          <div class="pg-variants">
+            <article class="pg-variant">
+              <div class="pg-variant-meta">
+                <p class="pg-variant-label">A</p>
+                <p class="pg-variant-concept">{{ s.variants[0].concept }}</p>
+                <p class="pg-variant-what">{{ s.variants[0].what }}</p>
+              </div>
+              <div class="pg-variant-stage">
+                @switch (s.id) {
+                  @case ('chassis') { <app-pg-chassis-a /> }
+                  @case ('block-detail') { <app-pg-block-detail-a /> }
+                  @case ('chrome') { <app-pg-chrome-a /> }
+                  @case ('chain-strip') { <app-pg-strip-a /> }
+                  @case ('nav') { <app-pg-nav-a /> }
+                }
+              </div>
+              <button
+                type="button"
+                class="pg-pick"
+                [class.pg-pick--on]="isPicked(s.id, 'A')"
+                (click)="pick(s.id, 'A')"
+                [attr.aria-pressed]="isPicked(s.id, 'A')"
+                [attr.data-testid]="'pg-pick-' + s.id + '-A'"
+              >
+                {{ isPicked(s.id, 'A') ? 'Picked' : 'Pick A' }}
+              </button>
+            </article>
+
+            <article class="pg-variant">
+              <div class="pg-variant-meta">
+                <p class="pg-variant-label">B</p>
+                <p class="pg-variant-concept">{{ s.variants[1].concept }}</p>
+                <p class="pg-variant-what">{{ s.variants[1].what }}</p>
+              </div>
+              <div class="pg-variant-stage">
+                @switch (s.id) {
+                  @case ('chassis') { <app-pg-chassis-b /> }
+                  @case ('block-detail') { <app-pg-block-detail-b /> }
+                  @case ('chrome') { <app-pg-chrome-b /> }
+                  @case ('chain-strip') { <app-pg-strip-b /> }
+                  @case ('nav') { <app-pg-nav-b /> }
+                }
+              </div>
+              <button
+                type="button"
+                class="pg-pick"
+                [class.pg-pick--on]="isPicked(s.id, 'B')"
+                (click)="pick(s.id, 'B')"
+                [attr.aria-pressed]="isPicked(s.id, 'B')"
+                [attr.data-testid]="'pg-pick-' + s.id + '-B'"
+              >
+                {{ isPicked(s.id, 'B') ? 'Picked' : 'Pick B' }}
+              </button>
+            </article>
+
+            <article class="pg-variant">
+              <div class="pg-variant-meta">
+                <p class="pg-variant-label">C</p>
+                <p class="pg-variant-concept">{{ s.variants[2].concept }}</p>
+                <p class="pg-variant-what">{{ s.variants[2].what }}</p>
+              </div>
+              <div class="pg-variant-stage">
+                @switch (s.id) {
+                  @case ('chassis') { <app-pg-chassis-c /> }
+                  @case ('block-detail') { <app-pg-block-detail-c /> }
+                  @case ('chrome') { <app-pg-chrome-c /> }
+                  @case ('chain-strip') { <app-pg-strip-c /> }
+                  @case ('nav') { <app-pg-nav-c /> }
+                }
+              </div>
+              <button
+                type="button"
+                class="pg-pick"
+                [class.pg-pick--on]="isPicked(s.id, 'C')"
+                (click)="pick(s.id, 'C')"
+                [attr.aria-pressed]="isPicked(s.id, 'C')"
+                [attr.data-testid]="'pg-pick-' + s.id + '-C'"
+              >
+                {{ isPicked(s.id, 'C') ? 'Picked' : 'Pick C' }}
+              </button>
+            </article>
+          </div>
+        </section>
+      }
+
+      <footer class="pg-foot">
+        <p>
+          Done picking? The picks live in this tab's memory only &mdash; write
+          them down before closing. A separate F17 v6 task will fold the chosen
+          treatments into the production code.
+        </p>
+      </footer>
+    </main>
+  </div>
+</div>

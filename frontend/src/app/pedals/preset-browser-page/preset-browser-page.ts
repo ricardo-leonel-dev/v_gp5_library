@@ -1,0 +1,331 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  HostListener,
+  OnInit,
+  computed,
+  effect,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
+import { TranslocoDirective } from '@jsverse/transloco';
+import type { Preset, PresetSlot } from '../../midi/preset';
+import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
+import { PresetExportSelection } from '../preset-export-selection.service';
+import { PresetComparisonStore } from '../preset-comparison.service';
+import { ChainBoard, type ChainBlockClicked } from '../chain-board/chain-board';
+import { BlockDetail } from '../block-detail/block-detail';
+import { MockPresetsStore } from '../mock-presets.store';
+import { SaveSongDialog } from '../../songs/save-song-dialog/save-song-dialog';
+import { PedalPresetsStore } from '../pedal-presets.store';
+import { UnsupportedBrowserMessage } from '../../shared/unsupported-browser-message/unsupported-browser-message';
+
+type LoadState = 'idle' | 'loading' | 'loaded' | 'error';
+
+interface SaveDialogState {
+  initial: readonly Preset[];
+  available: readonly Preset[];
+  testMode: boolean;
+}
+
+// v6: the page is a chip-based navigation (R22, R23) above the main
+// area (R24). The drawer, compact list, sticky toolbar, voltforge
+// accordion, floating tab, and no-selection fallback are REMOVED.
+// Multi-select comparison still accumulates slots (R18-R20), but the main
+// area renders the single active preset (R21). The mock-data control
+// lives in the page header (`src/app/app.html`) and the picker overlay
+// (R25-R27) opens when "Browse presets" is clicked.
+@Component({
+  selector: 'app-preset-browser-page',
+  imports: [TranslocoDirective, ChainBoard, BlockDetail, SaveSongDialog, UnsupportedBrowserMessage],
+  templateUrl: './preset-browser-page.html',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+export class PresetBrowserPage implements OnInit {
+  private readonly pedal = inject(WebMidiPedalConnection);
+  private readonly mockPresets = inject(MockPresetsStore);
+  private readonly pedalPresets = inject(PedalPresetsStore);
+  readonly exportSelection = inject(PresetExportSelection);
+  readonly comparison = inject(PresetComparisonStore);
+
+  readonly supported = this.pedal.isSupported();
+  readonly hasMockPresets = computed(() => this.mockPresets.presets().length > 0);
+  readonly connectionState = this.pedal.connectionState;
+  readonly restoreWarning = this.pedal.restoreWarning;
+  readonly loadState = signal<LoadState>('idle');
+  // v6: `presets` is a computed that prefers the mock store over the
+  // real `loadFromPedal` signal. Both sources write into the same
+  // `activeSlots`/`presets` shape.
+  readonly presets = signal<Preset[]>([]);
+  readonly error = signal<string | null>(null);
+  readonly markedSlots = this.exportSelection.markedSlots;
+  readonly comparisonSlots = this.comparison.selectedSlots;
+
+  // v6: single-active signal driven by chip selection (R21, R24). When
+  // the user clicks a chip, the matching preset becomes active; the main
+  // area renders its chain board.
+  readonly activePreset = signal<Preset | null>(null);
+
+  // v6: picker overlay open/close (R25). True while the overlay is
+  // visible; flipped by `openPicker()` and `closePicker()`. Escape key
+  // also closes the picker.
+  readonly pickerOpen = signal(false);
+
+  // v6: derived from `activePreset` and the comparison set (R21, R24).
+  // If no chip has been activated but the comparison set is non-empty,
+  // fall back to the lowest-slot preset in the comparison set.
+  readonly displayPreset = computed<Preset | null>(() => {
+    const explicit = this.activePreset();
+    if (explicit) return explicit;
+    const slots = this.comparisonSlots();
+    if (slots.size === 0) return null;
+    const lowest = Math.min(...Array.from(slots));
+    return this.presets().find((p) => p.slot === lowest) ?? null;
+  });
+
+  // v6: ordered list of slots currently in the comparison set. The chip
+  // row renders one chip per slot in this order (R22).
+  readonly chipSlots = computed<readonly number[]>(() => {
+    const slots = this.comparisonSlots();
+    return Array.from(slots).sort((a, b) => a - b);
+  });
+
+  // v6: per-preset block detail tracking — maps the active row's slot to
+  // the currently selected block in that row's chain. Carried forward
+  // from v5 (R24).
+  private readonly selectedBlockBySlot = signal<ReadonlyMap<number, ChainBlockClicked>>(
+    new Map(),
+  );
+
+  // F4: snapshot of the Save-as-song dialog state at the moment of open
+  // (R24-R27). Null while closed. The dialog reads these inputs once and
+  // never re-reads them while it stays open (R26).
+  readonly saveDialog = signal<SaveDialogState | null>(null);
+  private readonly saveButton = viewChild<ElementRef<HTMLButtonElement>>('saveSongButton');
+
+  // F29: the user can dismiss both the success and error banners; this
+  // flag clears them on click of the "×" control. New state transitions
+  // reset it so a fresh success/error re-shows.
+  readonly statusDismissed = signal(false);
+
+  // F29: which banner is visible right now. `'success'` shows the
+  // preset-count message; `'error'` shows the translated error;
+  // `null` hides both. Used by the template's `@if` instead of inlined
+  // signal reads so dismiss works for both banners with one flag.
+  readonly visibleStatus = computed<'success' | 'error' | null>(() => {
+    if (this.statusDismissed()) return null;
+    if (this.loadState() === 'error') return 'error';
+    if (this.loadState() === 'loaded' && this.presets().length > 0) return 'success';
+    return null;
+  });
+
+  // F29: the i18n key for the visible success message; the template
+  // resolves it through `t(...)`. `null` hides the banner.
+  readonly successKey = computed<string | null>(() => {
+    if (this.visibleStatus() !== 'success') return null;
+    const total = this.presets().length;
+    const fromMocks = this.mockPresets.presets().length > 0;
+    const base = fromMocks ? 'presetBrowser.loaded_mocks' : 'presetBrowser.loaded_count';
+    return total === 1 ? `${base}_one` : `${base}_other`;
+  });
+
+  // F29: count passed to the success message's plural translation.
+  readonly successCount = computed<number>(() => this.presets().length);
+
+  constructor() {
+    // v6: when mock data is loaded via the header button, mirror it into
+    // the page-level `presets` signal so the main area picks it up. The
+    // real `loadPresets()` path still wins when it succeeds (overwriting
+    // the mock). Done via `effect` so the page reacts without subscriptions.
+    effect(() => {
+      const mock = this.mockPresets.presets();
+      if (mock.length > 0 && this.loadState() !== 'loaded') {
+        this.presets.set(mock);
+        this.loadState.set('loaded');
+        this.error.set(null);
+      }
+    });
+    // F26 R55, R64, R66: mirror the shared `PedalPresetsStore` so a
+    // header-triggered read lands here too (the page no longer owns the
+    // `readPresets()` call — `PedalPresetsStore` does). `loadPresets()` in
+    // the store already clears `mockPresets` on success (F17 v6), so the
+    // mock-mirror effect below only fires when the read failed.
+    effect(() => {
+      const storeState = this.pedalPresets.loadState();
+      const storePresets = this.pedalPresets.presets();
+      if (storeState === 'loading') {
+        this.loadState.set('loading');
+        this.error.set(null);
+        return;
+      }
+      if (storeState === 'loaded') {
+        this.presets.set([...storePresets]);
+        this.mockPresets.clear();
+        this.loadState.set('loaded');
+        this.error.set(null);
+        return;
+      }
+      if (storeState === 'error') {
+        this.error.set(this.pedalPresets.error());
+        this.loadState.set('error');
+      }
+    });
+    // F29: when the page transitions into a new read lifecycle
+    // (`loading`/`loaded`/`error`), clear the user's prior dismiss so the
+    // fresh status re-shows. Reading `loadState()` inside the effect
+    // makes it reactive without a circular write.
+    effect(() => {
+      this.loadState();
+      this.statusDismissed.set(false);
+    });
+  }
+
+  ngOnInit(): void {
+    if (!this.supported) return;
+    if (this.connectionState() !== 'connected') return;
+    void this.loadPresets();
+  }
+
+  isInComparison(slot: number): boolean {
+    return this.comparisonSlots().has(slot);
+  }
+
+  // v6: chip click (R21). The chip body sets the active preset; the "×"
+  // control fires `onChipRemove` (R20).
+  onChipClick(slot: number): void {
+    const preset = this.presets().find((p) => p.slot === slot) ?? null;
+    this.activePreset.set(preset);
+  }
+
+  // v6: chip removal (R20). Removes the slot from the comparison set; if
+  // the removed preset was active, the active preset falls back to null
+  // so `displayPreset` derives from the remaining comparison set.
+  onChipRemove(slot: number, ev: Event): void {
+    ev.stopPropagation();
+    this.comparison.remove(slot);
+    if (this.activePreset()?.slot === slot) {
+      this.activePreset.set(null);
+    }
+  }
+
+  // v6: picker (R25).
+  openPicker(): void {
+    this.pickerOpen.set(true);
+  }
+
+  closePicker(): void {
+    this.pickerOpen.set(false);
+  }
+
+  // v6: picker row activation (R26). Adds the slot to the comparison set
+  // and closes the picker; `displayPreset` will pick up the new active
+  // preset via the comparison-set fallback (R21).
+  onPickerRow(preset: Preset): void {
+    this.comparison.add(preset.slot);
+    this.activePreset.set(preset);
+    this.pickerOpen.set(false);
+  }
+
+  // v6: Escape closes the picker (R25).
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    if (this.pickerOpen()) {
+      this.pickerOpen.set(false);
+    }
+  }
+
+  // v6: helper for the chip row — returns the preset's name for the
+  // chip body; falls back to "—" when the preset isn't loaded (R27).
+  nameFor(slot: number): string {
+    const p = this.presets().find((x) => x.slot === slot);
+    return p?.name ?? '—';
+  }
+
+  // F29: hide the success/error banner until the next read lifecycle.
+  dismissStatus(): void {
+    this.statusDismissed.set(true);
+  }
+
+  // F29 fix v2: the page used to render only the error banner when the
+  // very first read failed (no presets yet to fall back to). Re-trigger
+  // the shared store's read; the mirror effect picks up the transition
+  // through loading → loaded/error.
+  retryRead(): void {
+    if (!this.supported) return;
+    void this.pedalPresets.read();
+  }
+
+  onExportMarkChange(slot: number): void {
+    this.exportSelection.toggle(slot);
+  }
+
+  // F4: F4 dialog open/close. Opens with initial = chip-listed savable
+  // presets (sorted), available = every savable preset (mock or has raw),
+  // and testMode = the displayed preset is a mock (R22-R27).
+  openSaveDialog(): void {
+    const savable = this.presets().filter((p) => this.isSavable(p));
+    const chips = new Set(this.chipSlots());
+    const initial = savable
+      .filter((p) => chips.has(p.slot))
+      .slice()
+      .sort((a, b) => a.slot - b.slot);
+    this.saveDialog.set({
+      initial,
+      available: savable.slice(),
+      testMode: this.displayIsMock(),
+    });
+  }
+
+  closeSaveDialog(): void {
+    this.saveDialog.set(null);
+    queueMicrotask(() => this.saveButton()?.nativeElement.focus());
+  }
+
+  // F4: savability for the page entry button (R22-R24). A pedal preset is
+  // savable when it has raw bytes; mocks are always savable (they open
+  // the dialog in test mode).
+  isMock(p: Preset): boolean {
+    return this.mockPresets.presets().includes(p);
+  }
+
+  isSavable(p: Preset): boolean {
+    return this.isMock(p) || p.raw !== undefined;
+  }
+
+  readonly displayIsMock = computed(() => {
+    const p = this.displayPreset();
+    return p !== null && this.isMock(p);
+  });
+
+  readonly canSave = computed(() => {
+    const p = this.displayPreset();
+    return p !== null && this.isSavable(p);
+  });
+
+  onBlockClicked(presetSlot: number, click: ChainBlockClicked): void {
+    this.selectedBlockBySlot.update((m) => {
+      const next = new Map(m);
+      if (m.get(presetSlot) === click && click.slot) {
+        // Same block clicked again → close it (same toggle v5 had).
+        next.delete(presetSlot);
+      } else {
+        next.set(presetSlot, click);
+      }
+      return next;
+    });
+  }
+
+  selectedBlockFor(slot: number): ChainBlockClicked | undefined {
+    return this.selectedBlockBySlot().get(slot);
+  }
+
+  private async loadPresets(): Promise<void> {
+    // F26: delegate to the shared store. The store clears mocks on
+    // success and surfaces its own error mapping — the mirror effect
+    // above picks up the result. The shared store also dedupes against
+    // a header-triggered read already in flight.
+    await this.pedalPresets.read();
+  }
+}
