@@ -23,6 +23,7 @@ import {
 import { RouterLink } from '@angular/router';
 import { TranslocoDirective } from '@jsverse/transloco';
 import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
+import { UnsupportedBrowserMessage } from '../../shared/unsupported-browser-message/unsupported-browser-message';
 import type { Preset } from '../../midi/preset';
 import type { Song } from '../song';
 import { SongsApi } from '../songs-api.service';
@@ -38,7 +39,7 @@ import {
 
 @Component({
   selector: 'app-write-to-pedal-dialog',
-  imports: [TranslocoDirective, RouterLink],
+  imports: [TranslocoDirective, RouterLink, UnsupportedBrowserMessage],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './write-to-pedal-dialog.html',
 })
@@ -62,6 +63,7 @@ export class WriteToPedalDialog {
   // The pedal's connection state — the dialog doesn't initiate a
   // connection (R26); it just renders the "Connect to GP-5" reminder
   // when not connected (R25).
+  readonly supported = this.pedal.isSupported();
   readonly connectionState = this.pedal.connectionState;
 
   // Picker input (R15-R19, R21).
@@ -257,6 +259,7 @@ export class WriteToPedalDialog {
   // connect() failures are surfaced by the /pedal page's own state.
   // Swallow here — the header state will reflect the result.
   async onConnect(): Promise<void> {
+    if (!this.supported) return;
     try {
       await this.pedal.connect();
     } catch {

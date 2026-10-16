@@ -193,6 +193,14 @@
     "unknown": "Could not connect to the pedal.",
     "view_presets": "View presets"
   },
+  "unsupportedBrowser": {
+    "title": "This browser can't connect to the GP-5.",
+    "body": "Connecting the pedal and reading or writing its presets needs Web MIDI. Safari and browsers on iPhone and iPad don't provide it.",
+    "browsers": "On a computer or Android device, open the app in Chrome, Edge, Opera, Samsung Internet, or Firefox 108+.",
+    "footnote": "Your saved songs are still available in this browser.",
+    "insecure_body": "This page was opened over an insecure connection (http://), and browsers only enable Web MIDI on https:// addresses or localhost. Open it from an https:// address.",
+    "insecure_compact": "Open it from an https:// address or from localhost."
+  },
   "presetBrowser": {
     "title": "Pedal presets",
     "not_connected": "Connect the pedal to view its presets.",

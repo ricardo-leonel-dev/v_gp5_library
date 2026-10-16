@@ -1,4 +1,5 @@
-import { describe, expect, test, beforeEach, vi } from 'vitest';
+import { describe, expect, test, beforeEach, afterEach, vi } from 'vitest';
+import { By } from '@angular/platform-browser';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
@@ -49,6 +50,14 @@ function makeRefs(): WriteablePresetRef[] {
 }
 
 const minimalTranslations: Translation = {
+  unsupportedBrowser: {
+    title: 'Este navegador no puede conectarse al GP-5.',
+    body: 'Conectar el pedal y leer o escribir sus presets requiere Web MIDI.',
+    browsers: 'Abre la app en Chrome, Edge, Opera, Samsung Internet o Firefox 108+.',
+    footnote: 'Tus canciones guardadas siguen disponibles en este navegador.',
+    insecure_body: 'Esta página se abrió sin conexión segura (http://).',
+    insecure_compact: 'Ábrela desde una dirección https:// o desde localhost.',
+  },
   writeToPedal: {
     title: 'Send to pedal',
     close: 'Cerrar',
@@ -156,10 +165,17 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
   let fixture: ReturnType<typeof TestBed.createComponent<Host>>;
 
   beforeEach(() => {
+    // jsdom has no navigator.requestMIDIAccess; these tests exercise the
+    // supported-browser dialog with the real pedal service.
+    vi.spyOn(WebMidiPedalConnection.prototype, 'isSupported').mockReturnValue(true);
     setupTestBed();
     fixture = TestBed.createComponent(Host);
     host = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   test('opens with the song heading, preset list, target-slot picker, and disabled Send button when not connected (R3, R25)', async () => {
@@ -194,6 +210,7 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     setupTestBed();
     const connectSpy = vi.fn().mockResolvedValue(undefined);
     const stubPedal = {
+      isSupported: () => true,
       connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
       connect: connectSpy,
       writePreset: vi.fn().mockResolvedValue(undefined),
@@ -211,6 +228,7 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     expect(connectBtn).toBeTruthy();
     expect(connectBtn!.textContent?.trim()).toBe('Conectar GP-5');
     expect(connectBtn!.disabled).toBe(false);
+    expect(root.querySelector('[data-testid="unsupported-browser-message"]')).toBeNull();
 
     connectBtn!.click();
     await fixture.whenStable();
@@ -226,6 +244,7 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     setupTestBed();
     const connectSpy = vi.fn().mockResolvedValue(undefined);
     const stubPedal = {
+      isSupported: () => true,
       connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
       connect: connectSpy,
       writePreset: vi.fn().mockResolvedValue(undefined),
@@ -256,6 +275,7 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     setupTestBed();
     const readPresetsSpy = vi.fn().mockResolvedValue([]);
     const stubPedal = {
+      isSupported: () => true,
       connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
       connect: vi.fn().mockResolvedValue(undefined),
       readPresets: readPresetsSpy,
@@ -324,6 +344,7 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     TestBed.resetTestingModule();
     setupTestBed();
     const stubPedal = {
+      isSupported: () => true,
       connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('connected'),
       writePreset: async (_: Preset): Promise<void> => {
         return new Promise(() => {});
@@ -350,6 +371,56 @@ describe('WriteToPedalDialog (F5 R3, R4, R15-R19, R20-R24, R25, R28-R41, R51, R5
     expect(root.querySelector('[data-testid="write-to-pedal-submitting"]')).toBeTruthy();
     expect(root.querySelector('[data-testid="write-to-pedal-presets"]')).toBeTruthy();
     expect(root.querySelector('[data-testid="write-to-pedal-slot-input"]')).toBeTruthy();
+  });
+
+  test('F9 R17 — unsupported browser: compact message replaces the not-connected reminder and connect button', async () => {
+    TestBed.resetTestingModule();
+    setupTestBed();
+    const stubPedal = {
+      isSupported: () => false,
+      connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
+      connect: vi.fn().mockResolvedValue(undefined),
+      writePreset: vi.fn().mockResolvedValue(undefined),
+    } as unknown as WebMidiPedalConnection;
+    TestBed.overrideProvider(WebMidiPedalConnection, { useValue: stubPedal });
+    fixture = TestBed.createComponent(Host);
+    host = fixture.componentInstance;
+    host.open(makeSong(), makeRefs());
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const message = root.querySelector('[data-testid="unsupported-browser-message"]');
+    expect(message).not.toBeNull();
+    expect(message?.getAttribute('data-variant')).toBe('compact');
+    expect(message?.textContent).toContain('Este navegador no puede conectarse al GP-5.');
+    expect(root.querySelector('[data-testid="write-to-pedal-not-connected"]')).toBeNull();
+    expect(root.querySelector('[data-testid="write-to-pedal-connect"]')).toBeNull();
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="write-to-pedal-submit"]')!.disabled).toBe(true);
+  });
+
+  test('F9 R18 — unsupported browser: onConnect() returns without calling pedal.connect()', async () => {
+    TestBed.resetTestingModule();
+    setupTestBed();
+    const connectSpy = vi.fn().mockResolvedValue(undefined);
+    const stubPedal = {
+      isSupported: () => false,
+      connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
+      connect: connectSpy,
+      writePreset: vi.fn().mockResolvedValue(undefined),
+    } as unknown as WebMidiPedalConnection;
+    TestBed.overrideProvider(WebMidiPedalConnection, { useValue: stubPedal });
+    fixture = TestBed.createComponent(Host);
+    host = fixture.componentInstance;
+    host.open(makeSong(), makeRefs());
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const dialog = fixture.debugElement.query(By.directive(WriteToPedalDialog))
+      .componentInstance as WriteToPedalDialog;
+    await dialog.onConnect();
+    expect(connectSpy).not.toHaveBeenCalled();
   });
 
 });
@@ -416,7 +487,7 @@ async function mountStubbed(opts: {
     vi.fn((_songId: string, sortOrder: number) => Promise.resolve(prstFor(sortOrder)));
   const writePreset = opts.writePreset ?? vi.fn().mockResolvedValue(undefined);
   TestBed.overrideProvider(WebMidiPedalConnection, {
-    useValue: { connectionState: conn, connect: vi.fn(), writePreset },
+    useValue: { isSupported: () => true, connectionState: conn, connect: vi.fn(), writePreset },
   });
   TestBed.overrideProvider(SongsApi, { useValue: { getSongPreset } });
   const fixture = TestBed.createComponent(Host);
