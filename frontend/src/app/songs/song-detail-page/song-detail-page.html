@@ -152,6 +152,28 @@
                             }
                           }
                         </div>
+                        <!-- F27 R9 — Duplicate button in the expanded panel. -->
+                        <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
+                          @if (duplicateErrorFor(p.sortOrder); as err) {
+                            <span
+                              class="text-xs text-red-700 dark:text-red-300"
+                              data-testid="song-preset-duplicate-error"
+                              role="alert"
+                            >
+                              {{ t(err.key) }}
+                            </span>
+                          }
+                          <button
+                            type="button"
+                            class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                            [attr.data-testid]="'song-preset-duplicate-' + p.sortOrder"
+                            [attr.aria-label]="t('songPresetDraft.duplicate_aria', { name: p.name })"
+                            [disabled]="isDuplicateDisabled() || duplicateStatusFor(p.sortOrder) === 'creating'"
+                            (click)="onDuplicate(p.sortOrder)"
+                          >
+                            {{ t('songPresetDraft.duplicate') }}
+                          </button>
+                        </div>
                         <p class="mt-2 text-[11px] text-slate-400 dark:text-slate-500" data-testid="song-preset-readonly-note">
                           {{ t('songDetail.chain_unverified_footnote') }}
                         </p>
@@ -163,6 +185,153 @@
             </li>
           }
         </ol>
+
+        <!-- F27 R12 — the draft panel. -->
+        @if (draft(); as d) {
+          <section
+            class="relative mt-6 rounded-lg bg-white ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
+            data-testid="song-preset-draft"
+            aria-labelledby="song-preset-draft-heading"
+          >
+            <span
+              class="absolute inset-y-0 left-0 w-1 rounded-l-lg {{ isDraftUnsaved() ? 'bg-amber-400 dark:bg-amber-500' : 'bg-slate-300 dark:bg-slate-600' }}"
+              aria-hidden="true"
+            ></span>
+            <div class="py-4 pl-5 pr-4">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <h3
+                    id="song-preset-draft-heading"
+                    class="text-sm font-semibold text-slate-900 dark:text-slate-100"
+                    data-testid="song-preset-draft-heading"
+                  >
+                    {{ t('songPresetDraft.heading', { source: draftSourceName() }) }}
+                  </h3>
+                  @if (isDraftUnsaved()) {
+                    <span
+                      class="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+                      data-testid="song-preset-draft-unsaved"
+                    >
+                      <span class="size-1.5 rounded-full bg-amber-500" aria-hidden="true"></span>
+                      {{ t('songPresetDraft.unsaved') }}
+                    </span>
+                  }
+                </div>
+                <button
+                  type="button"
+                  class="rounded-md px-2 py-1.5 text-sm font-medium text-slate-500 hover:text-red-700 dark:text-slate-400 dark:hover:text-red-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+                  data-testid="song-preset-draft-discard"
+                  (click)="onDraftDiscard()"
+                >
+                  {{ t('songPresetDraft.discard') }}
+                </button>
+              </div>
+
+              <div class="mt-3 max-w-xs">
+                <label
+                  for="song-preset-draft-name"
+                  class="block text-xs font-medium text-slate-600 dark:text-slate-400"
+                >
+                  {{ t('songPresetDraft.name_label') }}
+                </label>
+                <input
+                  id="song-preset-draft-name"
+                  type="text"
+                  class="mt-1 w-full rounded-md bg-white px-2.5 py-1.5 text-sm text-slate-900 ring-1 ring-inset focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-900 dark:text-slate-100 {{ draftNameError() ? 'ring-red-400 dark:ring-red-700' : 'ring-slate-300 dark:ring-slate-600' }}"
+                  [class]="'mt-1 w-full rounded-md bg-white px-2.5 py-1.5 text-sm text-slate-900 ring-1 ring-inset focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-900 dark:text-slate-100 ' + (draftNameError() ? 'ring-red-400 dark:ring-red-700' : 'ring-slate-300 dark:ring-slate-600')"
+                  [value]="draftNameForInput()"
+                  [attr.aria-invalid]="draftNameError() ? 'true' : null"
+                  [attr.aria-describedby]="draftNameError() ? 'song-preset-draft-name-error' : 'song-preset-draft-name-help'"
+                  data-testid="song-preset-draft-name"
+                  (input)="onDraftNameInput($any($event.target).value)"
+                />
+                @if (draftNameError(); as err) {
+                  <p
+                    id="song-preset-draft-name-error"
+                    class="mt-1 text-xs text-red-700 dark:text-red-300"
+                    data-testid="song-preset-draft-name-error"
+                    role="alert"
+                  >
+                    @switch (err) {
+                      @case ('name_required') {
+                        {{ t('songPresetDraft.errors.name_required') }}
+                      }
+                      @case ('name_unsupported') {
+                        {{ t('songPresetDraft.errors.name_unsupported') }}
+                      }
+                      @case ('name_duplicate') {
+                        {{ t('songPresetDraft.errors.name_duplicate', { name: draftNameForInput().trim() }) }}
+                      }
+                    }
+                  </p>
+                } @else {
+                  <p
+                    id="song-preset-draft-name-help"
+                    class="mt-1 text-xs text-slate-500 dark:text-slate-400"
+                    data-testid="song-preset-draft-name-help"
+                  >
+                    {{ t('songPresetDraft.name_help') }}
+                  </p>
+                }
+              </div>
+
+              <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-start">
+                <div class="min-w-0 lg:flex-[3]">
+                  <app-chain-board
+                    [chain]="draftAsPresetForBoard()"
+                    [selectedIndex]="draftSelectedPos()"
+                    [presetName]="draftNameForInput()"
+                    (blockClicked)="onDraftBlockClicked($event)"
+                  ></app-chain-board>
+                  @if (draftSelectedPos() === null) {
+                    <p
+                      class="mt-2 text-xs text-slate-500 dark:text-slate-400"
+                      data-testid="song-preset-draft-edit-hint"
+                    >
+                      {{ t('songPresetDraft.edit_hint') }}
+                    </p>
+                  }
+                </div>
+                @if (draftSelectedSlot(); as slot) {
+                  <div class="min-w-0 lg:flex-[1]" data-testid="song-preset-draft-block-detail">
+                    <app-block-detail
+                      [slot]="slot"
+                      [editable]="true"
+                      (enabledChange)="onDraftBypassChange(draftSelectedPos()!, $event)"
+                      (parameterChange)="onDraftParameterChange(draftSelectedPos()!, $event)"
+                      (moduleChange)="onDraftModuleChange(draftSelectedPos()!, $event)"
+                      (closed)="onDraftBlockClicked({ position: draftSelectedPos()!, slot: null })"
+                    ></app-block-detail>
+                  </div>
+                }
+              </div>
+
+              <div
+                class="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 dark:border-slate-700/50"
+                data-testid="song-preset-draft-actions"
+              >
+                <button
+                  type="button"
+                  class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  data-testid="song-preset-draft-export"
+                  [disabled]="!draftActionsEnabled()"
+                  (click)="onDraftExport()"
+                >
+                  {{ t('songPresetDraft.export') }}
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  data-testid="song-preset-draft-send"
+                  [disabled]="!draftActionsEnabled()"
+                  (click)="onDraftSendToPedal()"
+                >
+                  {{ t('songPresetDraft.send') }}
+                </button>
+              </div>
+            </div>
+          </section>
+        }
 
         <p class="mt-2 text-xs text-slate-500 dark:text-slate-400" data-testid="song-reference-note">
           {{ t('songDetail.reference_note') }}
@@ -204,5 +373,22 @@
         <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songs.login_again') }}</a>
       </p>
     }
+  }
+
+  @if (writeDialogOpen() && draft(); as d) {
+    <app-write-to-pedal-dialog
+      [song]="song()!"
+      [presets]="writeDialogPresets()"
+      [localPreset]="writeDialogLocalPreset()"
+      (closed)="onWriteDialogClosed()"
+    />
+  }
+
+  @if (leavePrompt(); as prompt) {
+    <app-leave-draft-dialog
+      [draftName]="draft()?.name ?? draftSourceName()"
+      (leave)="onLeaveAndDiscard()"
+      (stay)="onLeaveKeep()"
+    />
   }
 </div>

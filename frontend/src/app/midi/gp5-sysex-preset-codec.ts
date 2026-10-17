@@ -133,6 +133,7 @@
 import { Injectable } from '@angular/core';
 import type { Preset, PresetSlot } from './preset';
 import type { SysexDecodeResult, SysexPresetCodec, WriteReply } from './sysex-preset-codec';
+import { parseModuleType } from './gp5-module-vocabulary';
 
 // CRC-8/SMBUS, poly 0x07, init 0. Used for every packet's CRC byte.
 export function crc8(bytes: Uint8Array): number {
@@ -361,6 +362,99 @@ export function decodeGp5Body(body: Uint8Array, name: string, slot: number): Pre
   const chain: PresetSlot[] = chainOrder.map((blockIdx) => blocks[blockIdx] ?? blocks[0]);
 
   return { slot, name, chain };
+}
+
+// F27 `song_preset_duplicate_edit_export` — patch an existing 466-byte GP-5
+// body in place to reflect an edited chain (R1-R7). "Patch in place" means:
+//  1. validate that the body has the documented length, the four record magics
+//     and a permutation order record (R6);
+//  2. copy the input bytes so the caller's array is not mutated (R7);
+//  3. decode the input body to get the baseline chain;
+//  4. for each chain position, compare the new chain entry with the baseline
+//     and write ONLY the fields that differ, into the matching record bytes
+//     (REC_MODELS for moduleType, REC_BYPASS for enabled, REC_PARAMS for
+//     p0..p7). Unknown / unparseable moduleType changes are skipped without
+//     raising. NaN or non-finite parameter values are also skipped — a draft
+//     holding a corrupted float leaves the underlying body bytes untouched.
+//
+// This is what makes R1 hold: the diff is identity for an unedited chain, so
+// an unedited patch round-trips byte-for-byte even if the decoder's float32
+// round-trip is imperfect. R5 follows from the decoder reading the same
+// offsets. R10's verified body encoder is `patchGp5Body`; `encodeBody` is
+// the unverified from-scratch encoder used elsewhere.
+export function patchGp5Body(body: Uint8Array, chain: readonly PresetSlot[]): Uint8Array {
+  if (body.length !== GP5_BODY_LEN) throw new Error('body_not_patchable');
+  const modelsBase = findMagic(body, REC_MODELS_MAGIC);
+  const bypassBase = findMagic(body, REC_BYPASS_MAGIC);
+  const orderBase = findMagic(body, REC_ORDER_MAGIC);
+  const paramsBase = findMagic(body, REC_PARAMS_MAGIC);
+  if (modelsBase < 0 || bypassBase < 0 || orderBase < 0 || paramsBase < 0) {
+    throw new Error('body_not_patchable');
+  }
+  if (orderBase + N_BLOCKS > body.length) {
+    throw new Error('body_not_patchable');
+  }
+  const orderBytes = body.subarray(orderBase, orderBase + N_BLOCKS);
+  const seen = new Uint8Array(N_BLOCKS);
+  for (let i = 0; i < N_BLOCKS; i++) {
+    const b = orderBytes[i]!;
+    if (b >= N_BLOCKS) throw new Error('body_not_patchable');
+    if (seen[b] === 1) throw new Error('body_not_patchable');
+    seen[b] = 1;
+  }
+  if (paramsBase + N_PARAM_SLOTS * 4 > body.length) {
+    throw new Error('body_not_patchable');
+  }
+
+  const out = body.slice();
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  const baseline = decodeGp5Body(body, '', 0).chain;
+
+  for (let pos = 0; pos < N_BLOCKS; pos++) {
+    const next = chain[pos];
+    if (!next) continue;
+    const prev = baseline[pos];
+    if (!prev) continue;
+    const blockIdx = orderBytes[pos]!;
+
+    if (next.moduleType !== prev.moduleType) {
+      const parsed = parseModuleType(next.moduleType);
+      if (parsed) {
+        const recordBase = modelsBase + blockIdx * 4;
+        out[recordBase] = parsed.fxlow & 0xff;
+        out[recordBase + 1] = (parsed.fxlow >> 8) & 0xff;
+        out[recordBase + 2] = (parsed.fxlow >> 16) & 0xff;
+        out[recordBase + 3] = parsed.cat & 0xff;
+      }
+    }
+
+    if (next.enabled !== prev.enabled) {
+      const mask =
+        (out[bypassBase]! |
+          (out[bypassBase + 1]! << 8) |
+          (out[bypassBase + 2]! << 16) |
+          (out[bypassBase + 3]! << 24)) >>>
+        0;
+      const updated = next.enabled ? mask | (1 << blockIdx) : mask & ~(1 << blockIdx);
+      out[bypassBase] = updated & 0xff;
+      out[bypassBase + 1] = (updated >> 8) & 0xff;
+      out[bypassBase + 2] = (updated >> 16) & 0xff;
+      out[bypassBase + 3] = (updated >>> 24) & 0xff;
+    }
+
+    const prevParams = prev.parameters;
+    const nextParams = next.parameters;
+    for (let k = 0; k < PARAMS_PER_BLOCK; k++) {
+      const key = `p${k}`;
+      const prevVal = prevParams[key];
+      const nextVal = nextParams[key];
+      if (nextVal === undefined) continue;
+      if (prevVal !== undefined && Object.is(prevVal, nextVal)) continue;
+      if (!Number.isFinite(nextVal)) continue;
+      dv.setFloat32(paramsBase + (blockIdx * PARAMS_PER_BLOCK + k) * 4, nextVal, true);
+    }
+  }
+  return out;
 }
 
 // Build a 466-byte body from the Preset chain. Records are laid out contiguously

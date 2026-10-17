@@ -40,10 +40,30 @@
   </div>
 
   @if (resolved(); as v) {
-    <p class="mt-3 text-sm text-slate-700 dark:text-slate-200" data-testid="block-state">
-      <span class="mr-2 inline-block size-2 rounded-full {{ v.slot.enabled ? 'bg-red-500' : 'bg-black/30' }}" aria-hidden="true"></span>
-      {{ t(v.slot.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off') }}
-    </p>
+    @if (editable()) {
+      <div class="mt-3 flex items-center gap-2" data-testid="bypass-row">
+        <button
+          type="button"
+          role="switch"
+          [attr.aria-checked]="v.slot.enabled"
+          [attr.aria-label]="t('songPresetDraft.bypass_label')"
+          class="relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors motion-reduce:transition-none {{ v.slot.enabled ? 'bg-red-500' : 'bg-slate-300 dark:bg-slate-600' }}"
+          data-testid="bypass-switch"
+          (click)="onBypassToggle()"
+        >
+          <span
+            class="absolute top-0.5 size-4 rounded-full bg-white shadow transition-transform motion-reduce:transition-none {{ v.slot.enabled ? 'translate-x-4' : 'left-0.5' }}"
+            aria-hidden="true"
+          ></span>
+        </button>
+        <span class="text-sm text-slate-700 dark:text-slate-200">{{ t('songPresetDraft.bypass_label') }}</span>
+      </div>
+    } @else {
+      <p class="mt-3 text-sm text-slate-700 dark:text-slate-200" data-testid="block-state">
+        <span class="mr-2 inline-block size-2 rounded-full {{ v.slot.enabled ? 'bg-red-500' : 'bg-black/30' }}" aria-hidden="true"></span>
+        {{ t(v.slot.enabled ? 'chainBoard.state_on' : 'chainBoard.state_off') }}
+      </p>
+    }
   }
 
   <h3 class="mt-4 text-xs uppercase tracking-wide text-slate-500">{{ t('chainBoard.parameters') }}</h3>
@@ -57,9 +77,36 @@
         @for (param of v.parameters; track param.label; let i = $index) {
           <div [attr.data-testid]="'param-row-' + i">
             <dt class="text-xs text-slate-500">{{ param.label }}</dt>
-            <dd class="text-xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-              {{ formatParameterValue(param.value) }}
-            </dd>
+            @if (editable()) {
+              <dd>
+                <input
+                  type="text"
+                  inputmode="decimal"
+                  class="w-full rounded-md bg-white px-2.5 py-1.5 text-sm tabular-nums text-right text-slate-900 ring-1 ring-inset ring-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-900 dark:text-slate-100 dark:ring-slate-600 {{ v.paramErrors.has(param.label) ? 'ring-red-400 dark:ring-red-700' : '' }}"
+                  [class]="'w-full rounded-md bg-white px-2.5 py-1.5 text-sm tabular-nums text-right text-slate-900 ring-1 ring-inset focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-900 dark:text-slate-100 ' + (v.paramErrors.has(param.label) ? 'ring-red-400 dark:ring-red-700' : 'ring-slate-300 dark:ring-slate-600')"
+                  [value]="formatParameterValue(param.value)"
+                  [attr.aria-invalid]="v.paramErrors.has(param.label) ? 'true' : null"
+                  [attr.aria-describedby]="v.paramErrors.has(param.label) ? 'param-error-' + i : null"
+                  [attr.data-testid]="'param-input-' + i"
+                  (change)="onParamCommit(param.label, $any($event.target).value)"
+                  (blur)="onParamCommit(param.label, $any($event.target).value)"
+                />
+                @if (v.paramErrors.has(param.label)) {
+                  <p
+                    [id]="'param-error-' + i"
+                    class="mt-1 text-xs text-red-700 dark:text-red-300"
+                    data-testid="param-error"
+                    role="alert"
+                  >
+                    {{ t('songPresetDraft.errors.param_invalid') }}
+                  </p>
+                }
+              </dd>
+            } @else {
+              <dd class="text-xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                {{ formatParameterValue(param.value) }}
+              </dd>
+            }
           </div>
         }
       </dl>
@@ -81,6 +128,32 @@
           </div>
         }
       </dl>
+    }
+  }
+
+  <!-- F27 R21/R22 — effect picker (only in editable + resolved path). -->
+  @if (editable() && resolved(); as v) {
+    @if (v.swappable.length > 0) {
+      <div class="mt-4" data-testid="effect-picker">
+        <label
+          for="effect-picker-select"
+          class="block text-xs font-medium text-slate-600 dark:text-slate-400"
+        >
+          {{ t('songPresetDraft.effect_label') }}
+        </label>
+        <select
+          id="effect-picker-select"
+          class="mt-1 w-full rounded-md bg-white px-2.5 py-1.5 text-sm text-slate-900 ring-1 ring-inset ring-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-900 dark:text-slate-100 dark:ring-slate-600"
+          data-testid="effect-picker-select"
+          (change)="onModuleChange($any($event.target).value)"
+        >
+          @for (entry of v.swappable; track entry.moduleType) {
+            <option [value]="entry.moduleType" [selected]="entry.fxTitle === v.fxTitle">
+              {{ entry.fxTitle }}
+            </option>
+          }
+        </select>
+      </div>
     }
   }
 

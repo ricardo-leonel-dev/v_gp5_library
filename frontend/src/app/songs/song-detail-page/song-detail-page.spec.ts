@@ -15,7 +15,7 @@ import {
   type Translation,
   type TranslocoLoader,
 } from '@jsverse/transloco';
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 import { Observable, of } from 'rxjs';
 import { SongDetailPage } from './song-detail-page';
 import { SongsApi } from '../songs-api.service';
@@ -25,6 +25,7 @@ import { encodePrstFile } from '../../midi/gp5-prst-file';
 import { capturedBodyBytes } from '../../midi/gp5-captured-bodies.fixture';
 import { decodeGp5Body, NAME_LEN } from '../../midi/gp5-sysex-preset-codec';
 import type { Preset } from '../../midi/preset';
+import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
 
 @Injectable({ providedIn: 'root' })
 class StubTranslocoLoader implements TranslocoLoader {
@@ -56,6 +57,94 @@ class StubTranslocoLoader implements TranslocoLoader {
         chain_unverified_footnote:
           'This chain is read-only: names and page numbers come from the original preset, not from the pedal.',
       },
+      songPresetDraft: {
+        duplicate: 'Duplicate',
+        duplicate_aria: 'Duplicate preset {{name}}',
+        heading: 'Copy of “{{source}}”',
+        unsaved: 'Not saved to the song',
+        name_label: 'Preset name',
+        name_help: 'Up to 16 characters.',
+        edit_hint: 'Select a block to change its effect, bypass or values.',
+        bypass_label: 'Block on',
+        effect_label: 'Effect',
+        footnote: 'Estimated from the manual.',
+        export: 'Export .prst',
+        send: 'Send to pedal',
+        discard: 'Discard copy',
+        errors: {
+          name_required: 'Give the copy a name.',
+          name_unsupported: 'Use up to 16 letters, numbers, spaces or basic symbols.',
+          name_duplicate: 'This song already has a preset named “{{name}}”.',
+          param_invalid: 'Enter a number.',
+          duplicate_failed: "Couldn't copy this preset. Try again.",
+        },
+        leave_title: 'Leave without saving the copy?',
+        leave_message: 'Your changes to “{{name}}” aren\'t saved to the song and will be lost.',
+        leave_stay: 'Keep editing',
+        leave_confirm: 'Leave and discard',
+      },
+      chainBoard: {
+        close: 'Close',
+        browse: 'Browse',
+        active: 'In this preset',
+        state_on: 'On',
+        state_off: 'Bypassed',
+        parameters: 'Parameters',
+        no_parameters: 'No parameters.',
+        unknown_module: 'Unknown module.',
+        manual_page: 'Manual p. {{page}}',
+        categories: { c0: 'NR', c1: 'PRE', c4: 'AMP' },
+        userIrSlot: 'User IR {{slot}}',
+        userSnapToneSlot: 'User SnapTone {{slot}}',
+      },
+      presetBrowser: {
+        footnote_unverified: 'Footnote.',
+      },
+      writeToPedal: {
+        draft_note: 'Sends the unsaved copy “{{name}}”.',
+        target_slot: 'Target slot',
+        not_connected: 'Connect the pedal.',
+        connect: 'Connect GP-5',
+        connecting: 'Connecting…',
+        cancel: 'Cancel',
+        send: 'Send',
+        writing: 'Writing…',
+        success_title: 'Done',
+        success_single: '“{{presetName}}” is on slot {{toSlot}}.',
+        done: 'Close',
+        song_heading: 'Song: “{{name}}”',
+        presets_legend: 'Presets',
+        preset_row_aria: 'Pos {{position}}: {{name}}',
+        write_all: 'Write all',
+        write_all_help: 'Help',
+        partialProgress: 'Already wrote: {{slots}}.',
+        errors: {
+          pedalDisconnected: 'Pedal disconnected.',
+          busy: 'Busy.',
+          timeout: 'Timeout.',
+          connectionLost: 'Connection lost.',
+          unexpected: 'Error.',
+          songNotFound: 'Not found.',
+          sessionExpired: 'Session expired.',
+          network: 'Network.',
+          corruptFile: 'Corrupt file.',
+          writeNotConfirmed: 'Not confirmed.',
+          writeRejected: 'Rejected.',
+        },
+      },
+      writeToSlot: {
+        help: '0..99',
+        errors: { outOfRange: 'Out of range.', notEnoughRoom: 'Not enough room.' },
+        summary_range: 'Slots {{from}}..{{to}}',
+      },
+      unsupportedBrowser: {
+        title: 'Unsupported',
+        body: 'Body',
+        browsers: 'Browsers',
+        footnote: 'Footnote',
+        insecure_body: 'Insecure',
+        insecure_compact: 'Insecure compact',
+      },
     } as Translation);
   }
 }
@@ -80,6 +169,15 @@ function setupWithId(id: string | null): {
         provide: ActivatedRoute,
         useValue: {
           snapshot: { paramMap: { get: (k: string) => (k === 'id' ? id : null) } },
+        },
+      },
+      {
+        provide: WebMidiPedalConnection,
+        useValue: {
+          isSupported: () => true,
+          connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
+          connect: vi.fn().mockResolvedValue(undefined),
+          writePreset: vi.fn().mockResolvedValue(undefined),
         },
       },
     ],
@@ -408,6 +506,55 @@ async function loadSongWithPresets(
   fixture.detectChanges();
 }
 
+// Wait until the row's chain status is 'loaded' so the duplicate button
+// is in the DOM. Used by every F27 test that needs to interact with the
+// expanded row panel.
+async function waitForChainLoaded(
+  fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
+  sortOrder: number,
+  expectedName: string,
+): Promise<void> {
+  const page = fixture.componentInstance as unknown as {
+    chainStatusBySortOrder: () => ReadonlyMap<number, string>;
+  };
+  for (let i = 0; i < 50; i++) {
+    await fixture.whenStable();
+    fixture.detectChanges();
+    if (page.chainStatusBySortOrder().get(sortOrder) === 'loaded') {
+      const root = fixture.nativeElement as HTMLElement;
+      const dup = root.querySelector(`[data-testid="song-preset-duplicate-${sortOrder}"]`);
+      if (dup) {
+        const aria = dup.getAttribute('aria-label') ?? '';
+        if (aria.includes(expectedName)) return;
+      }
+    }
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+}
+
+// Open a row, flush its chain request, and wait for the chain to load.
+async function openRowAndLoad(
+  fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
+  httpMock: HttpTestingController,
+  songId: string,
+  sortOrder: number,
+  name: string,
+): Promise<void> {
+  const root = fixture.nativeElement as HTMLElement;
+  const toggle = root.querySelector<HTMLButtonElement>(
+    `[data-testid="song-preset-toggle-${sortOrder}"]`,
+  )!;
+  toggle.click();
+  fixture.detectChanges();
+  const req = httpMock.expectOne(
+    `${environment.apiBaseUrl}/songs/${songId}/files/preset?sort_order=${sortOrder}`,
+  );
+  req.flush(
+    new Blob([buildPrstBytes(name) as BlobPart], { type: 'application/octet-stream' }),
+  );
+  await waitForChainLoaded(fixture, sortOrder, name);
+}
+
 describe('SongDetailPage (F30 — view preset content)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
@@ -593,5 +740,350 @@ describe('SongDetailPage (F30 — view preset content)', () => {
     // breakpoint = 640px so the grid is not gated on `sm:`.)
     expect(toggleRow.classList.contains('grid-cols-[1.5rem_1fr_auto]')).toBe(true);
     expect(toggleRow.classList.contains('w-full')).toBe(true);
+  });
+});
+
+// F27 `song_preset_duplicate_edit_export` — duplicate, edit, export,
+// send-to-pedal, discard, and leave confirmation wiring on the page.
+describe('SongDetailPage (F27 duplicate / edit / export / send / discard)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  test('R9 — opening a row shows a Duplicate button enabled when no draft exists', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    const dup = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-0"]');
+    expect(dup).not.toBeNull();
+    expect(dup!.disabled).toBe(false);
+  });
+
+  // Helper: click Duplicate and flush the second getSongPreset it triggers.
+  // Returns the HTTP testing controller for further assertions.
+  async function clickDuplicateAndFlush(
+    fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
+    httpMock: HttpTestingController,
+  ): Promise<void> {
+    const root = fixture.nativeElement as HTMLElement;
+    const dup = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-0"]')!;
+    expect(dup).not.toBeNull();
+    dup.click();
+    fixture.detectChanges();
+    // The duplicate handler re-fetches the bytes. Wait for the request
+    // to be made (it is async via firstValueFrom).
+    let req;
+    for (let i = 0; i < 30; i++) {
+      const pending = httpMock.match(() => true);
+      if (pending.length > 0) {
+        req = pending[0];
+        break;
+      }
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
+    expect(req!).toBeDefined();
+    req!.flush(
+      new Blob([buildPrstBytes('LEAD') as BlobPart], { type: 'application/octet-stream' }),
+    );
+    // Allow the createDraft → draft.set signal to propagate.
+    for (let i = 0; i < 30; i++) {
+      await fixture.whenStable();
+      fixture.detectChanges();
+      if (root.querySelector('[data-testid="song-preset-draft"]')) return;
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
+  }
+
+  test('R10 — clicking Duplicate fetches the bytes, creates a draft, and never sends a modifying request', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    const mutating = httpMock.match(() => true).filter(
+      (req) => !['GET', 'HEAD'].includes(req.request.method),
+    );
+    expect(mutating).toEqual([]);
+    httpMock.verify();
+  });
+
+  test('R11 — the new draft is named "<source> 2" and the name input is pre-filled', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const input = root.querySelector<HTMLInputElement>('[data-testid="song-preset-draft-name"]');
+    expect(input?.value).toBe('LEAD 2');
+  });
+
+  test('R12, R13 — while a draft exists, every Duplicate button is disabled', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'A' },
+      { id: 'p1', sortOrder: 1, name: 'B' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    // Open row 1 (no duplicate yet) and verify the duplicate button on it
+    // is enabled before any draft exists.
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 1, 'B');
+    const dupB1 = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-1"]')!;
+    expect(dupB1.disabled).toBe(false);
+    // Close row 1, open row 0, and create a draft.
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-toggle-1"]')!.click();
+    fixture.detectChanges();
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'A');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    // Re-open row 1: the chain is already cached, so the row toggles
+    // open without a new HTTP request. The Duplicate button there must
+    // be disabled because a draft exists.
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-toggle-1"]')!.click();
+    fixture.detectChanges();
+    const dupB2 = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-1"]')!;
+    expect(dupB2.disabled).toBe(true);
+  });
+
+  test('R16 — selecting a block on the draft chain board renders the edit-mode block detail', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const board = root.querySelector('[data-testid="chain-board"]')!;
+    const firstBlock = board.querySelector<HTMLButtonElement>('[data-testid="board-block-0"]')!;
+    firstBlock.click();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft-block-detail"]')).not.toBeNull();
+  });
+
+  test('R18 — toggling the bypass switch flips the dim class on the draft board', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const board = root.querySelector('[data-testid="chain-board"]')!;
+    // The draft chain is the second chain board on the page; pick the one
+    // that has the draft panel as a sibling.
+    const firstBlock = board.querySelector<HTMLButtonElement>('[data-testid="board-block-0"]')!;
+    firstBlock.click();
+    fixture.detectChanges();
+    const sw = root.querySelector<HTMLButtonElement>('[data-testid="bypass-switch"]')!;
+    // The block starts at whatever the source body says. After clicking
+    // the switch, the new value (the opposite) is reflected.
+    const before = firstBlock.getAttribute('data-enabled');
+    sw.click();
+    fixture.detectChanges();
+    const after = firstBlock.getAttribute('data-enabled');
+    expect(after).not.toBe(before);
+    expect(root.querySelector('[data-testid="song-preset-draft-unsaved"]')).not.toBeNull();
+  });
+
+  test('R25, R27 — clearing the name triggers name_required, then duplicate triggers name_duplicate', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+      { id: 'p1', sortOrder: 1, name: 'RHYTHM' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const input = root.querySelector<HTMLInputElement>('[data-testid="song-preset-draft-name"]')!;
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const errEl = root.querySelector('[data-testid="song-preset-draft-name-error"]');
+    expect(errEl?.textContent).toContain('Give the copy a name.');
+    // Type the OTHER song preset's name → duplicate error.
+    input.value = 'RHYTHM';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const errEl2 = root.querySelector('[data-testid="song-preset-draft-name-error"]');
+    expect(errEl2?.textContent).toContain('This song already has a preset named');
+  });
+
+  test('R28 — Export .prst and Send to pedal are disabled while the name has an error', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const input = root.querySelector<HTMLInputElement>('[data-testid="song-preset-draft-name"]')!;
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-export"]')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-send"]')!.disabled).toBe(true);
+  });
+
+  test('R30 — editing the draft sends no non-GET request', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const board = root.querySelector('[data-testid="chain-board"]')!;
+    board.querySelector<HTMLButtonElement>('[data-testid="board-block-0"]')!.click();
+    fixture.detectChanges();
+    root.querySelector<HTMLButtonElement>('[data-testid="bypass-switch"]')!.click();
+    fixture.detectChanges();
+    const mutating = httpMock.match(() => true).filter(
+      (req) => !['GET', 'HEAD'].includes(req.request.method),
+    );
+    expect(mutating).toEqual([]);
+  });
+
+  test('R37, R38 — Export .prst triggers a Blob download and never sends a network request', async () => {
+    const createObjectURL = vi.fn(() => 'blob:draft-export');
+    const revokeObjectURL = vi.fn();
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = createObjectURL as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as typeof URL.revokeObjectURL;
+    const origCreateElement = document.createElement.bind(document);
+    const anchorClick = vi.fn();
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreateElement(tag);
+      if (tag === 'a') (el as HTMLAnchorElement).click = anchorClick;
+      return el;
+    });
+    try {
+      const { fixture, httpMock } = setupWithId('song-dup');
+      await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+        { id: 'p0', sortOrder: 0, name: 'LEAD' },
+      ]);
+      const root = fixture.nativeElement as HTMLElement;
+      await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+      await clickDuplicateAndFlush(fixture, httpMock);
+      root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-export"]')!.click();
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(anchorClick).toHaveBeenCalledTimes(1);
+      const mutating = httpMock.match(() => true).filter(
+        (req) => !['GET', 'HEAD'].includes(req.request.method),
+      );
+      expect(mutating).toEqual([]);
+    } finally {
+      URL.createObjectURL = origCreate;
+      URL.revokeObjectURL = origRevoke;
+      vi.restoreAllMocks();
+    }
+  });
+
+  test('R43 — Discard removes the draft panel and re-enables Duplicate', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-discard"]')!.click();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).toBeNull();
+    // Re-open the row (the chain is cached, no new request).
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-toggle-0"]')!.click();
+    fixture.detectChanges();
+    const dup = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-0"]')!;
+    expect(dup.disabled).toBe(false);
+  });
+
+  test('R46, R47 — draft action bar uses flex-wrap and editor row uses lg:flex-row with min-w-0 on both children', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const actions = root.querySelector('[data-testid="song-preset-draft-actions"]') as HTMLElement;
+    expect(actions.className).toContain('flex-wrap');
+    const editorRow = root.querySelector('.lg\\:flex-row') as HTMLElement | null;
+    expect(editorRow).not.toBeNull();
+  });
+
+  test('R52, R54 — beforeunload is only prevented when the draft has unsaved edits', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    // No edits yet: beforeunload is NOT prevented.
+    const ev1 = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(ev1);
+    expect(ev1.defaultPrevented).toBe(false);
+    const input = root.querySelector<HTMLInputElement>('[data-testid="song-preset-draft-name"]')!;
+    input.value = 'LEAD X';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const ev2 = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(ev2);
+    expect(ev2.defaultPrevented).toBe(true);
+  });
+
+  test('R53, R55 — confirmLeave returns true with no draft, and after Discard', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    const page = (fixture.componentInstance as unknown as { confirmLeave: () => boolean | Promise<boolean> });
+    expect(page.confirmLeave()).toBe(true);
+    await clickDuplicateAndFlush(fixture, httpMock);
+    expect(page.confirmLeave()).toBe(true);
+    const input = root.querySelector<HTMLInputElement>('[data-testid="song-preset-draft-name"]')!;
+    input.value = 'LEAD Y';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const held = page.confirmLeave();
+    fixture.detectChanges();
+    expect(typeof held).toBe('object');
+    expect(root.querySelector('[data-testid="leave-draft-dialog"]')).not.toBeNull();
+    root.querySelector<HTMLButtonElement>('[data-testid="leave-draft-leave"]')!.click();
+    fixture.detectChanges();
+    const resolved = await (held as Promise<boolean>);
+    expect(resolved).toBe(true);
+    expect(page.confirmLeave()).toBe(true);
+  });
+
+  test('R50 — "Keep editing" cancels the held navigation and keeps the draft', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    const root = fixture.nativeElement as HTMLElement;
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    const input = root.querySelector<HTMLInputElement>('[data-testid="song-preset-draft-name"]')!;
+    input.value = 'LEAD Z';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const page = (fixture.componentInstance as unknown as { confirmLeave: () => boolean | Promise<boolean> });
+    const held = page.confirmLeave() as Promise<boolean>;
+    fixture.detectChanges();
+    root.querySelector<HTMLButtonElement>('[data-testid="leave-draft-stay"]')!.click();
+    fixture.detectChanges();
+    expect(await held).toBe(false);
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
   });
 });

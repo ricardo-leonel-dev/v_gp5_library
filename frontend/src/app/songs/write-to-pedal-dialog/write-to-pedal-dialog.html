@@ -71,6 +71,16 @@
             {{ t('writeToPedal.song_heading', { name: song().name }) }}
           </p>
 
+          @if (localPreset(); as local) {
+            <p
+              class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+              data-testid="write-to-pedal-draft-note"
+              role="status"
+            >
+              {{ t('writeToPedal.draft_note', { name: local.name }) }}
+            </p>
+          }
+
           <div class="space-y-1">
             <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">
               {{ t('writeToPedal.presets_legend') }}
@@ -79,7 +89,7 @@
               class="divide-y divide-slate-200 rounded-lg bg-slate-50 ring-1 ring-inset ring-slate-200 dark:divide-slate-700 dark:bg-slate-900 dark:ring-slate-700"
               data-testid="write-to-pedal-presets"
             >
-              @for (ref of presets(); track ref.presetId; let i = $index) {
+              @for (ref of visiblePresets(); track ref.presetId; let i = $index) {
                 <li
                   class="grid grid-cols-[1.5rem_1fr_auto] items-center gap-x-2 px-3 py-2"
                   data-testid="write-to-pedal-preset-row"
@@ -153,32 +163,34 @@
             }
           </div>
 
-          <div class="flex items-center gap-2" data-testid="write-to-pedal-mode-row">
-            <button
-              type="button"
-              [class]="writeAll() ? 'rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500' : 'rounded-full border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-900 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500'"
-              [attr.aria-pressed]="writeAll()"
-              data-testid="write-to-pedal-write-all"
-              [disabled]="submitting()"
-              (click)="writeAll.set(!writeAll())"
-            >
-              @if (writeAll()) {
-                <span aria-hidden="true">+</span>
-              }
-              {{ t('writeToPedal.write_all') }}
-            </button>
-            <span class="text-xs text-slate-500 dark:text-slate-400">
-              {{ t('writeToPedal.write_all_help') }}
-            </span>
-          </div>
+          @if (writeAllEnabled()) {
+            <div class="flex items-center gap-2" data-testid="write-to-pedal-mode-row">
+              <button
+                type="button"
+                [class]="writeAll() ? 'rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500' : 'rounded-full border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-900 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500'"
+                [attr.aria-pressed]="writeAll()"
+                data-testid="write-to-pedal-write-all"
+                [disabled]="submitting()"
+                (click)="writeAll.set(!writeAll())"
+              >
+                @if (writeAll()) {
+                  <span aria-hidden="true">+</span>
+                }
+                {{ t('writeToPedal.write_all') }}
+              </button>
+              <span class="text-xs text-slate-500 dark:text-slate-400">
+                {{ t('writeToPedal.write_all_help') }}
+              </span>
+            </div>
 
-          @if (writeAll() && plan(); as p) {
-            <p
-              class="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-              data-testid="write-to-pedal-range"
-            >
-              {{ t('writeToSlot.summary_range', { from: p.fromSlot, to: p.toSlot, count: p.items.length }) }}
-            </p>
+            @if (writeAll() && plan(); as p) {
+              <p
+                class="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+                data-testid="write-to-pedal-range"
+              >
+                {{ t('writeToSlot.summary_range', { from: p.fromSlot, to: p.toSlot, count: p.items.length }) }}
+              </p>
+            }
           }
 
           @if (!supported) {

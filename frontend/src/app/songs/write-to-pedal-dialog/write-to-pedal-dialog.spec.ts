@@ -10,7 +10,7 @@ import { Observable, of } from 'rxjs';
 import { HttpErrorResponse } from '@angular/common/http';
 import { SongsApi } from '../songs-api.service';
 import { environment } from '../../../environments/environment';
-import { WriteToPedalDialog } from './write-to-pedal-dialog';
+import { WriteToPedalDialog, type LocalDraftPreset } from './write-to-pedal-dialog';
 import { capturedBodyBytes } from '../../midi/gp5-captured-bodies.fixture';
 import { encodePrstFile } from '../../midi/gp5-prst-file';
 import { decodeGp5Body, NAME_LEN } from '../../midi/gp5-sysex-preset-codec';
@@ -118,6 +118,7 @@ class StubTranslocoLoader implements TranslocoLoader {
       <app-write-to-pedal-dialog
         [song]="song()"
         [presets]="presets()"
+        [localPreset]="localPreset()"
         (closed)="onClosed()"
       />
     }
@@ -127,11 +128,19 @@ class StubTranslocoLoader implements TranslocoLoader {
 class Host {
   readonly song = signal<Song>({ id: 'song-default', name: 'default', presets: [] });
   readonly presets = signal<readonly WriteablePresetRef[]>([]);
+  readonly localPreset = signal<LocalDraftPreset | null>(null);
   readonly show = signal<boolean>(false);
   closedCount = 0;
   open(s: Song, p: readonly WriteablePresetRef[]): void {
     this.song.set(s);
     this.presets.set(p);
+    this.localPreset.set(null);
+    this.show.set(true);
+  }
+  openDraft(s: Song, local: LocalDraftPreset): void {
+    this.song.set(s);
+    this.presets.set([]);
+    this.localPreset.set(local);
     this.show.set(true);
   }
   onClosed(): void {
@@ -905,5 +914,123 @@ describe('WriteToPedalDialog palette (F5 R51, R52 — T14)', () => {
     for (const c of ['bg-indigo-600', 'text-white', 'hover:bg-indigo-500', 'focus-visible:outline-indigo-600']) {
       expect(close.classList.contains(c)).toBe(true);
     }
+  });
+});
+
+// F27 R39-R42 — single-draft mode (localPreset).
+describe('WriteToPedalDialog (F27 single-draft mode)', () => {
+  beforeEach(() => {
+    vi.spyOn(WebMidiPedalConnection.prototype, 'isSupported').mockReturnValue(true);
+    setupTestBed();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function openDraft(
+    local: LocalDraftPreset,
+    state: 'connected' | 'not-connected' = 'connected',
+  ): Harness {
+    TestBed.resetTestingModule();
+    setupTestBed();
+    const conn = signal<ConnState>(state);
+    const writePreset = vi.fn().mockResolvedValue(undefined);
+    const getSongPreset = vi.fn();
+    TestBed.overrideProvider(WebMidiPedalConnection, {
+      useValue: { isSupported: () => true, connectionState: conn, connect: vi.fn(), writePreset },
+    });
+    TestBed.overrideProvider(SongsApi, { useValue: { getSongPreset } });
+    const fixture = TestBed.createComponent(Host);
+    const host = fixture.componentInstance;
+    host.openDraft(makeSong(), local);
+    return {
+      fixture,
+      host,
+      conn,
+      getSongPreset,
+      writePreset,
+      root: () => fixture.nativeElement as HTMLElement,
+      q: <T extends HTMLElement = HTMLElement>(testId: string) =>
+        (fixture.nativeElement as HTMLElement).querySelector<T>(`[data-testid="${testId}"]`),
+      qa: (testId: string) =>
+        Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`)),
+      settle: async (): Promise<void> => {
+        fixture.detectChanges();
+        await new Promise<void>((r) => setTimeout(r, 0));
+        await fixture.whenStable();
+        fixture.detectChanges();
+      },
+      setSlot: async (value: string): Promise<void> => {
+        const input = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>(
+          '[data-testid="write-to-pedal-slot-input"]',
+        )!;
+        input.value = value;
+        input.dispatchEvent(new Event('input'));
+        fixture.detectChanges();
+        await new Promise<void>((r) => setTimeout(r, 0));
+        await fixture.whenStable();
+        fixture.detectChanges();
+      },
+    };
+  }
+
+  function makeLocal(name: string): LocalDraftPreset {
+    const body = capturedBodyBytes(0);
+    const chain = decodeGp5Body(body, name, 0).chain;
+    const nameField = new Uint8Array(NAME_LEN);
+    const enc = new TextEncoder().encode(name);
+    for (let i = 0; i < NAME_LEN; i++) nameField[i] = i < enc.length ? enc[i] : 0;
+    return {
+      name,
+      toPreset: (slot: number) => ({
+        slot,
+        name,
+        chain,
+        raw: { body: body.slice(), nameField: nameField.slice() },
+      }),
+    };
+  }
+
+  test('R39 — single-draft mode hides the "Write all in order" pill and shows the draft note', async () => {
+    const h = openDraft(makeLocal('LEAD TWEAK'));
+    await h.settle();
+    const root = h.root();
+    expect(root.querySelector('[data-testid="write-to-pedal-mode-row"]')).toBeNull();
+    expect(root.querySelector('[data-testid="write-to-pedal-write-all"]')).toBeNull();
+    expect(root.querySelector('[data-testid="write-to-pedal-draft-note"]')).toBeTruthy();
+    // The single preset row carries the draft name.
+    const row = root.querySelector('[data-testid="write-to-pedal-preset-row"]')!;
+    expect(row.textContent).toContain('LEAD TWEAK');
+  });
+
+  test('R40 — confirming the dialog writes once to the chosen slot using localPreset.toPreset(slot)', async () => {
+    const local = makeLocal('LEAD TWEAK');
+    const h = openDraft(local);
+    await h.settle();
+    // The default slot is 0, which is already valid for the plan; the
+    // important thing here is that the dialog calls writePreset once and
+    // never touches the backend.
+    sendButton(h).click();
+    await h.settle();
+    expect(h.getSongPreset).not.toHaveBeenCalled();
+    expect(h.writePreset).toHaveBeenCalledTimes(1);
+    const preset = h.writePreset.mock.calls[0]![0] as Preset;
+    expect(preset.slot).toBe(0);
+    expect(preset.name).toBe('LEAD TWEAK');
+    expect(preset.raw?.body.length).toBe(466);
+  });
+
+  test('R41 — Send stays disabled when the pedal is not connected (same rules as F5)', async () => {
+    const h = openDraft(makeLocal('LEAD TWEAK'), 'not-connected');
+    await h.settle();
+    expect(sendButton(h).disabled).toBe(true);
+    expect(h.root().querySelector('[data-testid="write-to-pedal-not-connected"]')).toBeTruthy();
+  });
+
+  test('R42 — nothing is written before the user confirms the Send button', async () => {
+    const h = openDraft(makeLocal('LEAD TWEAK'));
+    await h.settle();
+    expect(h.writePreset).not.toHaveBeenCalled();
   });
 });

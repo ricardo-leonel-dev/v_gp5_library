@@ -4,6 +4,7 @@ import {
   GP5_PRST_LEN,
   decodePrstFile,
   encodePrstFile,
+  encodePrstNameField,
   isReadablePrstNameField,
 } from './gp5-prst-file';
 import { crc8, decodeGp5Body, Gp5SysexPresetCodec } from './gp5-sysex-preset-codec';
@@ -354,5 +355,55 @@ describe('decodePrstFile.nameReadable (T50)', () => {
     if (!result.ok) return;
     expect(result.name).not.toBe('');
     expect(result.nameReadable).toBe(false);
+  });
+});
+
+// F27 R8 — encodePrstNameField.
+describe('encodePrstNameField (F27 R8)', () => {
+  test('returns 16 bytes holding the name followed by 0x00 padding', () => {
+    const field = encodePrstNameField('LEAD');
+    expect(field).toHaveLength(NAME_LEN);
+    expect(Array.from(field.subarray(0, 4))).toEqual([0x4c, 0x45, 0x41, 0x44]);
+    for (let i = 4; i < NAME_LEN; i++) {
+      expect(field[i]).toBe(0x00);
+    }
+  });
+
+  test('trims surrounding whitespace before encoding', () => {
+    const field = encodePrstNameField('  CRUNCH  ');
+    expect(field).toHaveLength(NAME_LEN);
+    expect(Array.from(field.subarray(0, 6))).toEqual([0x43, 0x52, 0x55, 0x4e, 0x43, 0x48]);
+    for (let i = 6; i < NAME_LEN; i++) {
+      expect(field[i]).toBe(0x00);
+    }
+  });
+
+  test('isReadablePrstNameField returns true on the result', () => {
+    const field = encodePrstNameField('CLEAN');
+    expect(isReadablePrstNameField(field)).toBe(true);
+  });
+
+  test('accepts the longest 16-character name and pads with no NULs', () => {
+    const name = 'ABCDEFGHIJKLMNOP';
+    const field = encodePrstNameField(name);
+    expect(field).toHaveLength(NAME_LEN);
+    for (let i = 0; i < NAME_LEN; i++) {
+      expect(field[i]).toBe(name.charCodeAt(i) & 0xff);
+    }
+    expect(isReadablePrstNameField(field)).toBe(true);
+  });
+
+  test('throws "name_unsupported" for a 17-character name', () => {
+    expect(() => encodePrstNameField('ABCDEFGHIJKLMNOPQ')).toThrow('name_unsupported');
+  });
+
+  test('throws "name_unsupported" for an empty or whitespace-only name', () => {
+    expect(() => encodePrstNameField('')).toThrow('name_unsupported');
+    expect(() => encodePrstNameField('   ')).toThrow('name_unsupported');
+  });
+
+  test('throws "name_unsupported" for a name with a non-printable character', () => {
+    expect(() => encodePrstNameField('A\x01B')).toThrow('name_unsupported');
+    expect(() => encodePrstNameField('AB\x7f')).toThrow('name_unsupported');
   });
 });

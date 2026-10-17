@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { describeModuleType } from './gp5-module-vocabulary';
-import { Gp5SysexPresetCodec } from './gp5-sysex-preset-codec';
+import { Gp5SysexPresetCodec, patchGp5Body, decodeGp5Body } from './gp5-sysex-preset-codec';
 import { GP5_CAPTURED_BODIES, capturedBodyBytes } from './gp5-captured-bodies.fixture';
-import type { Preset } from './preset';
+import { TONELAB_TLDLXAMP_PRST_HEX } from './gp5-tonelab-prst.fixture';
+import type { Preset, PresetSlot } from './preset';
 import type { SysexDecodeResult } from './sysex-preset-codec';
 
 // Helpers — mirror the codec's internal encoders so the tests construct
@@ -1140,5 +1141,181 @@ describe('Gp5SysexPresetCodec.decodeWriteReply (feature 28)', () => {
     for (const packet of codec.encodeWriteRequest(preset)) {
       expect(codec.decodeWriteReply(packet)).toBeNull();
     }
+  });
+});
+
+// F27 `song_preset_duplicate_edit_export` — patch in place (R1-R7).
+// The patcher copies the input body and only writes the bytes that change,
+// so the diff is identity for an unedited chain (R1) and the resulting
+// bytes round-trip through the decoder (R5). R6 covers the three throw
+// cases; R7 pins input non-mutation.
+describe('patchGp5Body (F27 R1-R7)', () => {
+  const REC_MODELS_MAGIC = [0x03, 0x30, 0x28, 0x00];
+  const REC_BYPASS_MAGIC = [0x01, 0x30, 0x04, 0x00];
+  const REC_ORDER_MAGIC = [0x02, 0x30, 0x0a, 0x00];
+  const REC_PARAMS_MAGIC = [0x04, 0x30, 0x40, 0x01];
+
+  function makeBody(): Uint8Array {
+    const body = new Uint8Array(GP5_BODY_LEN);
+    body.set(REC_MODELS_MAGIC, 0);
+    body.set(REC_BYPASS_MAGIC, 44);
+    body.set(REC_ORDER_MAGIC, 52);
+    for (let k = 0; k < 10; k++) body[56 + k] = k;
+    body.set(REC_PARAMS_MAGIC, 66);
+    const dv = new DataView(body.buffer, 70, 320);
+    for (let k = 0; k < 80; k++) dv.setFloat32(k * 4, (k + 1) / 10, true);
+    return body;
+  }
+
+  function diffOffsets(a: Uint8Array, b: Uint8Array): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) out.push(i);
+    }
+    return out;
+  }
+
+  // R1: identity over every captured body and the ToneLab body.
+  for (let i = 0; i < GP5_CAPTURED_BODIES.length; i++) {
+    test(`R1 — identity over GP5_CAPTURED_BODIES[${i}] ("${GP5_CAPTURED_BODIES[i]!.name}")`, () => {
+      const body = capturedBodyBytes(i);
+      const chain = decodeGp5Body(body, '', 0).chain;
+      const out = patchGp5Body(body, chain);
+      expect(out).toEqual(body);
+    });
+  }
+
+  test('R1 — identity over the ToneLab reference body', () => {
+    // The ToneLab .prst fixture slices its body at the same offsets the
+    // codec uses, so we can reuse it as a real-world body for this test.
+    const wire = new Uint8Array(
+      TONELAB_TLDLXAMP_PRST_HEX
+        .match(/.{2}/g)!
+        .map((h) => parseInt(h, 16)),
+    );
+    const body = wire.subarray(0x29, 0x29 + GP5_BODY_LEN);
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const out = patchGp5Body(body, chain);
+    expect(out).toEqual(body);
+  });
+
+  // R2: a bypass change writes only the 4 bytes of the REC_BYPASS record.
+  test('R2 — a single `enabled` change writes only the 4 bytes of REC_BYPASS', () => {
+    const body = makeBody();
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const edited = chain.map((b, i) =>
+      i === 3 ? { ...b, enabled: !b.enabled } : b,
+    );
+    const out = patchGp5Body(body, edited);
+    const diffs = diffOffsets(body, out);
+    // REC_BYPASS sits at offset 48 in makeBody's layout (magic at 44, data at 48).
+    // Every diff must be within those 4 bytes; the exact diff set depends
+    // on which bit changed and which surrounding bytes are identical.
+    for (const offset of diffs) {
+      expect(offset).toBeGreaterThanOrEqual(48);
+      expect(offset).toBeLessThanOrEqual(51);
+    }
+    expect(diffs.length).toBeGreaterThan(0);
+  });
+
+  // R3: a parameter change writes only the 4 bytes of that block's p<k> float32.
+  test('R3 — a single `p2` change on block 5 writes only those 4 LE bytes', () => {
+    const body = makeBody();
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const edited = chain.map((b, i) =>
+      i === 5 ? { ...b, parameters: { ...b.parameters, p2: 0.75 } } : b,
+    );
+    const out = patchGp5Body(body, edited);
+    const diffs = diffOffsets(body, out);
+    // REC_PARAMS at offset 70 in makeBody; block 5's p2 is at 70 + (5*8 + 2)*4 = 70 + 168 = 238.
+    expect(diffs).toEqual([238, 239, 240, 241]);
+    const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+    expect(dv.getFloat32(238, true)).toBe(0.75);
+  });
+
+  // R4: a moduleType change writes only the 4 bytes of that block's REC_MODELS record.
+  test('R4 — a `moduleType` change on block 2 writes only those 4 bytes (fxlow 24-bit LE + cat)', () => {
+    const body = makeBody();
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const edited = chain.map((b, i) =>
+      i === 2 ? { ...b, moduleType: 'cat7_fx4' } : b,
+    );
+    const out = patchGp5Body(body, edited);
+    const diffs = diffOffsets(body, out);
+    // REC_MODELS at offset 4; block 2's record starts at 4 + 2*4 = 12.
+    // Every diff must be within those 4 bytes; the exact set depends on
+    // which bytes of the previous record coincide with the new record.
+    for (const offset of diffs) {
+      expect(offset).toBeGreaterThanOrEqual(12);
+      expect(offset).toBeLessThanOrEqual(15);
+    }
+    expect(diffs.length).toBeGreaterThan(0);
+    // The new record is fxlow=4 (cat 7). Bytes 1+2 stay 0 in both old (0)
+    // and new (0); bytes 0 and 3 must end up as 0x04 and 0x07.
+    expect(out[12]).toBe(0x04);
+    expect(out[15]).toBe(0x07);
+  });
+
+  test('R4 — an unparseable moduleType is a no-op on REC_MODELS', () => {
+    const body = makeBody();
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const edited = chain.map((b, i) =>
+      i === 1 ? { ...b, moduleType: 'unknown_thing' } : b,
+    );
+    const out = patchGp5Body(body, edited);
+    expect(out).toEqual(body);
+  });
+
+  // R5: the patched body decodes back to the chain we patched in.
+  test('R5 — patched body decodes back to the input chain for every resolvable moduleType', () => {
+    const body = makeBody();
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const edited = chain.map((b, i) => {
+      if (i === 0) return { ...b, enabled: false };
+      if (i === 1) return { ...b, parameters: { ...b.parameters, p0: 0.5 } };
+      if (i === 2) return { ...b, moduleType: 'cat7_fx4' };
+      return b;
+    });
+    const out = patchGp5Body(body, edited);
+    const decoded = decodeGp5Body(out, '', 0);
+    expect(decoded.chain).toEqual(edited);
+  });
+
+  // R6: three throw cases — wrong length, missing magic, non-permutation order.
+  test('R6 — throws "body_not_patchable" when length is not 466', () => {
+    const chain = decodeGp5Body(makeBody(), '', 0).chain;
+    expect(() => patchGp5Body(new Uint8Array(465), chain)).toThrow('body_not_patchable');
+    expect(() => patchGp5Body(new Uint8Array(467), chain)).toThrow('body_not_patchable');
+  });
+
+  test('R6 — throws "body_not_patchable" when a record magic is missing', () => {
+    const body = makeBody();
+    // Wipe REC_MODELS magic.
+    body[0] = 0;
+    body[1] = 0;
+    body[2] = 0;
+    body[3] = 0;
+    const chain = decodeGp5Body(body, '', 0).chain;
+    expect(() => patchGp5Body(body, chain)).toThrow('body_not_patchable');
+  });
+
+  test('R6 — throws "body_not_patchable" when REC_ORDER is not a permutation of 0..9', () => {
+    const body = makeBody();
+    // Replace the identity permutation with duplicates so it is NOT a permutation.
+    for (let k = 0; k < 10; k++) body[56 + k] = 0;
+    const chain = decodeGp5Body(body, '', 0).chain;
+    expect(() => patchGp5Body(body, chain)).toThrow('body_not_patchable');
+  });
+
+  // R7: input body is left unmodified.
+  test('R7 — input body is left unmodified', () => {
+    const body = makeBody();
+    const before = body.slice();
+    const chain = decodeGp5Body(body, '', 0).chain;
+    const edited = chain.map((b, i) =>
+      i === 0 ? { ...b, enabled: !b.enabled } : b,
+    );
+    void patchGp5Body(body, edited);
+    expect(body).toEqual(before);
   });
 });

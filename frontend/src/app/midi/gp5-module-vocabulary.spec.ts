@@ -10,6 +10,7 @@ import {
   GP5_UNCAPTURABLE_FX,
   parseModuleType,
   resolveModuleIndices,
+  swappableEffects,
 } from './gp5-module-vocabulary';
 
 // Plain Vitest (no TestBed): pure logic, per `docs/conventions.md`'s Tests section.
@@ -453,5 +454,57 @@ describe('GP5_MODULE_VOCABULARY_STATUS (R17, R18)', () => {
     expect(GP5_MODULE_VOCABULARY_STATUS).not.toContain(
       'NOT yet confirmed against real GP-5 hardware',
     );
+  });
+});
+
+// F27 R21 — swappableEffects.
+describe('swappableEffects (F27 R21)', () => {
+  test('PRE category returns 10 entries, no user-slot titles, ordered by fxIndex', () => {
+    const PRE = GP5_MODULE_CATEGORIES.indexOf('PRE');
+    const out = swappableEffects(PRE);
+    expect(out).toHaveLength(10);
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i]!.fxIndex).toBeGreaterThan(out[i - 1]!.fxIndex);
+    }
+    for (const entry of out) {
+      expect(entry.fxTitle).not.toBe('User IR 1-20');
+      expect(entry.fxTitle).not.toBe('User SnapTone');
+    }
+  });
+
+  test('CAB collapses its 20 user-IR codes to a single hidden entry — the list excludes user-slot titles', () => {
+    const CAB = GP5_MODULE_CATEGORIES.indexOf('CAB');
+    const out = swappableEffects(CAB);
+    // CAB has 21 fxIndex entries; index 20 is the user-IR generic, so we
+    // expect 20 visible swappable effects.
+    expect(out).toHaveLength(20);
+    expect(out.some((e) => e.fxTitle === 'User IR 1-20')).toBe(false);
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i]!.fxIndex).toBeGreaterThan(out[i - 1]!.fxIndex);
+    }
+  });
+
+  test('N->S excludes the generic "User SnapTone" entry (fxIndex 51)', () => {
+    const N_S = GP5_MODULE_CATEGORIES.indexOf('N->S');
+    const out = swappableEffects(N_S);
+    expect(out.some((e) => e.fxTitle === 'User SnapTone')).toBe(false);
+    // 52 N->S entries minus the 1 user-slot generic = 51 swappable effects.
+    expect(out).toHaveLength(51);
+  });
+
+  test('every swappable moduleType has a parseable cat<hex>_fx<hex> shape', () => {
+    for (let i = 0; i < GP5_MODULE_CATEGORIES.length; i++) {
+      for (const entry of swappableEffects(i)) {
+        expect(entry.moduleType).toMatch(/^cat[0-9a-f]+_fx[0-9a-f]+$/);
+      }
+    }
+  });
+
+  test('every swappable moduleType is actually in GP5_HARDWARE_MODULE_CODES', () => {
+    for (let i = 0; i < GP5_MODULE_CATEGORIES.length; i++) {
+      for (const entry of swappableEffects(i)) {
+        expect(GP5_HARDWARE_MODULE_CODES.get(entry.moduleType)).toBeDefined();
+      }
+    }
   });
 });

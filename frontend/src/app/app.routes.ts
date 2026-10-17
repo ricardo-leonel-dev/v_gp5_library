@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
+import { leaveDraftGuard } from './songs/song-detail-page/leave-draft.guard';
 import { environment } from '../environments/environment';
 
 export const routes: Routes = [
@@ -20,8 +21,14 @@ export const routes: Routes = [
   {
     // F26 R26, R27. The detail page is guarded by the same `authGuard` as
     // the list page; an unauthenticated navigation redirects to `/login`.
+    // F27 R48-R55: `leaveDraftGuard` holds an in-app navigation away from
+    // the page when the user has unsaved draft edits. Registered directly,
+    // not via a lazy `() => import(...)` thunk: the router would call the
+    // thunk AS the guard and treat its Promise<Function> as a pass. The guard
+    // file only `import type`s the page, so the page stays lazy.
     path: 'songs/:id',
     canActivate: [authGuard],
+    canDeactivate: [leaveDraftGuard],
     loadComponent: () =>
       import('./songs/song-detail-page/song-detail-page').then((m) => m.SongDetailPage),
   },
