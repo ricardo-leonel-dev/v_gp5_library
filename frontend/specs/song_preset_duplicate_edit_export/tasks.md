@@ -54,7 +54,8 @@ is stable.
 - [x] T21 (R1-R13, R16-R30, R37-R55) Write `progress/impl_song_preset_duplicate_edit_export.md` with the R→test traceability table
   (grouping per design §9) and run `./init.sh`.
 - [x] T22 Moved to F31.
-- [ ] T23 (R45) Manual hardware check with Ricardo: export an edited draft (one bypass flip, one param change, one
+- [x] T23 (R45) Manual hardware check with Ricardo: export an edited draft (one bypass flip, one param change, one
   effect swap), install it on the GP-5 in two different user slots, and confirm the pedal shows and plays the
   edits; also write the same draft via Send to pedal and read it back on `/pedal` to confirm the chain matches.
   Record the result in the impl progress file.
+  Hardware check passed with Ricardo 2026-10-17.
