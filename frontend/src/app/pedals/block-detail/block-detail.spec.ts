@@ -263,3 +263,148 @@ describe('BlockDetail', () => {
     expect((entries[0] as HTMLElement).querySelector('[data-testid="fx-active-badge"]')).toBeNull();
   });
 });
+
+// F27 R16-R24 — BlockDetail's editable mode (bypass switch, parameter
+// inputs, effect picker). Read-only default keeps working (R24).
+describe('BlockDetail (F27 editable mode)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  function mount(slot: PresetSlot, editable: boolean) {
+    const { httpMock } = setup();
+    const fixture = TestBed.createComponent(BlockDetail);
+    fixture.componentRef.setInput('slot', slot);
+    fixture.componentRef.setInput('editable', editable);
+    fixture.detectChanges();
+    flushI18n(httpMock);
+    fixture.detectChanges();
+    return { fixture, httpMock };
+  }
+
+  it('R16 — sets editable=true and renders a bypass switch, param inputs, and effect picker', () => {
+    const slot: PresetSlot = {
+      moduleType: 'cat7_fx1',
+      enabled: true,
+      parameters: { p0: 1, p1: 2, p2: 3 },
+    };
+    const { fixture } = mount(slot, true);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="bypass-switch"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="param-input-0"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="effect-picker-select"]')).not.toBeNull();
+  });
+
+  it('R24 — read-only default keeps the v6 view: no switch, no inputs, no picker', () => {
+    const slot: PresetSlot = {
+      moduleType: 'cat7_fx1',
+      enabled: true,
+      parameters: { p0: 1, p1: 2, p2: 3 },
+    };
+    const { fixture } = mount(slot, false);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="bypass-switch"]')).toBeNull();
+    expect(root.querySelector('[data-testid="param-input-0"]')).toBeNull();
+    expect(root.querySelector('[data-testid="effect-picker-select"]')).toBeNull();
+    // The state indicator still renders.
+    expect(root.querySelector('[data-testid="block-state"]')).not.toBeNull();
+  });
+
+  it('R17 — clicking the bypass switch emits enabledChange with the new value', () => {
+    const slot: PresetSlot = {
+      moduleType: 'cat7_fx1',
+      enabled: true,
+      parameters: { p0: 1 },
+    };
+    const { fixture } = mount(slot, true);
+    const events: boolean[] = [];
+    (fixture.componentRef.instance as unknown as { enabledChange: { subscribe: (cb: (v: boolean) => void) => void } }).enabledChange.subscribe((v: boolean) => events.push(v));
+    const sw = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="bypass-switch"]',
+    ) as HTMLButtonElement;
+    sw.click();
+    fixture.detectChanges();
+    expect(events).toEqual([false]);
+  });
+
+  it('R19 / R20 — committing a finite param value emits parameterChange with the parsed number', () => {
+    const slot: PresetSlot = {
+      moduleType: 'cat7_fx1',
+      enabled: true,
+      parameters: { p0: 1, p1: 2, p2: 3 },
+    };
+    const { fixture } = mount(slot, true);
+    type ParamEvent = { key: string; value: number; raw: string };
+    const events: ParamEvent[] = [];
+    const inst = fixture.componentRef.instance as unknown as {
+      parameterChange: { subscribe: (cb: (v: ParamEvent) => void) => void };
+    };
+    inst.parameterChange.subscribe((v) => events.push(v));
+    const input = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="param-input-0"]',
+    ) as HTMLInputElement;
+    input.value = '0.75';
+    input.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(events).toEqual([{ key: 'Gain', value: 0.75, raw: '0.75' }]);
+  });
+
+  it('R20 — committing a non-finite param value shows the inline error and emits with NaN', () => {
+    const slot: PresetSlot = {
+      moduleType: 'cat7_fx1',
+      enabled: true,
+      parameters: { p0: 1 },
+    };
+    const { fixture } = mount(slot, true);
+    type ParamEvent = { key: string; value: number; raw: string };
+    const events: ParamEvent[] = [];
+    const inst = fixture.componentRef.instance as unknown as {
+      parameterChange: { subscribe: (cb: (v: ParamEvent) => void) => void };
+    };
+    inst.parameterChange.subscribe((v) => events.push(v));
+    const input = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="param-input-0"]',
+    ) as HTMLInputElement;
+    input.value = 'abc';
+    input.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="param-error"]')).not.toBeNull();
+    expect(events).toEqual([{ key: 'Gain', value: NaN, raw: 'abc' }]);
+  });
+
+  it('R22 — selecting a new effect emits moduleChange with the new moduleType', () => {
+    const slot: PresetSlot = {
+      moduleType: 'cat7_fx1',
+      enabled: true,
+      parameters: { p0: 1 },
+    };
+    const { fixture } = mount(slot, true);
+    const events: string[] = [];
+    const inst = fixture.componentRef.instance as unknown as {
+      moduleChange: { subscribe: (cb: (v: string) => void) => void };
+    };
+    inst.moduleChange.subscribe((v) => events.push(v));
+    const select = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="effect-picker-select"]',
+    ) as HTMLSelectElement;
+    // Pick the second option (a different effect of the same category).
+    const target = select.options[1]?.value ?? '';
+    expect(target).not.toBe('');
+    select.value = target;
+    select.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(events).toEqual([target]);
+  });
+
+  it('R23 — the effect picker is hidden for an unknown module', () => {
+    const slot: PresetSlot = {
+      moduleType: 'empty',
+      enabled: false,
+      parameters: {},
+    };
+    const { fixture } = mount(slot, true);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="effect-picker-select"]')).toBeNull();
+  });
+});
