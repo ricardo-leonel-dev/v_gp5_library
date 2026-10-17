@@ -49,6 +49,32 @@
     "chain_invalid": "Este preset está dañado y no se puede mostrar.",
     "chain_unverified_footnote": "Esta cadena es de solo lectura: los nombres y números de página vienen del preset original, no del pedal."
   },
+  "songPresetDraft": {
+    "duplicate": "Duplicar",
+    "duplicate_aria": "Duplicar el preset {{name}}",
+    "heading": "Copia de «{{source}}»",
+    "unsaved": "Sin guardar en la canción",
+    "name_label": "Nombre del preset",
+    "name_help": "Hasta 16 caracteres, como lo muestra la pantalla del pedal.",
+    "edit_hint": "Selecciona un bloque para cambiar su efecto, bypass o valores.",
+    "bypass_label": "Bloque activo",
+    "effect_label": "Efecto",
+    "footnote": "Los nombres y la escala de los valores se estiman a partir del manual. Comprueba el resultado en tu pedal.",
+    "export": "Exportar .prst",
+    "send": "Enviar al pedal",
+    "discard": "Descartar copia",
+    "errors": {
+      "name_required": "Ponle un nombre a la copia.",
+      "name_unsupported": "Usa hasta 16 letras, números, espacios o símbolos básicos.",
+      "name_duplicate": "Esta canción ya tiene un preset llamado «{{name}}».",
+      "param_invalid": "Introduce un número.",
+      "duplicate_failed": "No se pudo copiar este preset. Inténtalo de nuevo."
+    },
+    "leave_title": "¿Salir sin guardar la copia?",
+    "leave_message": "Tus cambios en «{{name}}» no están guardados en la canción y se perderán.",
+    "leave_stay": "Seguir editando",
+    "leave_confirm": "Salir y descartar"
+  },
   "pedalButton": {
     "connect": "Conectar al GP-5",
     "connecting": "Conectando…",
@@ -78,6 +104,7 @@
     "partialProgress": "Ya escribimos los slots: {{slots}}.",
     "done": "Cerrar",
     "login_link": "Iniciar sesión",
+    "draft_note": "Envía la copia sin guardar «{{name}}».",
     "errors": {
       "pedalDisconnected": "El pedal se desconectó. Vuelve a conectarlo y reintenta.",
       "busy": "El pedal está ocupado. Espera un momento y reintenta.",

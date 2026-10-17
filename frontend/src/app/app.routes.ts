@@ -20,8 +20,13 @@ export const routes: Routes = [
   {
     // F26 R26, R27. The detail page is guarded by the same `authGuard` as
     // the list page; an unauthenticated navigation redirects to `/login`.
+    // F27 R48-R55: `leaveDraftGuard` holds an in-app navigation away from
+    // the page when the user has unsaved draft edits.
     path: 'songs/:id',
     canActivate: [authGuard],
+    canDeactivate: [
+      () => import('./songs/song-detail-page/leave-draft.guard').then((m) => m.leaveDraftGuard),
+    ],
     loadComponent: () =>
       import('./songs/song-detail-page/song-detail-page').then((m) => m.SongDetailPage),
   },

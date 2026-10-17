@@ -36,6 +36,24 @@ describe('app.routes', () => {
     expect(resolved).toBe(SongDetailPage);
   });
 
+  it('F27 R48 — the songs/:id route uses leaveDraftGuard as a canDeactivate guard', async () => {
+    const guards = detailRoute?.canDeactivate;
+    expect(guards).toBeDefined();
+    expect(guards!.length).toBe(1);
+    // The route's canDeactivate is a function that returns a Promise of
+    // the guard (already unwrapped from the dynamic import). Calling it
+    // yields the CanDeactivateFn.
+    const raw = guards![0] as unknown as () => Promise<unknown>;
+    const guard = (await raw()) as (
+      c: { confirmLeave: () => boolean | Promise<boolean> },
+    ) => boolean | Promise<boolean>;
+    expect(typeof guard).toBe('function');
+    // The guard delegates to SongDetailPage.confirmLeave(); a stub page
+    // with a confirmLeave() that returns true must pass the guard.
+    expect(guard({ confirmLeave: () => true })).toBe(true);
+    expect(guard({ confirmLeave: () => false })).toBe(false);
+  });
+
   it('R1 — authenticated navigation to / lands on /songs (covered by the existing redirect)', () => {
     const root = routes.find((r) => r.path === '');
     expect(root?.redirectTo).toBe('songs');
