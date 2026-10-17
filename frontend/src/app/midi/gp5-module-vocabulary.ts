@@ -585,6 +585,38 @@ export function describeModuleType(moduleType: string): DescribedModuleType {
   return decoded;
 }
 
+// --- swappableEffects --------------------------------------------------------
+// F27 R21 — every entry in `GP5_HARDWARE_MODULE_CODES` that resolves to
+// `categoryIndex` and whose `fxTitle` is not a user-slot generic
+// (`User IR 1-20` or `User SnapTone`). Ordered by `fxIndex` ascending — the
+// same order the FX browser already uses for `browserEntries` and that the
+// user sees in the pedal's own list. Reverse lookup over the table means
+// duplicates (e.g. all 20 CAB user-IR codes mapping to fxIndex 20) collapse
+// to a single entry.
+export interface SwappableEffect {
+  readonly fxIndex: number;
+  readonly fxTitle: string;
+  readonly moduleType: string;
+}
+
+const USER_SLOT_TITLES: ReadonlySet<string> = new Set(['User IR 1-20', 'User SnapTone']);
+
+export function swappableEffects(categoryIndex: number): readonly SwappableEffect[] {
+  const seen = new Set<number>();
+  const out: SwappableEffect[] = [];
+  for (const [moduleType, indices] of GP5_HARDWARE_MODULE_CODES.entries()) {
+    if (indices.categoryIndex !== categoryIndex) continue;
+    if (seen.has(indices.fxIndex)) continue;
+    const title = GP5_MODULE_FX_TITLES[indices.categoryIndex]?.[indices.fxIndex];
+    if (title === undefined) continue;
+    if (USER_SLOT_TITLES.has(title)) continue;
+    seen.add(indices.fxIndex);
+    out.push({ fxIndex: indices.fxIndex, fxTitle: title, moduleType });
+  }
+  out.sort((a, b) => a.fxIndex - b.fxIndex);
+  return out;
+}
+
 // --- vocabulary status -----------------------------------------------------------------------------
 export const GP5_MODULE_VOCABULARY_STATUS =
   'HARDWARE-VERIFIED — every hardware code in GP5_HARDWARE_MODULE_CODES is backed by a real GP-5 read ' +

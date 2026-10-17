@@ -79,6 +79,32 @@ export function isReadablePrstNameField(field: Uint8Array): boolean {
   return nonSpace;
 }
 
+// F27 `song_preset_duplicate_edit_export` (R8). Pure encoder for a draft
+// name: 16 bytes holding the name's ASCII codes followed by 0x00 padding.
+// `isReadablePrstNameField` returns `true` on the result, so a draft name
+// built with this helper round-trips through the same validity check the
+// backend (and our own name validation, R25-R27) applies.
+//
+// Throws `Error('name_unsupported')` if the trimmed name is empty, longer
+// than 16 characters, or contains any character outside `0x20..0x7e` —
+// the same rules `isReadablePrstNameField` enforces. Callers (the page)
+// validate the trimmed name first via `validateDraftName`, so this throw
+// is unreachable through the UI; it stays as a guard.
+export function encodePrstNameField(name: string): Uint8Array {
+  const trimmed = name.trim();
+  if (trimmed === '') throw new Error('name_unsupported');
+  if (trimmed.length > 16) throw new Error('name_unsupported');
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+    if (code < 0x20 || code > 0x7e) throw new Error('name_unsupported');
+  }
+  const out = new Uint8Array(PRST_NAME_LEN);
+  for (let i = 0; i < trimmed.length; i++) {
+    out[i] = trimmed.charCodeAt(i) & 0xff;
+  }
+  return out;
+}
+
 // Encode a 466-byte `Preset` as a 507-byte `.prst`. The bytes at 0x00..0x28
 // are derived from the layout constants and `preset.raw`; the bytes at
 // 0x29..0x1FA are `preset.raw.body` verbatim (R6). The CRC at 0x14 is
