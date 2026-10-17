@@ -5,6 +5,12 @@
 // side lives in `WebMidiPedalConnection` and the codec. The dialog never
 // touches bytes or offsets directly — it goes through `decodeSongPreset`
 // (the only place outside `src/app/midi/` that reads `.prst` layout).
+//
+// F27 `song_preset_duplicate_edit_export` (R39-R42) — a `localPreset`
+// input opens the dialog in "single draft" mode: the preset list shows
+// just the draft name, the "Write all in order" pill is hidden, and the
+// submit pipeline writes the supplied bytes once without re-fetching
+// from the backend.
 
 import {
   ChangeDetectionStrategy,
@@ -37,6 +43,11 @@ import {
   type WritePlan,
 } from '../write-preset-form';
 
+export interface LocalDraftPreset {
+  readonly name: string;
+  readonly toPreset: (slot: number) => Preset;
+}
+
 @Component({
   selector: 'app-write-to-pedal-dialog',
   imports: [TranslocoDirective, RouterLink, UnsupportedBrowserMessage],
@@ -46,6 +57,10 @@ import {
 export class WriteToPedalDialog {
   readonly song = input.required<Song>(); // R3
   readonly presets = input.required<readonly WriteablePresetRef[]>(); // R3, R4, R5
+  // F27 R39 — when set, the dialog runs in single-draft mode: one row
+  // with the draft name, no "Write all" pill, no backend fetch, and
+  // `localPreset.toPreset(slot)` produces the bytes for `writePreset`.
+  readonly localPreset = input<LocalDraftPreset | null>(null);
   readonly closed = output<void>();
 
   private readonly songsApi = inject(SongsApi);
@@ -59,6 +74,28 @@ export class WriteToPedalDialog {
   readonly failure = signal<WriteErrorKey | null>(null); // R8-R12, R34, R37, R39
   readonly partialProgress = signal<readonly number[]>([]); // R39
   readonly success = signal<WritePlan | null>(null); // R36, R38
+
+  // F27 R39 — preset list the template iterates. In single-draft mode the
+  // list collapses to one row showing the draft name; otherwise the
+  // host page's ordered list is rendered as today.
+  readonly visiblePresets = computed<readonly WriteablePresetRef[]>(() => {
+    const local = this.localPreset();
+    if (local) {
+      return [
+        {
+          songId: this.song().id,
+          sortOrder: -1,
+          presetId: 'draft',
+          name: local.name,
+          position: 1,
+        },
+      ];
+    }
+    return this.presets();
+  });
+
+  // F27 R39 — the "Write all" pill only shows in song-list mode.
+  readonly writeAllEnabled = computed(() => this.localPreset() === null);
 
   // The pedal's connection state — the dialog doesn't initiate a
   // connection (R26); it just renders the "Connect to GP-5" reminder
@@ -83,6 +120,19 @@ export class WriteToPedalDialog {
   readonly plan = computed<WritePlan | null>(() => {
     const m = this.parsedSlot();
     if (m === null) return null;
+    const visible = this.visiblePresets();
+    if (this.localPreset() !== null) {
+      // F27 R39 — single-draft mode: a one-entry plan, no "Write all".
+      try {
+        return planWrites({
+          entries: visible,
+          startSlot: m,
+          writeAll: false,
+        });
+      } catch {
+        return null;
+      }
+    }
     const all = this.presets();
     const writeAll = this.writeAll();
     const entries: readonly WriteablePresetRef[] = writeAll
@@ -121,7 +171,7 @@ export class WriteToPedalDialog {
     if (!/^[0-9]+$/.test(s)) return null; // R16 (also: non-integer, no error yet — just disabled)
     const n = Number(s);
     if (n < 0 || n > 99) return 'writeToSlot.errors.outOfRange'; // R17
-    if (this.writeAll()) {
+    if (this.writeAll() && this.writeAllEnabled()) {
       const m = n;
       const N = this.presets().length;
       if (m + N - 1 > 99) {
@@ -204,6 +254,29 @@ export class WriteToPedalDialog {
     this.partialProgress.set([]);
     const done: number[] = [];
     try {
+      const local = this.localPreset();
+      if (local) {
+        // F27 R39/R40 — single-draft mode: skip the backend fetch, build
+        // the Preset with `local.toPreset(slot)`, write once.
+        const slot = plan.items[0]!.targetSlot;
+        if (this.connectionState() !== 'connected') {
+          this.failure.set('writeToPedal.errors.connectionLost');
+          this.partialProgress.set(done);
+          return;
+        }
+        const preset: Preset = local.toPreset(slot);
+        try {
+          await this.pedal.writePreset(preset);
+        } catch (err) {
+          this.failure.set(mapPedalWriteError(err));
+          this.partialProgress.set(done);
+          return;
+        }
+        done.push(slot);
+        this.partialProgress.set([...done]);
+        this.success.set(plan);
+        return;
+      }
       for (const item of plan.items) {
         // R34 — re-check connection right before each write.
         if (this.connectionState() !== 'connected') {
