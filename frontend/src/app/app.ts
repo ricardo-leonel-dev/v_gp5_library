@@ -1,5 +1,5 @@
 import { Component, computed, inject } from '@angular/core';
-import { Router, RouterOutlet } from '@angular/router';
+import { Router, RouterLink, RouterOutlet } from '@angular/router';
 import { TranslocoDirective } from '@jsverse/transloco';
 import { DarkModeToggle } from './shared/dark-mode-toggle/dark-mode-toggle';
 import { LanguageSwitcher } from './shared/language-switcher/language-switcher';
@@ -12,6 +12,7 @@ import { PedalConnectButton } from './pedals/pedal-connect-button/pedal-connect-
   selector: 'app-root',
   imports: [
     RouterOutlet,
+    RouterLink,
     DarkModeToggle,
     LanguageSwitcher,
     TranslocoDirective,
