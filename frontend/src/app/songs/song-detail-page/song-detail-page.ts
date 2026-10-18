@@ -29,7 +29,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { TranslocoDirective } from '@jsverse/transloco';
 import { SongsApi } from '../songs-api.service';
 import { classifyLoadError } from '../library-load-error';
-import { hasCoverFile, isBlank, orderedPresets, type SongDetail } from '../song';
+import { hasCoverFile, isBlank, orderedPresets, type SongDetail, type SongFile, type FormattedByteSize, formatByteSize, userFiles, extraConfigEntries, type ExtraConfigEntry } from '../song';
 import { SongCover } from '../song-cover/song-cover';
 import { ChainBoard, type ChainBlockClicked } from '../../pedals/chain-board/chain-board';
 import { BlockDetail } from '../../pedals/block-detail/block-detail';
@@ -105,6 +105,12 @@ export class SongDetailPage {
     const s = this.song();
     return s !== null && !isBlank(s.artist);
   });
+  // F33 R2-R4, R13 — IR/NAM files in display order, cover dropped.
+  readonly userFiles = computed<readonly SongFile[]>(() => userFiles(this.song()?.files ?? []));
+  // F33 R15-R20 — extraConfig pairs in response order.
+  readonly extraEntries = computed<readonly ExtraConfigEntry[]>(() =>
+    extraConfigEntries(this.song()?.extraConfig),
+  );
 
   // F30 — which preset row is currently expanded (only one at a time).
   // `null` means every row is collapsed. Driving the expansion through a
@@ -501,6 +507,11 @@ export class SongDetailPage {
 
   duplicateErrorFor(sortOrder: number): DuplicateError | null {
     return this.duplicateErrorBySortOrder().get(sortOrder) ?? null;
+  }
+
+  // F33 R8, R12 — file size keyed for Transloco and locale-formatted.
+  fileSize(bytes: number, lang: string): FormattedByteSize {
+    return formatByteSize(bytes, lang);
   }
 
   duplicateStatusFor(sortOrder: number): DraftStatus {

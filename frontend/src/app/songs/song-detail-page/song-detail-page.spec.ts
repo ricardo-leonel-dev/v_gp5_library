@@ -56,6 +56,15 @@ class StubTranslocoLoader implements TranslocoLoader {
         chain_invalid: "This preset is damaged and can't be shown.",
         chain_unverified_footnote:
           'This chain is read-only: names and page numbers come from the original preset, not from the pedal.',
+        files_heading: 'User files',
+        files_empty: 'No IR or NAM files were saved with this song.',
+        file_kind_ir: 'IR',
+        file_kind_nam: 'NAM',
+        size_mb: '{{value}} MB',
+        size_mb_below_min: '< {{value}} MB',
+        extra_heading: 'Extra details',
+        extra_empty: 'No extra details were saved with this song.',
+        extra_value_empty: '(empty)',
       },
       songPresetDraft: {
         duplicate: 'Duplicate',
@@ -1085,5 +1094,710 @@ describe('SongDetailPage (F27 duplicate / edit / export / send / discard)', () =
     fixture.detectChanges();
     expect(await held).toBe(false);
     expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+  });
+});
+
+// F33 `song_detail_files_and_extra_config` — read-only listing of
+// the IR/NAM files and the extra details saved with a song. The
+// existing `setupWithId` already requests `GET /songs/:id`, so the
+// helpers below just flush that response with the right `files` and
+// `extraConfig` and then wait for change detection.
+
+import { TranslocoService } from '@jsverse/transloco';
+import { Subject, switchMap, take } from 'rxjs';
+import type { Type } from '@angular/core';
+
+@Injectable({ providedIn: 'root' })
+class BilingualStubTranslocoLoader implements TranslocoLoader {
+  getTranslation(lang: string): Observable<Translation> {
+    const isEs = lang === 'es';
+    return of({
+      songs: {
+        title: isEs ? 'Mis canciones' : 'My songs',
+        loading: isEs ? 'Cargando…' : 'Loading…',
+        retry: isEs ? 'Reintentar' : 'Try again',
+        login_again: isEs ? 'Iniciar sesión' : 'Log in',
+        errors: {
+          unreachable: isEs
+            ? 'No se pudo contactar con el servidor.'
+            : "Couldn't reach the server.",
+          load_failed: isEs
+            ? 'No se pudieron cargar tus canciones.'
+            : "Your songs couldn't be loaded.",
+          session_expired: isEs ? 'Tu sesión ha caducado.' : 'Your session has expired.',
+        },
+      },
+      songDetail: {
+        presets_heading: isEs ? 'Presets, en orden de uso' : 'Presets, in running order',
+        reference_note: isEs ? 'Solo referencia.' : 'Reference only.',
+        not_found: isEs ? 'Canción no encontrada.' : 'Song not found.',
+        view_chain: isEs ? 'Ver cadena' : 'View chain',
+        hide_chain: isEs ? 'Ocultar cadena' : 'Hide chain',
+        view_chain_aria: isEs ? 'Ver la cadena del preset {{name}}' : 'View chain for {{name}}',
+        hide_chain_aria: isEs ? 'Ocultar la cadena del preset {{name}}' : 'Hide chain for {{name}}',
+        chain_loading: isEs ? 'Cargando preset…' : 'Loading preset…',
+        chain_load_failed: isEs
+          ? 'No se pudo leer este preset. Vuelve a intentarlo.'
+          : "Couldn't read this preset. Try again.",
+        chain_retry: isEs ? 'Reintentar' : 'Try again',
+        chain_invalid: isEs
+          ? 'Este preset está dañado y no se puede mostrar.'
+          : "This preset is damaged and can't be shown.",
+        chain_unverified_footnote: isEs
+          ? 'Esta cadena es de solo lectura.'
+          : 'This chain is read-only.',
+        files_heading: isEs ? 'Archivos de usuario' : 'User files',
+        files_empty: isEs
+          ? 'Esta canción no tiene archivos IR ni NAM guardados.'
+          : 'No IR or NAM files were saved with this song.',
+        file_kind_ir: 'IR',
+        file_kind_nam: 'NAM',
+        size_mb: '{{value}} MB',
+        size_mb_below_min: '< {{value}} MB',
+        extra_heading: isEs ? 'Datos extra' : 'Extra details',
+        extra_empty: isEs
+          ? 'Esta canción no tiene datos extra guardados.'
+          : 'No extra details were saved with this song.',
+        extra_value_empty: isEs ? '(vacío)' : '(empty)',
+      },
+      songPresetDraft: {
+        duplicate: isEs ? 'Duplicar' : 'Duplicate',
+        duplicate_aria: isEs ? 'Duplicar preset {{name}}' : 'Duplicate preset {{name}}',
+        heading: isEs ? 'Copia de «{{source}}»' : 'Copy of "{{source}}"',
+        unsaved: isEs ? 'Sin guardar' : 'Not saved',
+        name_label: isEs ? 'Nombre' : 'Preset name',
+        name_help: 'help',
+        edit_hint: 'edit',
+        bypass_label: 'on',
+        effect_label: 'fx',
+        footnote: 'footnote',
+        export: 'Export',
+        send: 'Send',
+        discard: 'Discard',
+        errors: {
+          name_required: 'required',
+          name_unsupported: 'unsupported',
+          name_duplicate: 'duplicate',
+          param_invalid: 'invalid',
+          duplicate_failed: 'failed',
+        },
+        leave_title: 'leave',
+        leave_message: 'message',
+        leave_stay: 'stay',
+        leave_confirm: 'leave',
+      },
+      chainBoard: {
+        close: 'Close',
+        browse: 'Browse',
+        active: 'In this preset',
+        state_on: 'On',
+        state_off: 'Bypassed',
+        parameters: 'Parameters',
+        no_parameters: 'No parameters.',
+        unknown_module: 'Unknown module.',
+        manual_page: 'Manual p. {{page}}',
+        categories: { c0: 'NR', c1: 'PRE', c4: 'AMP' },
+        userIrSlot: 'User IR {{slot}}',
+        userSnapToneSlot: 'User SnapTone {{slot}}',
+      },
+      presetBrowser: {
+        footnote_unverified: 'Footnote.',
+      },
+      writeToPedal: {
+        draft_note: 'draft note',
+        target_slot: 'Target slot',
+        not_connected: 'Not connected.',
+        connect: 'Connect GP-5',
+        connecting: 'Connecting…',
+        cancel: 'Cancel',
+        send: 'Send',
+        writing: 'Writing…',
+        success_title: 'Done',
+        success_single: 'success',
+        done: 'Close',
+        song_heading: 'Song heading',
+        presets_legend: 'Presets',
+        preset_row_aria: 'Pos {{position}}: {{name}}',
+        write_all: 'Write all',
+        write_all_help: 'Help',
+        partialProgress: 'Already wrote: {{slots}}.',
+        errors: {
+          pedalDisconnected: 'Pedal disconnected.',
+          busy: 'Busy.',
+          timeout: 'Timeout.',
+          connectionLost: 'Connection lost.',
+          unexpected: 'Error.',
+          songNotFound: 'Not found.',
+          sessionExpired: 'Session expired.',
+          network: 'Network.',
+          corruptFile: 'Corrupt file.',
+          writeNotConfirmed: 'Not confirmed.',
+          writeRejected: 'Rejected.',
+        },
+      },
+      writeToSlot: {
+        help: '0..99',
+        errors: { outOfRange: 'Out of range.', notEnoughRoom: 'Not enough room.' },
+        summary_range: 'Slots {{from}}..{{to}}',
+      },
+      unsupportedBrowser: {
+        title: 'Unsupported',
+        body: 'Body',
+        browsers: 'Browsers',
+        footnote: 'Footnote',
+        insecure_body: 'Insecure',
+        insecure_compact: 'Insecure compact',
+      },
+    } as Translation);
+  }
+}
+
+// F33 R23 regression — mirrors the real HttpLoader: the `en` file
+// arrives only when the test fires `enTranslationGate`, i.e. AFTER
+// `setActiveLang('en')` has already emitted `langChanges$`.
+let enTranslationGate = new Subject<void>();
+
+@Injectable({ providedIn: 'root' })
+class AsyncEnStubTranslocoLoader implements TranslocoLoader {
+  private readonly inner = new BilingualStubTranslocoLoader();
+  getTranslation(lang: string): Observable<Translation> {
+    if (lang !== 'en') return this.inner.getTranslation(lang);
+    return enTranslationGate.pipe(
+      take(1),
+      switchMap(() => this.inner.getTranslation(lang)),
+    );
+  }
+}
+
+function setupWithBothLangs(
+  id: string | null,
+  initialLang: 'es' | 'en' = 'es',
+  loader: Type<TranslocoLoader> = BilingualStubTranslocoLoader,
+): {
+  httpMock: HttpTestingController;
+  fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>;
+  transloco: TranslocoService;
+} {
+  TestBed.resetTestingModule();
+  TestBed.configureTestingModule({
+    imports: [SongDetailPage],
+    providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      provideRouter([]),
+      provideTransloco({
+        config: {
+          availableLangs: ['es', 'en'],
+          defaultLang: initialLang,
+          fallbackLang: 'es',
+          // Same as app.config.ts — without it the *transloco directive
+          // ignores every langChanges$ emission after the first.
+          reRenderOnLangChange: true,
+        },
+        loader,
+      }),
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          snapshot: { paramMap: { get: (k: string) => (k === 'id' ? id : null) } },
+        },
+      },
+      {
+        provide: WebMidiPedalConnection,
+        useValue: {
+          isSupported: () => true,
+          connectionState: signal<'not-connected' | 'connecting' | 'connected' | 'error'>('not-connected'),
+          connect: vi.fn().mockResolvedValue(undefined),
+          writePreset: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    ],
+  });
+  const httpMock = TestBed.inject(HttpTestingController);
+  const transloco = TestBed.inject(TranslocoService);
+  transloco.setActiveLang(initialLang);
+  const fixture = TestBed.createComponent(SongDetailPage);
+  fixture.detectChanges();
+  return { httpMock, fixture, transloco };
+}
+
+async function loadSongWithFiles(
+  fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
+  httpMock: HttpTestingController,
+  songId: string,
+  body: Partial<SongDetail>,
+): Promise<void> {
+  await fixture.whenStable();
+  fixture.detectChanges();
+  httpMock.expectOne(`${environment.apiBaseUrl}/songs/${songId}`).flush({
+    id: songId,
+    name: body.name ?? 'Test Song',
+    artist: body.artist ?? null,
+    presets: body.presets ?? [],
+    files: body.files ?? [],
+    extraConfig: body.extraConfig,
+  } as SongDetail);
+  await fixture.whenStable();
+  await Promise.resolve();
+  fixture.detectChanges();
+}
+
+async function flushCover(
+  httpMock: HttpTestingController,
+  songId: string,
+  payload = new Blob([new Uint8Array([0x89]) as BlobPart], { type: 'image/png' }),
+): Promise<void> {
+  const req = httpMock.match(`${environment.apiBaseUrl}/songs/${songId}/files/cover`)[0];
+  req?.flush(payload);
+}
+
+describe('SongDetailPage (F33 — files and extra details)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  test('R1, R2, R3, R4, R5, R6, R7, R8 — loaded: User files section, rows in ir→nam/sortOrder order, cover dropped, filename/title/kind/size', async () => {
+    const { fixture, httpMock } = setupWithId('song-files');
+    await loadSongWithFiles(fixture, httpMock, 'song-files', {
+      name: 'Has files',
+      files: [
+        {
+          id: 'nam-1',
+          kind: 'nam',
+          originalFilename: 'Plexi crunch.nam',
+          mimeType: 'application/octet-stream',
+          byteSize: 1572864,
+          sortOrder: 1,
+          createdAt: '2026-10-01',
+        },
+        {
+          id: 'ir-0',
+          kind: 'ir',
+          originalFilename: 'Room 412.wav',
+          mimeType: 'audio/wav',
+          byteSize: 5243,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+        {
+          id: 'ir-1',
+          kind: 'ir',
+          originalFilename: 'Marshall 4x12.wav',
+          mimeType: 'audio/wav',
+          byteSize: 1048576,
+          sortOrder: 1,
+          createdAt: '2026-10-01',
+        },
+        {
+          id: 'cover',
+          kind: 'cover',
+          originalFilename: 'cover.png',
+          mimeType: 'image/png',
+          byteSize: 1024,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+    });
+    await flushCover(httpMock, 'song-files');
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const section = root.querySelector('[data-testid="song-detail-files"]');
+    expect(section).not.toBeNull();
+    const heading = section!.querySelector('h2');
+    expect(heading?.textContent?.trim()).toBe('User files');
+    const rows = section!.querySelectorAll('[data-testid="song-file-row"]');
+    expect(rows.length).toBe(3);
+    // Order: ir-0, ir-1, nam-1 (cover dropped, ir before nam).
+    const names = Array.from(rows).map((r) =>
+      r.querySelector('[data-testid="song-file-name"]')?.textContent?.trim(),
+    );
+    expect(names).toEqual(['Room 412.wav', 'Marshall 4x12.wav', 'Plexi crunch.nam']);
+    const title0 = rows[0]!.querySelector('[data-testid="song-file-name"]')?.getAttribute('title');
+    expect(title0).toBe('Room 412.wav');
+    const kindLabels = Array.from(rows).map((r) =>
+      r.querySelector('[data-testid="song-file-kind"]')?.textContent?.trim(),
+    );
+    expect(kindLabels).toEqual(['IR', 'IR', 'NAM']);
+    // 5243 bytes → 0.01 MB (es), 1048576 → 1,00 MB (es), 1572864 → 1,50 MB (es).
+    const sizeTexts = Array.from(rows).map((r) =>
+      r.querySelector('[data-testid="song-file-size"]')?.textContent?.trim(),
+    );
+    expect(sizeTexts).toEqual(['0,01 MB', '1,00 MB', '1,50 MB']);
+    // R3: cover is not rendered as a row.
+    const rowNames = Array.from(rows).map((r) => r.textContent ?? '');
+    expect(rowNames.some((t) => t.includes('cover.png'))).toBe(false);
+  });
+
+  test('R13, R20 — only a cover + extraConfig {} shows both empty texts, no rows/pairs', async () => {
+    const { fixture, httpMock } = setupWithId('song-empty');
+    await loadSongWithFiles(fixture, httpMock, 'song-empty', {
+      files: [
+        {
+          id: 'cover',
+          kind: 'cover',
+          originalFilename: 'cover.png',
+          mimeType: 'image/png',
+          byteSize: 100,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+      extraConfig: {},
+    });
+    await flushCover(httpMock, 'song-empty');
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-detail-files"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-files-empty"]')?.textContent?.trim()).toBe(
+      'No IR or NAM files were saved with this song.',
+    );
+    expect(root.querySelectorAll('[data-testid="song-file-row"]').length).toBe(0);
+    expect(root.querySelector('[data-testid="song-detail-extra"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-extra-empty"]')?.textContent?.trim()).toBe(
+      'No extra details were saved with this song.',
+    );
+    expect(root.querySelectorAll('[data-testid="song-extra-row"]').length).toBe(0);
+  });
+
+  test('R13, R20 — files empty + extraConfig omitted: empty texts present, no rows', async () => {
+    const { fixture, httpMock } = setupWithId('song-no-files');
+    await loadSongWithFiles(fixture, httpMock, 'song-no-files', {
+      files: [],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-detail-files-empty"]')).not.toBeNull();
+    expect(root.querySelectorAll('[data-testid="song-file-row"]').length).toBe(0);
+    expect(root.querySelector('[data-testid="song-detail-extra-empty"]')).not.toBeNull();
+    expect(root.querySelectorAll('[data-testid="song-extra-row"]').length).toBe(0);
+  });
+
+  test('R14, R15, R16, R19 — mixed extraConfig: section, heading, response key order, (empty) text, whitespace-pre-wrap on multi-line', async () => {
+    const { fixture, httpMock } = setupWithId('song-extras');
+    await loadSongWithFiles(fixture, httpMock, 'song-extras', {
+      files: [],
+      extraConfig: {
+        tuning: 'Drop D',
+        capo: '2',
+        notes: 'line 1\nline 2',
+        blank: '',
+      },
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const section = root.querySelector('[data-testid="song-detail-extra"]');
+    expect(section).not.toBeNull();
+    expect(section!.querySelector('h2')?.textContent?.trim()).toBe('Extra details');
+    const pairs = section!.querySelectorAll('[data-testid="song-extra-row"]');
+    expect(pairs.length).toBe(4);
+    const keys = Array.from(pairs).map((p) => p.querySelector('dt')?.textContent?.trim());
+    expect(keys).toEqual(['tuning', 'capo', 'notes', 'blank']);
+    const tuningDd = pairs[0]!.querySelector('[data-testid="song-extra-value-text"]');
+    expect(tuningDd?.textContent?.trim()).toBe('Drop D');
+    const notesDd = pairs[2]!.querySelector('[data-testid="song-extra-value-text"]') as HTMLElement;
+    expect(notesDd?.textContent?.trim()).toBe('line 1\nline 2');
+    expect(notesDd?.classList.contains('whitespace-pre-wrap')).toBe(true);
+    const blankDd = pairs[3]!.querySelector('[data-testid="song-extra-value-empty"]');
+    expect(blankDd?.textContent?.trim()).toBe('(empty)');
+  });
+
+  test('R21 — no /files/ir or /files/nam request after load', async () => {
+    const { fixture, httpMock } = setupWithId('song-no-files-2');
+    await loadSongWithFiles(fixture, httpMock, 'song-no-files-2', {
+      files: [
+        {
+          id: 'ir-0',
+          kind: 'ir',
+          originalFilename: 'ir.wav',
+          mimeType: 'audio/wav',
+          byteSize: 100,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+        {
+          id: 'nam-0',
+          kind: 'nam',
+          originalFilename: 'nam.bin',
+          mimeType: 'application/octet-stream',
+          byteSize: 100,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    httpMock.expectNone(`${environment.apiBaseUrl}/songs/song-no-files-2/files/ir`);
+    httpMock.expectNone(`${environment.apiBaseUrl}/songs/song-no-files-2/files/nam`);
+    httpMock.verify();
+  });
+
+  test('R22 — loading / 404 / 500 / 401: neither section is rendered', async () => {
+    // Loading state.
+    const loading = setupWithId('song-loading');
+    await loading.fixture.whenStable();
+    loading.fixture.detectChanges();
+    const loadingRoot = loading.fixture.nativeElement as HTMLElement;
+    expect(loadingRoot.querySelector('[data-testid="song-detail-loading"]')).not.toBeNull();
+    expect(loadingRoot.querySelector('[data-testid="song-detail-files"]')).toBeNull();
+    expect(loadingRoot.querySelector('[data-testid="song-detail-extra"]')).toBeNull();
+    loading.httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-loading`).flush({
+      id: 'song-loading',
+      name: 'X',
+      presets: [],
+      files: [],
+    } as SongDetail);
+    await loading.fixture.whenStable();
+
+    // 404.
+    const missing = setupWithId('missing');
+    await missing.fixture.whenStable();
+    missing.fixture.detectChanges();
+    missing.httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/missing`)
+      .flush('not found', { status: 404, statusText: 'Not Found' });
+    await missing.fixture.whenStable();
+    await Promise.resolve();
+    missing.fixture.detectChanges();
+    const missingRoot = missing.fixture.nativeElement as HTMLElement;
+    expect(missingRoot.querySelector('[data-testid="song-detail-not-found"]')).not.toBeNull();
+    expect(missingRoot.querySelector('[data-testid="song-detail-files"]')).toBeNull();
+    expect(missingRoot.querySelector('[data-testid="song-detail-extra"]')).toBeNull();
+
+    // 500.
+    const boom = setupWithId('boom');
+    await boom.fixture.whenStable();
+    boom.fixture.detectChanges();
+    boom.httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/boom`)
+      .flush('boom', { status: 500, statusText: 'Server Error' });
+    await boom.fixture.whenStable();
+    await Promise.resolve();
+    boom.fixture.detectChanges();
+    const boomRoot = boom.fixture.nativeElement as HTMLElement;
+    expect(boomRoot.querySelector('[data-testid="song-detail-error"]')).not.toBeNull();
+    expect(boomRoot.querySelector('[data-testid="song-detail-files"]')).toBeNull();
+    expect(boomRoot.querySelector('[data-testid="song-detail-extra"]')).toBeNull();
+
+    // 401.
+    const unauth = setupWithId('unauth');
+    await unauth.fixture.whenStable();
+    unauth.fixture.detectChanges();
+    unauth.httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/unauth`)
+      .flush('unauth', { status: 401, statusText: 'Unauthorized' });
+    await unauth.fixture.whenStable();
+    await Promise.resolve();
+    unauth.fixture.detectChanges();
+    const unauthRoot = unauth.fixture.nativeElement as HTMLElement;
+    expect(unauthRoot.querySelector('[data-testid="song-detail-session-expired"]')).not.toBeNull();
+    expect(unauthRoot.querySelector('[data-testid="song-detail-files"]')).toBeNull();
+    expect(unauthRoot.querySelector('[data-testid="song-detail-extra"]')).toBeNull();
+  });
+
+  test('R12, R23 — switching active language es→en re-renders headings and size text; no second GET /songs/:id', async () => {
+    const { fixture, httpMock, transloco } = setupWithBothLangs('song-lang', 'es');
+    await loadSongWithFiles(fixture, httpMock, 'song-lang', {
+      files: [
+        {
+          id: 'ir-0',
+          kind: 'ir',
+          originalFilename: 'a.wav',
+          mimeType: 'audio/wav',
+          byteSize: 1572864,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    // Initial language is 'es'.
+    const heading = root.querySelector('[data-testid="song-detail-files"] h2');
+    expect(heading?.textContent?.trim()).toBe('Archivos de usuario');
+    const sizeText = root.querySelector('[data-testid="song-file-size"]')?.textContent?.trim();
+    expect(sizeText).toBe('1,50 MB');
+
+    // Switch language to 'en'.
+    await transloco.load('en').toPromise();
+    transloco.setActiveLang('en');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const headingEn = root.querySelector('[data-testid="song-detail-files"] h2');
+    expect(headingEn?.textContent?.trim()).toBe('User files');
+    const sizeTextEn = root.querySelector('[data-testid="song-file-size"]')?.textContent?.trim();
+    expect(sizeTextEn).toBe('1.50 MB');
+
+    // No second GET /songs/:id was issued after the language switch.
+    httpMock.expectNone(`${environment.apiBaseUrl}/songs/song-lang`);
+    httpMock.verify();
+  });
+
+  test('R12, R23 — regression: en translation arriving asynchronously after setActiveLang still renders English, never a raw songDetail. key; no second GET /songs/:id', async () => {
+    enTranslationGate = new Subject<void>();
+    const { fixture, httpMock, transloco } = setupWithBothLangs('song-lang-async', 'es', AsyncEnStubTranslocoLoader);
+    await loadSongWithFiles(fixture, httpMock, 'song-lang-async', {
+      files: [
+        {
+          id: 'ir-0',
+          kind: 'ir',
+          originalFilename: 'a.wav',
+          mimeType: 'audio/wav',
+          byteSize: 1572864,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+        {
+          id: 'nam-0',
+          kind: 'nam',
+          originalFilename: 'b.nam',
+          mimeType: 'application/octet-stream',
+          byteSize: 100,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+      extraConfig: { blank: '' },
+    });
+    const root = fixture.nativeElement as HTMLElement;
+    const text = (sel: string): string[] =>
+      Array.from(root.querySelectorAll(sel)).map((el) => el.textContent?.trim() ?? '');
+    expect(text('[data-testid="song-detail-files"] h2')).toEqual(['Archivos de usuario']);
+
+    // Real-app order: langChanges$ fires synchronously, the file is not loaded yet.
+    transloco.setActiveLang('en');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(root.textContent).not.toContain('songDetail.');
+
+    // The en file arrives now.
+    enTranslationGate.next();
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    expect(text('[data-testid="song-detail-files"] h2')).toEqual(['User files']);
+    expect(text('[data-testid="song-detail-extra"] h2')).toEqual(['Extra details']);
+    expect(text('[data-testid="song-file-kind"]')).toEqual(['IR', 'NAM']);
+    expect(text('[data-testid="song-file-size"]')[0]).toBe('1.50 MB');
+    expect(text('[data-testid="song-extra-value-empty"]')).toEqual(['(empty)']);
+    expect(root.textContent).not.toContain('songDetail.');
+    // Kind tag keeps its static classes plus the kind-specific colors.
+    const kinds = root.querySelectorAll('[data-testid="song-file-kind"]');
+    expect(kinds[0]!.classList.contains('w-12')).toBe(true);
+    expect(kinds[0]!.classList.contains('bg-stone-600')).toBe(true);
+    expect(kinds[1]!.classList.contains('w-12')).toBe(true);
+    expect(kinds[1]!.classList.contains('bg-rose-600')).toBe(true);
+
+    httpMock.expectNone(`${environment.apiBaseUrl}/songs/song-lang-async`);
+    httpMock.verify();
+  });
+
+  test('R13, R23 — regression: empty texts switch to English once the async en file arrives', async () => {
+    enTranslationGate = new Subject<void>();
+    const { fixture, httpMock, transloco } = setupWithBothLangs('song-lang-empty', 'es', AsyncEnStubTranslocoLoader);
+    await loadSongWithFiles(fixture, httpMock, 'song-lang-empty', { files: [], extraConfig: {} });
+    const root = fixture.nativeElement as HTMLElement;
+    transloco.setActiveLang('en');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    enTranslationGate.next();
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-detail-files-empty"]')?.textContent?.trim()).toBe(
+      'No IR or NAM files were saved with this song.',
+    );
+    expect(root.querySelector('[data-testid="song-detail-extra-empty"]')?.textContent?.trim()).toBe(
+      'No extra details were saved with this song.',
+    );
+    expect(root.textContent).not.toContain('songDetail.');
+    httpMock.expectNone(`${environment.apiBaseUrl}/songs/song-lang-empty`);
+  });
+
+  test('R24 — i18n: the 9 new songDetail keys exist in both es and en as non-empty strings', () => {
+    const cwd = (globalThis as { process?: { cwd(): string } }).process?.cwd() ?? '.';
+    const es = JSON.parse(readFileSync(join(cwd, 'public/i18n/es.json'), 'utf8')) as Record<string, unknown>;
+    const en = JSON.parse(readFileSync(join(cwd, 'public/i18n/en.json'), 'utf8')) as Record<string, unknown>;
+    const requiredKeys = [
+      'songDetail.files_heading',
+      'songDetail.files_empty',
+      'songDetail.file_kind_ir',
+      'songDetail.file_kind_nam',
+      'songDetail.size_mb',
+      'songDetail.size_mb_below_min',
+      'songDetail.extra_heading',
+      'songDetail.extra_empty',
+      'songDetail.extra_value_empty',
+    ];
+    for (const k of requiredKeys) {
+      const esVal = k.split('.').reduce<unknown>(
+        (acc, segment) => (acc && typeof acc === 'object' && segment in (acc as Record<string, unknown>)
+          ? (acc as Record<string, unknown>)[segment]
+          : undefined),
+        es,
+      );
+      const enVal = k.split('.').reduce<unknown>(
+        (acc, segment) => (acc && typeof acc === 'object' && segment in (acc as Record<string, unknown>)
+          ? (acc as Record<string, unknown>)[segment]
+          : undefined),
+        en,
+      );
+      expect(typeof esVal).toBe('string');
+      expect(typeof enVal).toBe('string');
+      expect((esVal as string).length).toBeGreaterThan(0);
+      expect((enVal as string).length).toBeGreaterThan(0);
+    }
+  });
+
+  test('R25, R26 — layout: wrapper is single-column → two-column at lg; file row min-w-0; filename truncate; size shrink-0; text <dd> break-words', async () => {
+    const { fixture, httpMock } = setupWithId('song-layout');
+    await loadSongWithFiles(fixture, httpMock, 'song-layout', {
+      files: [
+        {
+          id: 'ir-0',
+          kind: 'ir',
+          originalFilename: 'a.wav',
+          mimeType: 'audio/wav',
+          byteSize: 1024,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+      extraConfig: { notes: 'multi\nline' },
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const wrapper = root.querySelector('[data-testid="song-detail-extras-grid"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper.classList.contains('grid-cols-1')).toBe(true);
+    expect(wrapper.classList.contains('lg:grid-cols-2')).toBe(true);
+    const row = root.querySelector('[data-testid="song-file-row"]') as HTMLElement;
+    expect(row.classList.contains('min-w-0')).toBe(true);
+    const filename = row.querySelector('[data-testid="song-file-name"]') as HTMLElement;
+    expect(filename.classList.contains('truncate')).toBe(true);
+    const size = row.querySelector('[data-testid="song-file-size"]') as HTMLElement;
+    expect(size.classList.contains('shrink-0')).toBe(true);
+    const textDd = root.querySelector('[data-testid="song-extra-value-text"]') as HTMLElement;
+    expect(textDd.classList.contains('break-words')).toBe(true);
   });
 });
