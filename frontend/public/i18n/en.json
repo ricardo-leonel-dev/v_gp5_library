@@ -47,7 +47,16 @@
     "chain_load_failed": "Couldn't read this preset. Try again.",
     "chain_retry": "Try again",
     "chain_invalid": "This preset is damaged and can't be shown.",
-    "chain_unverified_footnote": "This chain is read-only: names and page numbers come from the original preset, not from the pedal."
+    "chain_unverified_footnote": "This chain is read-only: names and page numbers come from the original preset, not from the pedal.",
+    "files_heading": "User files",
+    "files_empty": "No IR or NAM files were saved with this song.",
+    "file_kind_ir": "IR",
+    "file_kind_nam": "NAM",
+    "size_mb": "{{value}} MB",
+    "size_mb_below_min": "< {{value}} MB",
+    "extra_heading": "Extra details",
+    "extra_empty": "No extra details were saved with this song.",
+    "extra_value_empty": "(empty)"
   },
   "songPresetDraft": {
     "duplicate": "Duplicate",
