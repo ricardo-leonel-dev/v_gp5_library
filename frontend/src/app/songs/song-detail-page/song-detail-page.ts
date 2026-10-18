@@ -43,6 +43,7 @@ import {
   draftToPreset,
   draftToPrst,
   exportFileName,
+  mapSaveDraftError,
   renameDraft,
   setBlockEnabled,
   setBlockModule,
@@ -50,6 +51,8 @@ import {
   validateDraftName,
   type PresetDraft,
 } from '../preset-draft';
+import { PlanApi } from '../plan-api.service';
+import type { PlanLimits } from '../plan-limits';
 import { WebMidiPedalConnection } from '../../midi/web-midi-pedal-connection';
 import type { WriteablePresetRef } from '../write-preset-form';
 
@@ -87,6 +90,7 @@ interface DuplicateError {
 })
 export class SongDetailPage {
   private readonly api = inject(SongsApi);
+  private readonly planApi = inject(PlanApi);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly pedal = inject(WebMidiPedalConnection);
@@ -163,6 +167,37 @@ export class SongDetailPage {
   // F27 R48-R55 — leave confirmation.
   readonly leavePrompt = signal<{ resolve: (leave: boolean) => void } | null>(null);
   readonly hasUnsavedDraft = computed(() => this.draft()?.edited === true);
+
+  // F31 R1, R2 — plan fetched on the first Duplicate, not on page init.
+  readonly plan = signal<PlanLimits | null>(null);
+  private planRequested = false;
+  // F31 R1, A3 — `presetsPerSongLimit` non-null and the song's preset
+  // count already at the limit.
+  readonly atPresetLimit = computed(() => {
+    const l = this.plan()?.presetsPerSongLimit;
+    return l != null && (this.song()?.presets.length ?? 0) >= l;
+  });
+  // F31 R8 — saving lifecycle. `idle` between actions; `saving` while
+  // the POST is in flight.
+  readonly saveState = signal<'idle' | 'saving'>('idle');
+  // F31 R5-R7 — the mapped save error key (page prefixes the namespace).
+  readonly saveErrorKey = signal<ReturnType<typeof mapSaveDraftError> | null>(null);
+  // F31 R4 — the name of the preset that was just saved (so the
+  // confirmation can render it).
+  readonly savedName = signal<string | null>(null);
+  // F31 R4 b/c/d — non-blocking warning shown after a save whose follow-up
+  // GET /songs/:id failed. `refreshing` disables the retry button while a
+  // refresh is in flight.
+  readonly refreshFailed = signal<boolean>(false);
+  readonly refreshing = signal<boolean>(false);
+  // F31 R1, R8, R9 — the Save button's disabled binding.
+  readonly canSave = computed(
+    () =>
+      this.draft() !== null &&
+      this.draftActionsEnabled() &&
+      this.saveState() === 'idle' &&
+      !this.atPresetLimit(),
+  );
 
   // F30 — derived: the expanded row's ready-to-render state. Combining
   // the four per-row signals keeps the template terse.
@@ -378,7 +413,7 @@ export class SongDetailPage {
     this.setDuplicateStatus(sortOrder, 'creating');
     this.clearDuplicateError(sortOrder);
     try {
-      const bytes = await this.api.getSongPreset(song.id, sortOrder);
+      const [bytes] = await Promise.all([this.api.getSongPreset(song.id, sortOrder), this.ensurePlan()]);
       const res = createDraft(sortOrder, bytes, this.songNames());
       if (!res.ok) {
         this.setDuplicateStatus(sortOrder, 'failed');
@@ -388,10 +423,26 @@ export class SongDetailPage {
       this.draft.set(res.draft);
       this.draftSelectedPos.set(null);
       this.expandedSortOrder.set(null);
+      this.clearSaveMessages();
       this.setDuplicateStatus(sortOrder, 'ready');
     } catch {
       this.setDuplicateStatus(sortOrder, 'failed');
       this.setDuplicateError(sortOrder, { sortOrder, key: 'songPresetDraft.errors.duplicate_failed' });
+    }
+  }
+
+  // F31 R1, R2, P1 — `getMyPlan` is called at most once per page instance,
+  // in parallel with the first Duplicate's preset fetch. A rejected plan
+  // keeps `plan` null and Save enabled (R2): the user still gets a clear
+  // error from the backend if the plan actually blocks the save (R5).
+  private async ensurePlan(): Promise<void> {
+    if (this.planRequested) return;
+    this.planRequested = true;
+    try {
+      const limits = await this.planApi.getMyPlan();
+      this.plan.set(limits);
+    } catch {
+      this.plan.set(null);
     }
   }
 
@@ -453,6 +504,83 @@ export class SongDetailPage {
   onDraftDiscard(): void {
     this.draft.set(null);
     this.draftSelectedPos.set(null);
+    this.clearSaveMessages();
+  }
+
+  // F31 — clear any stale save error / confirmation / refresh-failed
+  // warning so a previous save's messages never sit next to a new draft.
+  // Called by `onDuplicate` and `onDraftDiscard`.
+  private clearSaveMessages(): void {
+    this.saveErrorKey.set(null);
+    this.savedName.set(null);
+    this.refreshFailed.set(false);
+  }
+
+  // F31 R3-R10 — Save to song. Returns early when `canSave()` is false;
+  // on 201, clears the draft + selection, shows the saved confirmation,
+  // and tries to refresh the song detail so the saved preset appears as
+  // the last row (R4). On failure, keeps the draft and shows the mapped
+  // error (R5-R7). The 201 itself is not appended locally (R4 b, d).
+  async onDraftSave(): Promise<void> {
+    if (!this.canSave()) return;
+    const song = this.song();
+    const draft = this.draft();
+    if (!song || !draft) return;
+    this.saveState.set('saving');
+    this.saveErrorKey.set(null);
+    try {
+      const created = await this.api.addSongPreset(song.id, draftToPrst(draft), exportFileName(draft.name));
+      this.draft.set(null);
+      this.draftSelectedPos.set(null);
+      this.savedName.set(created.name);
+      this.saveState.set('idle');
+      void this.focusSavedConfirmation();
+      void this.refreshSong(song.id);
+    } catch (err) {
+      this.saveErrorKey.set(mapSaveDraftError(err));
+      this.saveState.set('idle');
+    }
+  }
+
+  // F31 R4 — refresh the song detail without unmounting the loaded view.
+  // Keeps `state` and `errorKey` untouched so the page never flashes its
+  // loading/error state; on success, replaces `song` with the reloaded
+  // detail; on rejection, leaves `song` as-is and raises the non-blocking
+  // refresh-failed warning (no page error state). The new sortOrder was
+  // never cached by the F30 chain cache, so no invalidation is needed.
+  private async refreshSong(id: string): Promise<void> {
+    if (this.refreshing()) return;
+    this.refreshing.set(true);
+    try {
+      const detail = await this.api.getSong(id);
+      this.song.set(detail);
+      this.refreshFailed.set(false);
+    } catch {
+      this.refreshFailed.set(true);
+    } finally {
+      this.refreshing.set(false);
+    }
+  }
+
+  // F31 R4 c, d — retry the post-save refresh. Returns early while a
+  // refresh is already in flight; does not move focus.
+  onRefreshRetry(): void {
+    if (this.refreshing()) return;
+    const song = this.song();
+    if (!song) return;
+    void this.refreshSong(song.id);
+  }
+
+  // F31 R4 a — move focus to the saved confirmation element after the
+  // template renders it. Uses `afterNextRender` so the element exists.
+  private focusSavedConfirmation(): void {
+    // Wait one tick so the saved-confirmation block mounts.
+    queueMicrotask(() => {
+      const el = document.querySelector<HTMLElement>(
+        '[data-testid="song-preset-draft-saved"]',
+      );
+      el?.focus();
+    });
   }
 
   // F27 R48-R55 — leave confirmation. Synchronously allows navigation

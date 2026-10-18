@@ -11,12 +11,16 @@
 // F26 `library_first_startup` — `listSongs` returns the user's saved
 // songs (F26 R2). F5 also uses it to populate the minimal song-card
 // grid in the songs page (F5 R3, R53).
+//
+// F31 `song_preset_draft_save` — `addSongPreset` sends the F27 draft as a
+// single multipart "preset" file part (R3). Browser sets the boundary
+// automatically; `authInterceptor` adds the Bearer token.
 
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
-import type { CreatedSong, Song, SongDetail } from './song';
+import type { CreatedSong, Song, SongDetail, SongPreset } from './song';
 
 @Injectable({ providedIn: 'root' })
 export class SongsApi {
@@ -58,5 +62,19 @@ export class SongsApi {
     // `authInterceptor` (app config) attaches the Bearer token.
     const blob = await firstValueFrom(this.http.get(url, { responseType: 'blob' }));
     return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  // F31 R3 — POST /songs/:id/presets with a single multipart "preset"
+  // file part holding the 507-byte .prst from `draftToPrst`. The browser
+  // sets the boundary; no explicit Content-Type. Resolves with the
+  // server's SongPreset DTO (201). Status precedence (400 > 402 > 404 >
+  // 409) lives on the backend and is not re-asserted here.
+  addSongPreset(songId: string, prst: Uint8Array, filename: string): Promise<SongPreset> {
+    const form = new FormData();
+    const bytes = new Uint8Array(prst.byteLength);
+    bytes.set(prst);
+    form.append('preset', new File([bytes], filename, { type: 'application/octet-stream' }));
+    const url = `${environment.apiBaseUrl}/songs/${encodeURIComponent(songId)}/presets`;
+    return firstValueFrom(this.http.post<SongPreset>(url, form));
   }
 }

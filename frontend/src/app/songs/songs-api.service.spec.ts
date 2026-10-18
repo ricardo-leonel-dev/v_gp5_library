@@ -266,3 +266,80 @@ describe('SongsApi.getSongPreset (R6, R9-R12, T9, T10)', () => {
     httpMock.verify();
   });
 });
+
+describe('SongsApi.addSongPreset (F31 R3)', () => {
+  let api: SongsApi;
+  let httpMock: HttpTestingController;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [SongsApi, provideHttpClient(), provideHttpClientTesting()],
+    });
+    api = TestBed.inject(SongsApi);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  function buildPrst(): Uint8Array {
+    const body = capturedBodyBytes(0);
+    const nameField = new Uint8Array(NAME_LEN);
+    const enc = new TextEncoder().encode('TL DLX AMP');
+    for (let i = 0; i < NAME_LEN; i++) nameField[i] = i < enc.length ? enc[i] : 0;
+    const chain = decodeGp5Body(body, 'TL DLX AMP', 0).chain;
+    const preset: Preset = {
+      slot: 0,
+      name: 'TL DLX AMP',
+      chain,
+      raw: { body, nameField },
+    };
+    return encodePrstFile(preset);
+  }
+
+  test('POST /songs/:id/presets with a single 507-byte "preset" File named as passed; resolves the SongPreset body', async () => {
+    const bytes = buildPrst();
+    const filename = 'LEAD 2.prst';
+    const pending = api.addSongPreset('song-7', bytes, filename);
+    const req = httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-7/presets`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toBeInstanceOf(FormData);
+    expect(req.request.headers.has('Content-Type')).toBe(false);
+    const form = req.request.body as FormData;
+    const entries = Array.from(form.entries());
+    const presetEntries = entries.filter(([k]) => k === 'preset');
+    expect(presetEntries.length).toBe(1);
+    const file = presetEntries[0]![1] as File;
+    expect(file).toBeInstanceOf(File);
+    expect(file.name).toBe(filename);
+    expect(file.size).toBe(507);
+    expect(file.type).toBe('application/octet-stream');
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    expect(fileBytes.length).toBe(507);
+    expect(fileBytes).toEqual(bytes);
+    const responseBody = {
+      id: 'preset-1',
+      sortOrder: 1,
+      name: 'LEAD 2',
+      originalFilename: filename,
+      mimeType: 'application/octet-stream',
+      byteSize: 507,
+      createdAt: '2026-10-18T00:00:00Z',
+    };
+    req.flush(responseBody);
+    await expect(pending).resolves.toEqual(responseBody);
+    httpMock.verify();
+  });
+
+  test('URL-encodes the song id', async () => {
+    const bytes = buildPrst();
+    const pending = api.addSongPreset('song/with/slashes', bytes, 'X.prst');
+    const req = httpMock.expectOne(
+      `${environment.apiBaseUrl}/songs/song%2Fwith%2Fslashes/presets`,
+    );
+    req.flush({
+      id: 'preset-2',
+      sortOrder: 0,
+      name: 'X',
+    });
+    await pending;
+    httpMock.verify();
+  });
+});

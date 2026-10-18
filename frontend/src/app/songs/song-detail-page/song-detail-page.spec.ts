@@ -80,12 +80,25 @@ class StubTranslocoLoader implements TranslocoLoader {
         export: 'Export .prst',
         send: 'Send to pedal',
         discard: 'Discard copy',
+        save: 'Save to song',
+        saving: 'Saving…',
+        saved: '“{{name}}” was added to the song.',
+        limit_reached: 'Your plan allows up to {{limit}} presets per song.',
+        refresh_failed: 'The copy is saved, but the preset list could not be refreshed.',
+        refresh_retry: 'Refresh list',
         errors: {
           name_required: 'Give the copy a name.',
           name_unsupported: 'Use up to 16 letters, numbers, spaces or basic symbols.',
           name_duplicate: 'This song already has a preset named “{{name}}”.',
           param_invalid: 'Enter a number.',
           duplicate_failed: "Couldn't copy this preset. Try again.",
+          limit_reached_save: "This song reached your plan's preset limit.",
+          name_taken: 'Another preset in this song uses this name.',
+          unreachable: "Couldn't reach the server. Check your connection and save again.",
+          session_expired: 'Your session expired. Log in again, then save the copy.',
+          song_not_found: 'This song no longer exists. Export the copy to keep it.',
+          rejected: 'The server did not accept this preset file. Export it to keep your changes.',
+          save_failed: 'The copy was not saved. Try again.',
         },
         leave_title: 'Leave without saving the copy?',
         leave_message: 'Your changes to “{{name}}” aren\'t saved to the song and will be lost.',
@@ -564,6 +577,57 @@ async function openRowAndLoad(
   await waitForChainLoaded(fixture, sortOrder, name);
 }
 
+// Helper: click Duplicate and flush the requests it triggers. F31 made
+// `onDuplicate` await `Promise.all([getSongPreset, ensurePlan])`, so the
+// helper now flushes both. Callers that need to inspect the plan request
+// individually should set `planResponse` accordingly.
+async function clickDuplicateAndFlush(
+  fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
+  httpMock: HttpTestingController,
+  options: { planResponse?: unknown | null; planStatus?: number } = {},
+): Promise<void> {
+  const root = fixture.nativeElement as HTMLElement;
+  const dup = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-0"]')!;
+  expect(dup).not.toBeNull();
+  dup.click();
+  fixture.detectChanges();
+  // Wait for both pending requests (preset bytes + /me/plan) to be made.
+  // httpMock.match returns all known requests including already-flushed
+  // ones, so we look for the new ones by URL: the duplicate's preset
+  // fetch and the /me/plan fetch.
+  for (let i = 0; i < 50; i++) {
+    const all = httpMock.match(() => true);
+    const planReq = all.find((r) => r.request.url.endsWith('/me/plan'));
+    const presetReqs = all.filter((r) => r.request.url.includes('/files/preset'));
+    const lastPreset = presetReqs[presetReqs.length - 1];
+    if (planReq && lastPreset) {
+      lastPreset.flush(
+        new Blob([buildPrstBytes('LEAD') as BlobPart], { type: 'application/octet-stream' }),
+      );
+      if (options.planStatus !== undefined && options.planStatus >= 400) {
+        planReq.flush('boom', { status: options.planStatus, statusText: 'Server Error' });
+      } else if (options.planResponse !== undefined) {
+        planReq.flush(options.planResponse);
+      } else {
+        planReq.flush({
+          plan: 'free',
+          limits: { songs: 1, presetsPerSong: null },
+          usage: { songs: 1 },
+        });
+      }
+      break;
+    }
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+  // Allow the createDraft → draft.set signal to propagate.
+  for (let i = 0; i < 30; i++) {
+    await fixture.whenStable();
+    fixture.detectChanges();
+    if (root.querySelector('[data-testid="song-preset-draft"]')) return;
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+}
+
 describe('SongDetailPage (F30 — view preset content)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
@@ -770,41 +834,6 @@ describe('SongDetailPage (F27 duplicate / edit / export / send / discard)', () =
     expect(dup).not.toBeNull();
     expect(dup!.disabled).toBe(false);
   });
-
-  // Helper: click Duplicate and flush the second getSongPreset it triggers.
-  // Returns the HTTP testing controller for further assertions.
-  async function clickDuplicateAndFlush(
-    fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
-    httpMock: HttpTestingController,
-  ): Promise<void> {
-    const root = fixture.nativeElement as HTMLElement;
-    const dup = root.querySelector<HTMLButtonElement>('[data-testid="song-preset-duplicate-0"]')!;
-    expect(dup).not.toBeNull();
-    dup.click();
-    fixture.detectChanges();
-    // The duplicate handler re-fetches the bytes. Wait for the request
-    // to be made (it is async via firstValueFrom).
-    let req;
-    for (let i = 0; i < 30; i++) {
-      const pending = httpMock.match(() => true);
-      if (pending.length > 0) {
-        req = pending[0];
-        break;
-      }
-      await new Promise<void>((r) => setTimeout(r, 0));
-    }
-    expect(req!).toBeDefined();
-    req!.flush(
-      new Blob([buildPrstBytes('LEAD') as BlobPart], { type: 'application/octet-stream' }),
-    );
-    // Allow the createDraft → draft.set signal to propagate.
-    for (let i = 0; i < 30; i++) {
-      await fixture.whenStable();
-      fixture.detectChanges();
-      if (root.querySelector('[data-testid="song-preset-draft"]')) return;
-      await new Promise<void>((r) => setTimeout(r, 0));
-    }
-  }
 
   test('R10 — clicking Duplicate fetches the bytes, creates a draft, and never sends a modifying request', async () => {
     const { fixture, httpMock } = setupWithId('song-dup');
@@ -1094,6 +1123,544 @@ describe('SongDetailPage (F27 duplicate / edit / export / send / discard)', () =
     fixture.detectChanges();
     expect(await held).toBe(false);
     expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+  });
+});
+
+// F31 `song_preset_draft_save` — plan limit, save flow, refresh, retry,
+// no leave prompt after a successful save, i18n parity keys.
+
+describe('SongDetailPage (F31 save + plan limit)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  // Helper to duplicate and assert only the Duplicate+plan requests fired.
+  async function duplicateAndAssert(
+    fixture: ReturnType<typeof TestBed.createComponent<SongDetailPage>>,
+    httpMock: HttpTestingController,
+    planResponse: unknown = {
+      plan: 'free',
+      limits: { songs: 1, presetsPerSong: null },
+      usage: { songs: 1 },
+    },
+  ): Promise<void> {
+    await clickDuplicateAndFlush(fixture, httpMock, { planResponse });
+  }
+
+  test.each([
+    {
+      label: 'a: limit 1, 1 preset, draft open',
+      limit: 1,
+      presetCount: 1,
+      expectSaveDisabled: true,
+      expectHint: true,
+    },
+    {
+      label: 'd: limit 2, 1 preset, draft open',
+      limit: 2,
+      presetCount: 1,
+      expectSaveDisabled: false,
+      expectHint: false,
+    },
+    {
+      label: 'e: limit null (unlimited), 5 presets, draft open',
+      limit: null,
+      presetCount: 5,
+      expectSaveDisabled: false,
+      expectHint: false,
+    },
+  ])('R1 — %s', async ({ limit, presetCount, expectSaveDisabled, expectHint }) => {
+    const { fixture, httpMock } = setupWithId('song-limit');
+    const presets: { id: string; sortOrder: number; name: string }[] = [];
+    for (let i = 0; i < presetCount; i++) {
+      presets.push({ id: `p${i}`, sortOrder: i, name: `P${i}` });
+    }
+    await loadSongWithPresets(fixture, httpMock, 'song-limit', presets);
+    await openRowAndLoad(fixture, httpMock, 'song-limit', 0, 'P0');
+    await duplicateAndAssert(fixture, httpMock, {
+      plan: 'free',
+      limits: { songs: 1, presetsPerSong: limit },
+      usage: { songs: 1 },
+    });
+    const root = fixture.nativeElement as HTMLElement;
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    expect(saveBtn.disabled).toBe(expectSaveDisabled);
+    const hint = root.querySelector('[data-testid="song-preset-draft-limit-hint"]');
+    if (expectHint) {
+      expect(hint).not.toBeNull();
+      expect(hint?.id).toBe('song-preset-draft-limit-hint');
+      expect(saveBtn.getAttribute('aria-describedby')).toBe('song-preset-draft-limit-hint');
+    } else {
+      expect(hint).toBeNull();
+      expect(saveBtn.getAttribute('aria-describedby')).toBeNull();
+    }
+  });
+
+  test('R1 — c: at limit, every row\'s Duplicate button is still enabled (no draft yet)', async () => {
+    const { fixture, httpMock } = setupWithId('song-limit-c');
+    await loadSongWithPresets(fixture, httpMock, 'song-limit-c', [
+      { id: 'p0', sortOrder: 0, name: 'A' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-limit-c', 0, 'A');
+    // Even though limit=1, count=1, Duplicate stays enabled (A2).
+    const dup = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-duplicate-0"]',
+    )!;
+    expect(dup.disabled).toBe(false);
+  });
+
+  test('R1 — b: at limit, Export .prst and Send to pedal remain enabled (with a valid name)', async () => {
+    const { fixture, httpMock } = setupWithId('song-limit-b');
+    await loadSongWithPresets(fixture, httpMock, 'song-limit-b', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-limit-b', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock, {
+      plan: 'free',
+      limits: { songs: 1, presetsPerSong: 1 },
+      usage: { songs: 1 },
+    });
+    const root = fixture.nativeElement as HTMLElement;
+    const exportBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-export"]',
+    )!;
+    const sendBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-send"]',
+    )!;
+    expect(exportBtn.disabled).toBe(false);
+    expect(sendBtn.disabled).toBe(false);
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    expect(saveBtn.disabled).toBe(true);
+  });
+
+  test('R2 — /me/plan 500 keeps Save enabled and shows no hint', async () => {
+    const { fixture, httpMock } = setupWithId('song-plan-500');
+    await loadSongWithPresets(fixture, httpMock, 'song-plan-500', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-plan-500', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock, { planStatus: 500 });
+    const root = fixture.nativeElement as HTMLElement;
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    expect(saveBtn.disabled).toBe(false);
+    expect(root.querySelector('[data-testid="song-preset-draft-limit-hint"]')).toBeNull();
+  });
+
+  test('R2 — /me/plan with unparseable body keeps Save enabled and shows no hint', async () => {
+    const { fixture, httpMock } = setupWithId('song-plan-bad');
+    await loadSongWithPresets(fixture, httpMock, 'song-plan-bad', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-plan-bad', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock, { planResponse: { not_a_plan: 1 } });
+    const root = fixture.nativeElement as HTMLElement;
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    expect(saveBtn.disabled).toBe(false);
+    expect(root.querySelector('[data-testid="song-preset-draft-limit-hint"]')).toBeNull();
+  });
+
+  test('P1 — clicking Duplicate only sends GETs (one /me/plan + one preset fetch)', async () => {
+    const { fixture, httpMock } = setupWithId('song-dup');
+    await loadSongWithPresets(fixture, httpMock, 'song-dup', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-dup', 0, 'LEAD');
+    await clickDuplicateAndFlush(fixture, httpMock);
+    expect(fixture.nativeElement.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    const mutating = httpMock.match(() => true).filter(
+      (req) => !['GET', 'HEAD'].includes(req.request.method),
+    );
+    expect(mutating).toEqual([]);
+  });
+
+  test('R3, R4 a — Save sends one POST /songs/:id/presets; on 201+reload the list updates and the saved confirmation is focused', async () => {
+    const { fixture, httpMock } = setupWithId('song-save');
+    await loadSongWithPresets(fixture, httpMock, 'song-save', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-save', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    saveBtn.click();
+    fixture.detectChanges();
+    // While the POST is in flight, the button shows "saving" and is disabled.
+    expect(saveBtn.textContent?.trim()).toBe('Saving…');
+    expect(saveBtn.disabled).toBe(true);
+    const postReq = httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-save/presets`);
+    expect(postReq.request.method).toBe('POST');
+    expect(postReq.request.body).toBeInstanceOf(FormData);
+    postReq.flush({
+      id: 'preset-new',
+      sortOrder: 1,
+      name: 'LEAD 2',
+      originalFilename: 'LEAD_2.prst',
+      mimeType: 'application/octet-stream',
+      byteSize: 507,
+      createdAt: '2026-10-18T00:00:00Z',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    // R4 a — follow-up GET /songs/:id succeeds with the new preset last.
+    const reloadReq = httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-save`);
+    reloadReq.flush({
+      id: 'song-save',
+      name: 'Test Song',
+      presets: [
+        { id: 'p0', sortOrder: 0, name: 'LEAD' },
+        { id: 'preset-new', sortOrder: 1, name: 'LEAD 2' },
+      ],
+      files: [],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    // Draft card removed; confirmation present and focused.
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).toBeNull();
+    const saved = root.querySelector<HTMLElement>(
+      '[data-testid="song-preset-draft-saved"]',
+    );
+    expect(saved).not.toBeNull();
+    expect(saved?.textContent).toContain('LEAD 2');
+    expect(document.activeElement).toBe(saved);
+    // The page never showed its loading state (state stays 'loaded').
+    const page = fixture.componentInstance as unknown as { state: () => string };
+    expect(page.state()).toBe('loaded');
+  });
+
+  test('R4 b — 201 then reload 500: confirmation focused, list unchanged, refresh warning shown, no error state', async () => {
+    const { fixture, httpMock } = setupWithId('song-save-reload-fail');
+    await loadSongWithPresets(fixture, httpMock, 'song-save-reload-fail', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-save-reload-fail', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-save-reload-fail/presets`).flush({
+      id: 'preset-new',
+      sortOrder: 1,
+      name: 'LEAD 2',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-save-reload-fail`).flush('boom', {
+      status: 500,
+      statusText: 'Server Error',
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    // Confirmation shown and focused; refresh warning shown; previous list left untouched.
+    const saved = root.querySelector<HTMLElement>(
+      '[data-testid="song-preset-draft-saved"]',
+    )!;
+    expect(saved).not.toBeNull();
+    expect(document.activeElement).toBe(saved);
+    const warning = root.querySelector('[data-testid="song-preset-draft-refresh-failed"]');
+    expect(warning).not.toBeNull();
+    // The list should still show the original preset (no local append of the 201).
+    const rows = root.querySelectorAll('[data-testid="song-preset-row"]');
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.textContent).toContain('LEAD');
+    // No page-level error state.
+    expect(root.querySelector('[data-testid="song-detail-error"]')).toBeNull();
+    const page = fixture.componentInstance as unknown as { state: () => string };
+    expect(page.state()).toBe('loaded');
+  });
+
+  test('R4 c — after refresh-failed warning, retry succeeds → warning disappears, list reloads', async () => {
+    const { fixture, httpMock } = setupWithId('song-retry-ok');
+    await loadSongWithPresets(fixture, httpMock, 'song-retry-ok', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-retry-ok', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-retry-ok/presets`).flush({
+      id: 'preset-new',
+      sortOrder: 1,
+      name: 'LEAD 2',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-retry-ok`).flush('boom', {
+      status: 500,
+      statusText: 'Server Error',
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const retryBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-refresh-retry"]',
+    )!;
+    retryBtn.click();
+    fixture.detectChanges();
+    const retryReq = httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-retry-ok`);
+    retryReq.flush({
+      id: 'song-retry-ok',
+      name: 'Test Song',
+      presets: [
+        { id: 'p0', sortOrder: 0, name: 'LEAD' },
+        { id: 'preset-new', sortOrder: 1, name: 'LEAD 2' },
+      ],
+      files: [],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft-refresh-failed"]')).toBeNull();
+    const rows = root.querySelectorAll('[data-testid="song-preset-row"]');
+    expect(rows.length).toBe(2);
+    expect(rows[0]?.textContent).toContain('LEAD');
+    expect(rows[1]?.textContent).toContain('LEAD 2');
+  });
+
+  test('R4 d — retry fails → warning stays, list stays, no error state', async () => {
+    const { fixture, httpMock } = setupWithId('song-retry-fail');
+    await loadSongWithPresets(fixture, httpMock, 'song-retry-fail', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-retry-fail', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-retry-fail/presets`).flush({
+      id: 'preset-new',
+      sortOrder: 1,
+      name: 'LEAD 2',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-retry-fail`).flush('boom', {
+      status: 500,
+      statusText: 'Server Error',
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const retryBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-refresh-retry"]',
+    )!;
+    retryBtn.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-retry-fail`).flush('boom', {
+      status: 500,
+      statusText: 'Server Error',
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft-refresh-failed"]')).not.toBeNull();
+    const rows = root.querySelectorAll('[data-testid="song-preset-row"]');
+    expect(rows.length).toBe(1);
+    expect(root.querySelector('[data-testid="song-detail-error"]')).toBeNull();
+  });
+
+  test('R5 — page-level 402 keeps the draft, shows the limit_reached_save banner', async () => {
+    const { fixture, httpMock } = setupWithId('song-402');
+    await loadSongWithPresets(fixture, httpMock, 'song-402', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-402', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-402/presets`).flush(
+      { error: 'plan_preset_limit' },
+      { status: 402, statusText: 'Payment Required' },
+    );
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    const errBanner = root.querySelector<HTMLElement>(
+      '[data-testid="song-preset-draft-save-error"]',
+    );
+    expect(errBanner).not.toBeNull();
+    expect(errBanner?.getAttribute('role')).toBe('alert');
+    expect(errBanner?.textContent).toContain('limit');
+    // No follow-up GET /songs/:id is fired on failure.
+    httpMock.expectNone(`${environment.apiBaseUrl}/songs/song-402`);
+  });
+
+  test('R6 — page-level 409 keeps the draft, shows the name_taken banner', async () => {
+    const { fixture, httpMock } = setupWithId('song-409');
+    await loadSongWithPresets(fixture, httpMock, 'song-409', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-409', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-409/presets`).flush(
+      { error: 'name_taken' },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    const errBanner = root.querySelector<HTMLElement>(
+      '[data-testid="song-preset-draft-save-error"]',
+    );
+    expect(errBanner).not.toBeNull();
+    expect(errBanner?.textContent).toContain('Another preset');
+  });
+
+  test('R7 — page-level 0 network error keeps the draft, shows the unreachable banner', async () => {
+    const { fixture, httpMock } = setupWithId('song-0');
+    await loadSongWithPresets(fixture, httpMock, 'song-0', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-0', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-0/presets`).error(
+      new ProgressEvent('error'),
+    );
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).not.toBeNull();
+    const errBanner = root.querySelector<HTMLElement>(
+      '[data-testid="song-preset-draft-save-error"]',
+    );
+    expect(errBanner).not.toBeNull();
+    expect(errBanner?.textContent).toContain('connection');
+  });
+
+  test('R8 — pending save: Save/Discard/name disabled, label is Saving…, aria-busy=true on card', async () => {
+    const { fixture, httpMock } = setupWithId('song-pending');
+    await loadSongWithPresets(fixture, httpMock, 'song-pending', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-pending', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    saveBtn.click();
+    fixture.detectChanges();
+    expect(saveBtn.textContent?.trim()).toBe('Saving…');
+    expect(saveBtn.disabled).toBe(true);
+    const discardBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-discard"]',
+    )!;
+    expect(discardBtn.disabled).toBe(true);
+    const nameInput = root.querySelector<HTMLInputElement>(
+      '[data-testid="song-preset-draft-name"]',
+    )!;
+    expect(nameInput.disabled).toBe(true);
+    const card = root.querySelector<HTMLElement>('[data-testid="song-preset-draft"]')!;
+    expect(card.getAttribute('aria-busy')).toBe('true');
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-pending/presets`).flush({
+      id: 'preset-new',
+      sortOrder: 1,
+      name: 'LEAD 2',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-pending`).flush({
+      id: 'song-pending',
+      name: 'Test Song',
+      presets: [
+        { id: 'p0', sortOrder: 0, name: 'LEAD' },
+        { id: 'preset-new', sortOrder: 1, name: 'LEAD 2' },
+      ],
+      files: [],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    // After save, the draft card is removed (no aria-busy to assert). The
+    // pending-test focus is that the card was aria-busy while saving.
+    expect(root.querySelector('[data-testid="song-preset-draft"]')).toBeNull();
+  });
+
+  test('R9 — invalid draft name disables Save', async () => {
+    const { fixture, httpMock } = setupWithId('song-name-invalid');
+    await loadSongWithPresets(fixture, httpMock, 'song-name-invalid', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-name-invalid', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    const input = root.querySelector<HTMLInputElement>(
+      '[data-testid="song-preset-draft-name"]',
+    )!;
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const saveBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="song-preset-draft-save"]',
+    )!;
+    expect(saveBtn.disabled).toBe(true);
+  });
+
+  test('R10 — after a successful save of an edited draft, confirmLeave returns true', async () => {
+    const { fixture, httpMock } = setupWithId('song-save-leave');
+    await loadSongWithPresets(fixture, httpMock, 'song-save-leave', [
+      { id: 'p0', sortOrder: 0, name: 'LEAD' },
+    ]);
+    await openRowAndLoad(fixture, httpMock, 'song-save-leave', 0, 'LEAD');
+    await duplicateAndAssert(fixture, httpMock);
+    const root = fixture.nativeElement as HTMLElement;
+    // Make the draft edited so hasUnsavedDraft() would otherwise be true.
+    const input = root.querySelector<HTMLInputElement>(
+      '[data-testid="song-preset-draft-name"]',
+    )!;
+    input.value = 'LEAD X';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const page = fixture.componentInstance as unknown as {
+      confirmLeave: () => boolean | Promise<boolean>;
+      hasUnsavedDraft: () => boolean;
+    };
+    expect(page.hasUnsavedDraft()).toBe(true);
+    // Save.
+    root.querySelector<HTMLButtonElement>('[data-testid="song-preset-draft-save"]')!.click();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-save-leave/presets`).flush({
+      id: 'preset-new',
+      sortOrder: 1,
+      name: 'LEAD X',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-save-leave`).flush({
+      id: 'song-save-leave',
+      name: 'Test Song',
+      presets: [
+        { id: 'p0', sortOrder: 0, name: 'LEAD' },
+        { id: 'preset-new', sortOrder: 1, name: 'LEAD X' },
+      ],
+      files: [],
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(page.hasUnsavedDraft()).toBe(false);
+    expect(page.confirmLeave()).toBe(true);
   });
 });
 
