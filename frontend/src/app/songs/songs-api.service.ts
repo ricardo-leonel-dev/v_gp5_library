@@ -67,7 +67,7 @@ export class SongsApi {
   // F31 R3 — POST /songs/:id/presets with a single multipart "preset"
   // file part holding the 507-byte .prst from `draftToPrst`. The browser
   // sets the boundary; no explicit Content-Type. Resolves with the
-  // server's SongPreset DTO (201). Status precedence (400 > 402 > 404 >
+  // server's SongPreset DTO (201). Status precedence (400 > 404 > 402 >
   // 409) lives on the backend and is not re-asserted here.
   addSongPreset(songId: string, prst: Uint8Array, filename: string): Promise<SongPreset> {
     const form = new FormData();

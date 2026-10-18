@@ -1192,6 +1192,14 @@ describe('SongDetailPage (F31 save + plan limit)', () => {
       expect(hint).not.toBeNull();
       expect(hint?.id).toBe('song-preset-draft-limit-hint');
       expect(saveBtn.getAttribute('aria-describedby')).toBe('song-preset-draft-limit-hint');
+      // F34 — the hint must surface the limit value (R1 a). The
+      // formatted string is `Your plan allows up to {{limit}} presets
+      // per song.`, so the rendered text contains the limit (1 for case
+      // a). Only the row that expects the hint passes a non-null limit;
+      // the `not.toBeNull()` guard fails loudly if the it.each table
+      // ever breaks that contract.
+      expect(limit).not.toBeNull();
+      expect(hint?.textContent ?? '').toContain(String(limit));
     } else {
       expect(hint).toBeNull();
       expect(saveBtn.getAttribute('aria-describedby')).toBeNull();

@@ -370,10 +370,13 @@
         </p>
 
         <!-- F31 R4 — saved confirmation (rendered after the draft card is
-             removed) and the non-blocking refresh-failed warning below it. -->
+             removed) and the non-blocking refresh-failed warning below it.
+             F34 — the #savedConfirmation template ref is what the page's
+             afterNextRender-driven focus management targets. -->
         @if (savedName(); as name) {
           @if (!draft()) {
             <p
+              #savedConfirmation
               class="mt-6 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900"
               data-testid="song-preset-draft-saved"
               role="status"

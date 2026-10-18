@@ -18,12 +18,16 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   HostListener,
+  Injector,
+  afterNextRender,
   computed,
   effect,
   inject,
   signal,
   untracked,
+  viewChild,
 } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { TranslocoDirective } from '@jsverse/transloco';
@@ -185,6 +189,13 @@ export class SongDetailPage {
   // F31 R4 — the name of the preset that was just saved (so the
   // confirmation can render it).
   readonly savedName = signal<string | null>(null);
+  // F34 — template ref to the saved-confirmation `<p>` so the page can
+  // move focus there after the render completes, without reaching for
+  // `document.querySelector`.
+  private readonly savedConfirmationRef = viewChild<ElementRef<HTMLElement>>('savedConfirmation');
+  // F34 — `onDraftSave` runs outside an injection context, so it passes
+  // this injector to `afterNextRender` explicitly.
+  private readonly injector = inject(Injector);
   // F31 R4 b/c/d — non-blocking warning shown after a save whose follow-up
   // GET /songs/:id failed. `refreshing` disables the retry button while a
   // refresh is in flight.
@@ -533,8 +544,10 @@ export class SongDetailPage {
       this.draft.set(null);
       this.draftSelectedPos.set(null);
       this.savedName.set(created.name);
+      // F31 R4 a / F34 — move focus to the saved confirmation once it has
+      // rendered (zoneless: a direct querySelector here would find nothing).
+      afterNextRender(() => this.savedConfirmationRef()?.nativeElement.focus(), { injector: this.injector });
       this.saveState.set('idle');
-      void this.focusSavedConfirmation();
       void this.refreshSong(song.id);
     } catch (err) {
       this.saveErrorKey.set(mapSaveDraftError(err));
@@ -569,18 +582,6 @@ export class SongDetailPage {
     const song = this.song();
     if (!song) return;
     void this.refreshSong(song.id);
-  }
-
-  // F31 R4 a — move focus to the saved confirmation element after the
-  // template renders it. Uses `afterNextRender` so the element exists.
-  private focusSavedConfirmation(): void {
-    // Wait one tick so the saved-confirmation block mounts.
-    queueMicrotask(() => {
-      const el = document.querySelector<HTMLElement>(
-        '[data-testid="song-preset-draft-saved"]',
-      );
-      el?.focus();
-    });
   }
 
   // F27 R48-R55 — leave confirmation. Synchronously allows navigation
