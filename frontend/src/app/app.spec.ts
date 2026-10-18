@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter, Router } from '@angular/router';
-import { signal } from '@angular/core';
+import { provideRouter, Router, type Routes } from '@angular/router';
+import { Component, signal } from '@angular/core';
 import { App } from './app';
+import { routes } from './app.routes';
 import { appConfig } from './app.config';
 import { AuthStore } from './auth/auth-store.service';
 import { PedalConnectFlow } from './pedals/pedal-connect-flow.service';
@@ -65,9 +66,14 @@ function setup(opts: { isAuthenticated?: boolean; flowError?: string | null } = 
       { provide: AuthStore, useValue: { isAuthenticated: authSig } },
       { provide: PedalConnectFlow, useValue: flow },
       { provide: MockPresetsStore, useValue: mocks },
-      { provide: Router, useValue: routerStub },
     ],
   });
+  // F32: RouterLink in the header needs the real Router, so the stub's
+  // `url`/`navigateByUrl` are patched onto the real instance instead of
+  // replacing the Router token.
+  const realRouter = TestBed.inject(Router);
+  Object.defineProperty(realRouter, 'url', { get: () => routerStub.url, configurable: true });
+  realRouter.navigateByUrl = routerStub.navigateByUrl;
   return {
     httpMock: TestBed.inject(HttpTestingController),
     auth: { isAuthenticated: authSig },
@@ -201,5 +207,95 @@ describe('App', () => {
     link!.click();
     expect(mocks.load).toHaveBeenCalledTimes(1);
     expect(router.navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  // F32 — the header link is a real RouterLink driven through the app's
+  // route config. Lazy pages are swapped for stubs (as in app.routes.spec.ts);
+  // the detail stub mirrors SongDetailPage's confirmLeave() contract.
+  describe('F32 — header nav-songs link through the Router', () => {
+    const draft = {
+      hasUnsaved: false,
+      prompt: null as { resolve: (leave: boolean) => void } | null,
+    };
+
+    @Component({ template: '' })
+    class DetailStub {
+      confirmLeave(): boolean | Promise<boolean> {
+        if (!draft.hasUnsaved) return true;
+        return new Promise<boolean>((resolve) => (draft.prompt = { resolve }));
+      }
+    }
+
+    @Component({ template: '' })
+    class EmptyStub {}
+
+    const detailRoute = routes.find((r) => r.path === 'songs/:id');
+    const stubbedRoutes: Routes = routes.map((r) =>
+      r.loadComponent
+        ? { ...r, loadComponent: () => (r === detailRoute ? DetailStub : EmptyStub) }
+        : r,
+    );
+
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+
+    async function render(startUrl: string): Promise<{ router: Router; link: HTMLAnchorElement }> {
+      draft.hasUnsaved = false;
+      draft.prompt = null;
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [App],
+        providers: [
+          provideRouter(stubbedRoutes),
+          provideHttpClientTesting(),
+          provideTransloco({
+            config: { availableLangs: ['es'], defaultLang: 'es', fallbackLang: 'es' },
+            loader: StubTranslocoLoader,
+          }),
+          { provide: AuthStore, useValue: { isAuthenticated: signal(true) } },
+          {
+            provide: PedalConnectFlow,
+            useValue: {
+              supported: true,
+              connectionState: signal('not-connected'),
+              reading: signal(false),
+              error: signal<string | null>(null),
+              start: vi.fn(),
+              dismissError: vi.fn(),
+            },
+          },
+          { provide: MockPresetsStore, useValue: { load: vi.fn() } },
+        ],
+      });
+      const fixture = TestBed.createComponent(App);
+      const router = TestBed.inject(Router);
+      expect(await router.navigateByUrl(startUrl)).toBe(true);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      const link = (fixture.nativeElement as HTMLElement).querySelector<HTMLAnchorElement>(
+        'a[data-testid="nav-songs"]',
+      )!;
+      return { router, link };
+    }
+
+    it('renders href="/songs" and clicking it navigates to /songs from another authenticated page', async () => {
+      const { router, link } = await render('/pedal');
+      expect(link.getAttribute('href')).toBe('/songs');
+      link.click();
+      await settle();
+      expect(router.url).toBe('/songs');
+    });
+
+    it('from /songs/:id with an edited draft, the click goes through the leave guard', async () => {
+      const { router, link } = await render('/songs/1');
+      draft.hasUnsaved = true;
+      link.click();
+      await settle();
+      expect(draft.prompt).not.toBeNull();
+      expect(router.url).toBe('/songs/1');
+      draft.prompt!.resolve(true);
+      await settle();
+      expect(router.url).toBe('/songs');
+    });
   });
 });
