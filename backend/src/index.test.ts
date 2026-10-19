@@ -180,6 +180,79 @@ describe("GET /pedals shared catalog across users (R6)", () => {
   });
 });
 
+describe("GET /pedals/:id/image (serve_pedal_catalog_reference_image)", () => {
+  test("without bearer -> 401", async () => {
+    const res = await app.request(`/pedals/${crypto.randomUUID()}/image`);
+    expect(res.status).toBe(401);
+  });
+
+  test("another user gets the uploaded bytes with the stored Content-Type; 404 after soft delete", async () => {
+    const db = getDb();
+    const [userA] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash)
+      VALUES (${`pedal-img-A-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+    `;
+    const [userB] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash)
+      VALUES (${`pedal-img-B-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+    `;
+    const tokenA = await issueToken(userA.id, "free");
+    const tokenB = await issueToken(userB.id, "free");
+    const imageBytes = new Uint8Array([255, 216, 255, 224, 1, 2, 3]);
+
+    const fd = new FormData();
+    fd.append("name", "Image Pedal");
+    fd.append("image", new File([imageBytes], "ref.jpg", { type: "image/jpeg" }));
+    const createRes = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenA}` },
+      body: fd,
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string; hasImage: boolean };
+    expect(created.hasImage).toBe(true);
+
+    const res = await app.request(`/pedals/${created.id}/image`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/jpeg");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(imageBytes);
+
+    await db`UPDATE pedal_catalog SET deleted_at = NOW() WHERE id = ${created.id}`;
+    const deletedRes = await app.request(`/pedals/${created.id}/image`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(deletedRes.status).toBe(404);
+    expect(await deletedRes.json()).toEqual({ error: "pedal image not found" });
+  });
+});
+
+describe("POST /pedals rejects non-raster image types (serve_pedal_catalog_reference_image)", () => {
+  test("text/html and image/svg+xml -> 400 JSON error", async () => {
+    const db = getDb();
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash)
+      VALUES (${`pedal-mime-${crypto.randomUUID()}@example.com`}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user!.id, "free");
+
+    for (const [filename, type] of [["x.html", "text/html"], ["x.svg", "image/svg+xml"]]) {
+      const fd = new FormData();
+      fd.append("name", "Bad Image Pedal");
+      fd.append("image", new File([new Uint8Array([60, 115])], filename!, { type }));
+      const res = await app.request("/pedals", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "image must be a JPEG, PNG, WebP or GIF file" });
+    }
+  });
+});
+
 describe("/songs/:id/pedals auth (R9)", () => {
   test("POST without bearer -> 401", async () => {
     const res = await app.request(`/songs/${crypto.randomUUID()}/pedals`, {

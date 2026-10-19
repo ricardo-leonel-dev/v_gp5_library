@@ -20,7 +20,7 @@ import {
   SongError,
 } from "./songs/song-service";
 import { parseCreateSongMultipart, parsePresetMultipart, type FormValue } from "./songs/parse-multipart";
-import { createPedal, listPedals, PedalError } from "./pedals/pedal-service";
+import { createPedal, getPedalImage, listPedals, PedalError } from "./pedals/pedal-service";
 import { getPlanSummary, setUserPlan, PlanError, PlanLimitError } from "./plans/plan-service";
 import { parseCreatePedalMultipart } from "./pedals/parse-multipart";
 import {
@@ -213,6 +213,19 @@ protectedRouter.post("/pedals", async (c) => {
 
 protectedRouter.get("/pedals", async (c) => {
   return c.json(await listPedals());
+});
+
+protectedRouter.get("/pedals/:id/image", async (c) => {
+  try {
+    const image = await getPedalImage(c.req.param("id"));
+    return c.body(new Uint8Array(image.bytes), 200, {
+      "Content-Type": image.mimeType,
+      "X-Content-Type-Options": "nosniff",
+    });
+  } catch (err) {
+    if (err instanceof PedalError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
 });
 
 protectedRouter.post("/songs/:id/pedals", async (c) => {
