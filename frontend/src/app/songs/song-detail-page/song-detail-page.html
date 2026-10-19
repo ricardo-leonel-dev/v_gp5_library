@@ -192,6 +192,7 @@
             class="relative mt-6 rounded-lg bg-white ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
             data-testid="song-preset-draft"
             aria-labelledby="song-preset-draft-heading"
+            [attr.aria-busy]="saveState() === 'saving' ? 'true' : null"
           >
             <span
               class="absolute inset-y-0 left-0 w-1 rounded-l-lg {{ isDraftUnsaved() ? 'bg-amber-400 dark:bg-amber-500' : 'bg-slate-300 dark:bg-slate-600' }}"
@@ -221,6 +222,7 @@
                   type="button"
                   class="rounded-md px-2 py-1.5 text-sm font-medium text-slate-500 hover:text-red-700 dark:text-slate-400 dark:hover:text-red-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
                   data-testid="song-preset-draft-discard"
+                  [disabled]="saveState() === 'saving'"
                   (click)="onDraftDiscard()"
                 >
                   {{ t('songPresetDraft.discard') }}
@@ -242,6 +244,7 @@
                   [value]="draftNameForInput()"
                   [attr.aria-invalid]="draftNameError() ? 'true' : null"
                   [attr.aria-describedby]="draftNameError() ? 'song-preset-draft-name-error' : 'song-preset-draft-name-help'"
+                  [disabled]="saveState() === 'saving'"
                   data-testid="song-preset-draft-name"
                   (input)="onDraftNameInput($any($event.target).value)"
                 />
@@ -306,10 +309,39 @@
                 }
               </div>
 
+              @if (saveErrorKey(); as key) {
+                <p
+                  class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+                  data-testid="song-preset-draft-save-error"
+                  role="alert"
+                >
+                  {{ t('songPresetDraft.errors.' + key) }}
+                </p>
+              }
+
               <div
                 class="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 dark:border-slate-700/50"
                 data-testid="song-preset-draft-actions"
               >
+                <button
+                  type="button"
+                  class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  data-testid="song-preset-draft-save"
+                  [disabled]="!canSave()"
+                  [attr.aria-describedby]="atPresetLimit() ? 'song-preset-draft-limit-hint' : null"
+                  (click)="onDraftSave()"
+                >
+                  {{ saveState() === 'saving' ? t('songPresetDraft.saving') : t('songPresetDraft.save') }}
+                </button>
+                @if (atPresetLimit()) {
+                  <span
+                    id="song-preset-draft-limit-hint"
+                    class="text-xs text-slate-500 dark:text-slate-400"
+                    data-testid="song-preset-draft-limit-hint"
+                  >
+                    {{ t('songPresetDraft.limit_reached', { limit: plan()?.presetsPerSongLimit }) }}
+                  </span>
+                }
                 <button
                   type="button"
                   class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
@@ -336,6 +368,42 @@
         <p class="mt-2 text-xs text-slate-500 dark:text-slate-400" data-testid="song-reference-note">
           {{ t('songDetail.reference_note') }}
         </p>
+
+        <!-- F31 R4 — saved confirmation (rendered after the draft card is
+             removed) and the non-blocking refresh-failed warning below it.
+             F34 — the #savedConfirmation template ref is what the page's
+             afterNextRender-driven focus management targets. -->
+        @if (savedName(); as name) {
+          @if (!draft()) {
+            <p
+              #savedConfirmation
+              class="mt-6 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900"
+              data-testid="song-preset-draft-saved"
+              role="status"
+              tabindex="-1"
+            >
+              {{ t('songPresetDraft.saved', { name }) }}
+            </p>
+            @if (refreshFailed()) {
+              <div
+                class="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+                data-testid="song-preset-draft-refresh-failed"
+                role="status"
+              >
+                <span class="min-w-0">{{ t('songPresetDraft.refresh_failed') }}</span>
+                <button
+                  type="button"
+                  class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  data-testid="song-preset-draft-refresh-retry"
+                  [disabled]="refreshing()"
+                  (click)="onRefreshRetry()"
+                >
+                  {{ t('songPresetDraft.refresh_retry') }}
+                </button>
+              </div>
+            }
+          }
+        }
 
         <!-- F33 — read-only listing of IR/NAM files and extra details
              below the preset list. Same surface treatment as the

@@ -1,9 +1,10 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, it } from 'vitest';
 import {
   createDraft,
   draftToPreset,
   draftToPrst,
   exportFileName,
+  mapSaveDraftError,
   parseParamInput,
   renameDraft,
   setBlockEnabled,
@@ -239,5 +240,30 @@ describe('exportFileName (R37)', () => {
     expect(exportFileName('   ')).toBe('preset.prst');
     expect(exportFileName('')).toBe('preset.prst');
     expect(exportFileName('  LEAD  ')).toBe('LEAD.prst');
+  });
+});
+
+describe('mapSaveDraftError (F31 R5, R6, R7 a–f)', () => {
+  const cases: ReadonlyArray<readonly [string, unknown, string]> = [
+    ['402 plan limit', { status: 402 }, 'limit_reached_save'],
+    ['409 taken name', { status: 409 }, 'name_taken'],
+    ['0 network', { status: 0 }, 'unreachable'],
+    ['401 session expired', { status: 401 }, 'session_expired'],
+    ['404 song not found', { status: 404 }, 'song_not_found'],
+    ['400 rejected file', { status: 400 }, 'rejected'],
+    ['500 server error', { status: 500 }, 'save_failed'],
+    ['503 server error', { status: 503 }, 'save_failed'],
+  ];
+
+  it.each(cases)('%s → %s', (_label, err, expected) => {
+    expect(mapSaveDraftError(err)).toBe(expected);
+  });
+
+  it('an error with no numeric status maps to unreachable (R7 f)', () => {
+    expect(mapSaveDraftError(new Error('boom'))).toBe('unreachable');
+    expect(mapSaveDraftError({ message: 'no status here' })).toBe('unreachable');
+    expect(mapSaveDraftError(null)).toBe('unreachable');
+    expect(mapSaveDraftError(undefined)).toBe('unreachable');
+    expect(mapSaveDraftError('just a string')).toBe('unreachable');
   });
 });

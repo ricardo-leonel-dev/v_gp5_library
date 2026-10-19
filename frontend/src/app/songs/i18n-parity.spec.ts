@@ -316,3 +316,90 @@ describe('i18n parity — F9 unsupportedBrowser', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// F31 R11 — the `songPresetDraft` namespace must be identical between en
+// and es and every leaf must be a non-empty string. F31 adds `save`,
+// `saving`, `saved`, `limit_reached`, `refresh_failed`, `refresh_retry`,
+// plus the seven error keys under `errors.*`. The error keys are built
+// dynamically by the page (`t('songPresetDraft.errors.' + key)`), so the
+// source scan pulls the union members out of `preset-draft.ts` directly
+// rather than relying on string-template occurrences.
+describe('i18n parity under songPresetDraft (F31 R11)', () => {
+  const en = loadTranslations('en');
+  const es = loadTranslations('es');
+
+  it('en and es have identical leaf paths under songPresetDraft', () => {
+    const enPaths = leafPathsForNamespace(en, 'songPresetDraft');
+    const esPaths = leafPathsForNamespace(es, 'songPresetDraft');
+    expect(esPaths).toEqual(enPaths);
+  });
+
+  for (const lang of ['en', 'es'] as const) {
+    it(`every songPresetDraft leaf in ${lang} is a non-empty string`, () => {
+      const json = lang === 'en' ? en : es;
+      for (const path of leafPathsForNamespace(json, 'songPresetDraft')) {
+        const v = getLeafValue(json, path);
+        expect(typeof v).toBe('string');
+        expect((v as string).length).toBeGreaterThan(0);
+      }
+    });
+  }
+
+  it('every songPresetDraft key referenced by the F31 sources exists in both languages', () => {
+    const cwd = (globalThis as { process?: { cwd(): string } }).process?.cwd() ?? '.';
+    const sources = [
+      'src/app/songs/song-detail-page/song-detail-page.html',
+      'src/app/songs/song-detail-page/song-detail-page.ts',
+    ];
+    const keys = new Set<string>();
+    for (const file of sources) {
+      const text = readFileSync(join(cwd, file), 'utf8') as string;
+      for (const m of text.matchAll(/'((?:songPresetDraft)\.[A-Za-z_.]+)'/g)) {
+        const m1 = m[1]!;
+        // Skip the dynamic prefix `'songPresetDraft.errors.'` from the HTML
+        // — the concrete error keys live in the SaveDraftErrorKey union.
+        if (m1 === 'songPresetDraft.errors.') continue;
+        keys.add(m1);
+      }
+    }
+    // Pull the seven save-error keys straight from the typed union.
+    const union = readFileSync(join(cwd, 'src/app/songs/preset-draft.ts'), 'utf8') as string;
+    const unionMatch = union.match(/SaveDraftErrorKey[^]*?'save_failed'/);
+    expect(unionMatch).not.toBeNull();
+    const unionBody = unionMatch![0];
+    for (const m of unionBody.matchAll(/'([a-z_]+)'/g)) {
+      keys.add(`songPresetDraft.errors.${m[1]!}`);
+    }
+    // F31's own additions are the ones below; the rest pre-date the spec.
+    const expectedNewKeys = [
+      'songPresetDraft.save',
+      'songPresetDraft.saving',
+      'songPresetDraft.saved',
+      'songPresetDraft.limit_reached',
+      'songPresetDraft.refresh_failed',
+      'songPresetDraft.refresh_retry',
+      'songPresetDraft.errors.limit_reached_save',
+      'songPresetDraft.errors.name_taken',
+      'songPresetDraft.errors.unreachable',
+      'songPresetDraft.errors.session_expired',
+      'songPresetDraft.errors.song_not_found',
+      'songPresetDraft.errors.rejected',
+      'songPresetDraft.errors.save_failed',
+    ];
+    for (const k of expectedNewKeys) {
+      if (!keys.has(k)) {
+        throw new Error(`Missing F31 key in source scan: ${k}`);
+      }
+    }
+    for (const lang of ['en', 'es'] as const) {
+      const json = lang === 'en' ? en : es;
+      for (const key of keys) {
+        expect({ lang, key, type: typeof getLeafValue(json, key) }).toEqual({
+          lang,
+          key,
+          type: 'string',
+        });
+      }
+    }
+  });
+});
