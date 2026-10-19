@@ -18,11 +18,17 @@ function toStringField(value: FormValue): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function toSingleStringOrRawField(value: FormValue): string | null | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "string" ? value : null;
+}
+
 export async function parseCreatePedalMultipart(
   body: Record<string, FormValue>,
 ): Promise<CreatePedalInput> {
   return {
     name: toStringField(body.name),
     image: await toUploadedFiles(body.image),
+    parameters: toSingleStringOrRawField(body.parameters),
   };
 }

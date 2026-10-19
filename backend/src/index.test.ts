@@ -1413,6 +1413,190 @@ describe("POST/PUT /songs/:id/presets 400 bodies (F21 R5, R14, R40)", () => {
   });
 });
 
+describe("POST /pedals typed parameters end-to-end (F22 R1, R3)", () => {
+  test("multipart FormData with parameters JSON part returns 201 with parameters in the body and in GET /pedals (R1-a, R3-a, R3-b)", async () => {
+    const db = getDb();
+    const email = `pedal-typed-e2e-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const parameters = [
+      { key: "level", label: "Level", type: "knob" },
+      { key: "gain", label: "Gain", type: "knob", min: -12, max: 12 },
+      { key: "boost", label: "Boost", type: "switch" },
+      { key: "mode", label: "Mode", type: "selector", options: ["Normal", "Brown"] },
+    ];
+    const expected = [
+      { key: "level", label: "Level", type: "knob", min: 0, max: 10 },
+      { key: "gain", label: "Gain", type: "knob", min: -12, max: 12 },
+      { key: "boost", label: "Boost", type: "switch" },
+      { key: "mode", label: "Mode", type: "selector", options: ["Normal", "Brown"] },
+    ];
+
+    const fd = new FormData();
+    fd.append("name", "Boss DS-1");
+    fd.append(
+      "image",
+      new File([new Uint8Array([10, 20, 30, 40])], "ds1.png", { type: "image/png" }),
+    );
+    fd.append("parameters", JSON.stringify(parameters));
+
+    const res = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { id: string; parameters: typeof expected };
+    expect(created.parameters).toEqual(expected);
+
+    const listRes = await app.request("/pedals", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as Array<{ id: string; parameters: typeof expected }>;
+    const found = listed.find((p) => p.id === created.id);
+    expect(found).toBeDefined();
+    expect(found!.parameters).toEqual(expected);
+  });
+
+  test("parameters part sent twice -> 400 (R2-c)", async () => {
+    const db = getDb();
+    const email = `pedal-twice-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+
+    const fd = new FormData();
+    fd.append("name", "Twice");
+    fd.append(
+      "image",
+      new File([new Uint8Array([10])], "t.png", { type: "image/png" }),
+    );
+    fd.append("parameters", JSON.stringify([]));
+    fd.append("parameters", JSON.stringify([]));
+
+    const res = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "parameters must be a single JSON field" });
+
+    const [{ c }] = await db<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM pedal_catalog WHERE name = 'Twice'
+    `;
+    expect(c).toBe(0);
+  });
+
+  test("parameters part sent as a file -> 400, no row (R2-c)", async () => {
+    const db = getDb();
+    const email = `pedal-paramfile-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+    const name = `ParamFile-${crypto.randomUUID()}`;
+
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append(
+      "image",
+      new File([new Uint8Array([10])], "t.png", { type: "image/png" }),
+    );
+    fd.append(
+      "parameters",
+      new File([JSON.stringify([])], "parameters.json", { type: "application/json" }),
+    );
+
+    const res = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "parameters must be a single JSON field" });
+
+    const [{ c }] = await db<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM pedal_catalog WHERE name = ${name}
+    `;
+    expect(c).toBe(0);
+  });
+});
+
+describe("POST /songs/:id/pedals against a typed pedal end-to-end (F22 R5)", () => {
+  async function seedTypedPedalOwnerAndSong(): Promise<{
+    token: string;
+    songId: string;
+    pedalId: string;
+  }> {
+    const db = getDb();
+    const email = `pedal-typed-spc-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', 'premium') RETURNING id
+    `;
+    const token = await issueToken(user.id, "premium");
+    const [song] = await db<{ id: string }[]>`
+      INSERT INTO songs (user_id, name) VALUES (${user.id}, 'Typed Song') RETURNING id
+    `;
+    const [pedal] = await db<{ id: string }[]>`
+      INSERT INTO pedal_catalog (name, reference_image_key, parameters)
+      VALUES (
+        'Typed Pedal',
+        NULL,
+        ${JSON.stringify([
+          { key: "level", label: "Level", type: "knob", min: 0, max: 10 },
+          { key: "boost", label: "Boost", type: "switch" },
+        ])}::jsonb
+      )
+      RETURNING id
+    `;
+    return { token, songId: song.id, pedalId: pedal.id };
+  }
+
+  test("invalid config values -> 400; one valid config -> 201 (R5)", async () => {
+    const { token, songId, pedalId } = await seedTypedPedalOwnerAndSong();
+    const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    const tooHigh = await app.request(`/songs/${songId}/pedals`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ pedal_catalog_id: pedalId, label: "Too high", config: { level: 11 } }),
+    });
+    expect(tooHigh.status).toBe(400);
+
+    const notInteger = await app.request(`/songs/${songId}/pedals`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ pedal_catalog_id: pedalId, label: "Half", config: { level: 5.5 } }),
+    });
+    expect(notInteger.status).toBe(400);
+
+    const db = getDb();
+    const [{ c: c0 }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+
+    const ok = await app.request(`/songs/${songId}/pedals`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        pedal_catalog_id: pedalId,
+        label: "Lead",
+        config: { level: 5, boost: true },
+      }),
+    });
+    expect(ok.status).toBe(201);
+    const body = (await ok.json()) as { config: Record<string, unknown> };
+    expect(body.config).toEqual({ level: 5, boost: true });
+
+    const [{ c: c1 }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+    expect(c1).toBe(c0 + 1);
+  });
+});
+
 describe("POST /songs/:id/presets plan-limit 402 body shape (F21 R18)", () => {
   test("free user with 1 preset -> 402 with exactly {error, code, plan, limit}", async () => {
     const db = getDb();
