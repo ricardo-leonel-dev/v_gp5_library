@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getDb } from "../db/client";
@@ -11,6 +11,7 @@ import {
   type CreatePedalInput,
   type UploadedFile,
 } from "./pedal-service";
+import type { ParameterDefinition } from "./pedal-parameters";
 
 function file(name: string, bytes: number[]): UploadedFile {
   return { filename: name, mimeType: "image/png", bytes: new Uint8Array(bytes) };
@@ -171,6 +172,7 @@ describe("pedal-service", () => {
       expect(result.id).toMatch(/^[0-9a-f-]{36}$/i);
       expect(typeof result.createdAt).toBe("string");
       expect(typeof result.updatedAt).toBe("string");
+      expect(result.parameters).toEqual([]);
 
       const [row] = await db<{ reference_image_key: string; name: string; created_by: string }[]>`
         SELECT reference_image_key, name, created_by FROM pedal_catalog WHERE id = ${result.id}
@@ -180,6 +182,141 @@ describe("pedal-service", () => {
 
       const bytes = await storage.get(row.reference_image_key);
       expect(bytes).toEqual(image.bytes);
+    });
+  });
+
+  describe("createPedal — typed parameters (R1, R2, R3-c, P1)", () => {
+    const store = async (
+      result: Awaited<ReturnType<typeof createPedal>>,
+    ): Promise<unknown> => {
+      const [row] = await getDb()<{ parameters: unknown }[]>`
+        SELECT parameters FROM pedal_catalog WHERE id = ${result.id}
+      `;
+      if (typeof row.parameters === "string") return JSON.parse(row.parameters);
+      return row.parameters;
+    };
+
+    test("R1-a: parameters stored in the order given (knob + switch + selector)", async () => {
+      const { userId } = await makeUser("r1a");
+      const defs: ParameterDefinition[] = [
+        { key: "level", label: "Level", type: "knob", min: 0, max: 10 },
+        { key: "boost", label: "Boost", type: "switch" },
+        { key: "mode", label: "Mode", type: "selector", options: ["Normal", "Brown"] },
+      ];
+      const result = await createPedal(
+        userId,
+        {
+          name: "R1a Pedal",
+          image: [imageFile()],
+          parameters: JSON.stringify(defs),
+        },
+        storage,
+      );
+      expect(result.parameters).toEqual(defs);
+      const stored = await store(result);
+      expect(stored).toEqual(defs);
+    });
+
+    test("R1-c: omitted parameters field stores '[]'", async () => {
+      const { userId } = await makeUser("r1c");
+      const result = await createPedal(
+        userId,
+        { name: "R1c Pedal", image: [imageFile()] },
+        storage,
+      );
+      expect(result.parameters).toEqual([]);
+      const stored = await store(result);
+      expect(stored).toEqual([]);
+    });
+
+    test("R1-d: '[]' string stores '[]'", async () => {
+      const { userId } = await makeUser("r1d");
+      const result = await createPedal(
+        userId,
+        { name: "R1d Pedal", image: [imageFile()], parameters: "[]" },
+        storage,
+      );
+      expect(result.parameters).toEqual([]);
+    });
+
+    test("R1-e: knob without min/max defaults to 0..10 in the returned + stored definition", async () => {
+      const { userId } = await makeUser("r1e");
+      const result = await createPedal(
+        userId,
+        {
+          name: "R1e Pedal",
+          image: [imageFile()],
+          parameters: JSON.stringify([{ key: "level", label: "Level", type: "knob" }]),
+        },
+        storage,
+      );
+      expect(result.parameters).toEqual([
+        { key: "level", label: "Level", type: "knob", min: 0, max: 10 },
+      ]);
+      const stored = await store(result);
+      expect(stored).toEqual([
+        { key: "level", label: "Level", type: "knob", min: 0, max: 10 },
+      ]);
+    });
+
+    test("R2 (parameters=null, malformed JSON, value rule failures): PedalError(400), no row, no stored bytes", async () => {
+      const db = getDb();
+      const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+      const beforeFiles = await readdir(dir);
+
+      const cases: Array<{ input: CreatePedalInput; label: string }> = [
+        { input: { name: "Bad", image: [imageFile()], parameters: null }, label: "parameters=null" },
+        {
+          input: { name: "Bad", image: [imageFile()], parameters: "{" },
+          label: "invalid JSON",
+        },
+        {
+          input: { name: "Bad", image: [imageFile()], parameters: JSON.stringify({ a: 1 }) },
+          label: "value is not an array",
+        },
+        {
+          input: {
+            name: "Bad",
+            image: [imageFile()],
+            parameters: JSON.stringify([{ key: "k", label: "K", type: "knob", min: 10 }]),
+          },
+          label: "knob min:10 with default max:10 -> min >= max",
+        },
+        {
+          input: {
+            name: "Bad",
+            image: [imageFile()],
+            parameters: JSON.stringify([{ key: "k", label: "K", type: "selector", options: [] }]),
+          },
+          label: "selector options:[]",
+        },
+      ];
+
+      for (const { input } of cases) {
+        const { userId } = await makeUser("r2");
+        await expect(
+          createPedal(userId, input, storage),
+        ).rejects.toBeInstanceOf(PedalError);
+      }
+
+      const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+      expect(after[0].c).toBe(before[0].c);
+      const afterFiles = await readdir(dir);
+      expect(afterFiles).toEqual(beforeFiles);
+    });
+
+    test("R3-c: a legacy pedal row (parameters = '[]') returns parameters:[] from listPedals", async () => {
+      const db = getDb();
+      const [legacy] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name) VALUES (${`legacy-${crypto.randomUUID()}`}) RETURNING id
+      `;
+
+      const listed = await listPedals();
+      const found = listed.find((p) => p.id === legacy.id);
+      expect(found).toBeDefined();
+      expect(found!.parameters).toEqual([]);
+
+      await rm(dir, { recursive: true, force: true });
     });
   });
 

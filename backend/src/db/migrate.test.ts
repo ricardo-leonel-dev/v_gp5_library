@@ -46,6 +46,7 @@ describe("migrate", () => {
       "0005_plan_tiers.sql",
       "0006_user_roles_and_plan_changes.sql",
       "0007_email_lowercase.sql",
+      "0008_pedal_parameters.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -538,6 +539,41 @@ describe("migrate", () => {
     const sql = await read0007();
     await db.unsafe(sql);
     await db.unsafe(sql);
+  });
+
+  test("pedal_catalog.parameters is NOT NULL jsonb defaulting to '[]' (typed_parameter_definitions R4)", async () => {
+    const db = getDb();
+    const [col] = await db<
+      { data_type: string; is_nullable: string; column_default: string | null }[]
+    >`
+      SELECT data_type, is_nullable, column_default FROM information_schema.columns
+      WHERE table_name = 'pedal_catalog' AND column_name = 'parameters'
+    `;
+    expect(col.data_type).toBe("jsonb");
+    expect(col.is_nullable).toBe("NO");
+    expect(col.column_default).toBe("'[]'::jsonb");
+
+    const [inserted] = await db<{ parameters: unknown }[]>`
+      INSERT INTO pedal_catalog (name) VALUES (${`default-params-${crypto.randomUUID()}`})
+      RETURNING parameters
+    `;
+    expect(inserted.parameters).toEqual([]);
+  });
+
+  test("re-executing the 0008 SQL on an already-migrated database does not throw (typed_parameter_definitions R4)", async () => {
+    const db = getDb();
+    const sql = await readFile(
+      path.join(import.meta.dir, "migrations", "0008_pedal_parameters.sql"),
+      "utf8",
+    );
+    await db.unsafe(sql);
+    await db.unsafe(sql);
+
+    const [col] = await db<{ column_default: string | null }[]>`
+      SELECT column_default FROM information_schema.columns
+      WHERE table_name = 'pedal_catalog' AND column_name = 'parameters'
+    `;
+    expect(col.column_default).toBe("'[]'::jsonb");
   });
 
   test("a failing migration file is not recorded as applied (R5)", async () => {

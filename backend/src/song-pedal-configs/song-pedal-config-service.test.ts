@@ -57,6 +57,16 @@ async function directInsertConfig(
   return { configId: row.id };
 }
 
+async function seedTypedPedal(parameters: unknown): Promise<{ pedalId: string }> {
+  const db = getDb();
+  const [pedal] = await db<{ id: string }[]>`
+    INSERT INTO pedal_catalog (name, reference_image_key, parameters)
+    VALUES (${`Typed-${crypto.randomUUID()}`}, NULL, ${JSON.stringify(parameters)}::jsonb)
+    RETURNING id
+  `;
+  return { pedalId: pedal.id };
+}
+
 describe("song-pedal-config-service", () => {
   describe("createSongPedalConfig", () => {
     test("missing label -> SongPedalConfigError(400), no row inserted (R4)", async () => {
@@ -460,6 +470,158 @@ describe("song-pedal-config-service", () => {
       await expect(
         deleteSongPedalConfig(userId, songId, "not-a-uuid"),
       ).rejects.toBeInstanceOf(SongPedalConfigError);
+    });
+  });
+
+  describe("config vs typed pedal definitions (R5)", () => {
+    const defs = [
+      { key: "gain", label: "Gain", type: "knob", min: 0, max: 10 },
+      { key: "boost", label: "Boost", type: "switch" },
+      { key: "mode", label: "Mode", type: "selector", options: ["A", "B"] },
+    ];
+
+    test("a, d, f, i: in-range values pass and are stored as sent", async () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["a-gain", { gain: 5 }],
+        ["d-boost", { boost: true }],
+        ["f-mode", { mode: "A" }],
+        ["i-empty", {}],
+      ];
+      for (const [label, config] of cases) {
+        const { userId } = await makeUser(`r5-${label}`);
+        const { songId } = await seedSong(userId);
+        const { pedalId } = await seedTypedPedal(defs);
+        const db = getDb();
+        const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+        const result = await createSongPedalConfig(userId, songId, {
+          pedalCatalogId: pedalId,
+          label: `Config ${label}`,
+          config,
+        });
+        expect(result.config).toEqual(config);
+        const [row] = await db<{ config: string }[]>`
+          SELECT config FROM song_pedal_configs WHERE id = ${result.id}
+        `;
+        expect(JSON.parse(row.config)).toEqual(config);
+        const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+        expect(after[0].c).toBe(before[0].c + 1);
+      }
+    });
+
+    test("i: config omitted on a typed pedal -> created, stored {}", async () => {
+      const { userId } = await makeUser("r5-i-omitted");
+      const { songId } = await seedSong(userId);
+      const { pedalId } = await seedTypedPedal(defs);
+      const db = getDb();
+      const result = await createSongPedalConfig(userId, songId, {
+        pedalCatalogId: pedalId,
+        label: "Config omitted",
+      });
+      expect(result.config).toEqual({});
+      const [row] = await db<{ config: string }[]>`
+        SELECT config FROM song_pedal_configs WHERE id = ${result.id}
+      `;
+      expect(JSON.parse(row.config)).toEqual({});
+    });
+
+    test("b, c, e, g, h, j: invalid values -> 400, no row inserted", async () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["b-gain11", { gain: 11 }],
+        ["c-gain75", { gain: 7.5 }],
+        ["e-boost", { boost: "on" }],
+        ["g-mode", { mode: "C" }],
+        ["h-unknown", { unknown: 1 }],
+        ["j-mixed", { gain: 5, unknown: 1 }],
+      ];
+      for (const [label, config] of cases) {
+        const { userId } = await makeUser(`r5bad-${label}`);
+        const { songId } = await seedSong(userId);
+        const { pedalId } = await seedTypedPedal(defs);
+        const db = getDb();
+        const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+        await expect(
+          createSongPedalConfig(userId, songId, {
+            pedalCatalogId: pedalId,
+            label: `Config ${label}`,
+            config,
+          }),
+        ).rejects.toBeInstanceOf(SongPedalConfigError);
+        const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+        expect(after[0].c).toBe(before[0].c);
+      }
+    });
+  });
+
+  describe("legacy pedal keeps free-form config (R6)", () => {
+    test("a, b: any JSON object is stored; non-object -> 400", async () => {
+      const { userId } = await makeUser("r6");
+      const { songId } = await seedSong(userId);
+      const { pedalId } = await seedPedal();
+
+      const result = await createSongPedalConfig(userId, songId, {
+        pedalCatalogId: pedalId,
+        label: "Free form",
+        config: { anything: "goes", n: 42 },
+      });
+      expect(result.config).toEqual({ anything: "goes", n: 42 });
+
+      await expect(
+        createSongPedalConfig(userId, songId, {
+          pedalCatalogId: pedalId,
+          label: "Not an object",
+          config: "text",
+        }),
+      ).rejects.toBeInstanceOf(SongPedalConfigError);
+    });
+  });
+
+  describe("ownership and label errors win over a config mismatch (P2)", () => {
+    const typedDefs = [{ key: "gain", label: "Gain", type: "knob", min: 0, max: 10 }];
+
+    test("foreign song + invalid config -> 404 song not found", async () => {
+      const { userId: owner } = await makeUser("p2-owner");
+      const { userId: other } = await makeUser("p2-other");
+      const { songId } = await seedSong(owner);
+      const { pedalId } = await seedTypedPedal(typedDefs);
+      await expect(
+        createSongPedalConfig(other, songId, {
+          pedalCatalogId: pedalId,
+          label: "x",
+          config: { gain: 99 },
+        }),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    test("missing label + invalid config -> 400 label is required", async () => {
+      const { userId } = await makeUser("p2-label");
+      const { songId } = await seedSong(userId);
+      const { pedalId } = await seedTypedPedal(typedDefs);
+      await expect(
+        createSongPedalConfig(userId, songId, {
+          pedalCatalogId: pedalId,
+          config: { gain: 99 },
+        }),
+      ).rejects.toMatchObject({ status: 400, message: "label is required" });
+    });
+  });
+
+  describe("stored configs are not re-validated on list (P3)", () => {
+    test("a config that violates its typed pedal's definitions is returned as stored", async () => {
+      const { userId } = await makeUser("p3");
+      const { songId } = await seedSong(userId);
+      const { pedalId } = await seedTypedPedal([
+        { key: "gain", label: "Gain", type: "knob", min: 0, max: 10 },
+      ]);
+      const [direct] = await getDb()<{ id: string }[]>`
+        INSERT INTO song_pedal_configs (song_id, user_id, pedal_catalog_id, label, config)
+        VALUES (${songId}, ${userId}, ${pedalId}, 'Old freeform', ${JSON.stringify({ gain: 99 })}::jsonb)
+        RETURNING id
+      `;
+
+      const listed = await listSongPedalConfigs(userId, songId);
+      const row = listed.find((c) => c.id === direct.id);
+      expect(row).toBeDefined();
+      expect(row!.config).toEqual({ gain: 99 });
     });
   });
 });

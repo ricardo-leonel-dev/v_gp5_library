@@ -1,6 +1,10 @@
 import { getDb } from "../db/client";
 import type { SQL } from "bun";
 import { isUuid } from "../songs/song-service";
+import {
+  parseStoredParameters,
+  validateConfigAgainstParameters,
+} from "../pedals/pedal-parameters";
 
 export class SongPedalConfigError extends Error {
   constructor(message: string, public readonly status: 400 | 404) {
@@ -87,13 +91,14 @@ export async function createSongPedalConfig(
   if (!input.pedalCatalogId || !isUuid(input.pedalCatalogId)) {
     throw new SongPedalConfigError("pedal_catalog_id does not reference an existing pedal", 400);
   }
-  const pedalRows = await db<{ id: string }[]>`
-    SELECT id FROM pedal_catalog
+  const pedalRows = await db<{ id: string; parameters: unknown }[]>`
+    SELECT id, parameters FROM pedal_catalog
     WHERE id = ${input.pedalCatalogId} AND deleted_at IS NULL
   `;
   if (pedalRows.length === 0) {
     throw new SongPedalConfigError("pedal_catalog_id does not reference an existing pedal", 400);
   }
+  const pedalParameters = parseStoredParameters(pedalRows[0]!.parameters);
 
   let config: Record<string, unknown>;
   if (input.config === undefined) {
@@ -102,6 +107,13 @@ export async function createSongPedalConfig(
     config = input.config as Record<string, unknown>;
   } else {
     throw new SongPedalConfigError("config must be a JSON object", 400);
+  }
+
+  if (pedalParameters.length > 0) {
+    const validation = validateConfigAgainstParameters(config, pedalParameters);
+    if (!validation.ok) {
+      throw new SongPedalConfigError(validation.error, 400);
+    }
   }
 
   const [row] = await db<Parameters<typeof toSongPedalConfigDto>[0][]>`INSERT INTO song_pedal_configs (id, song_id, user_id, pedal_catalog_id, label, config)
