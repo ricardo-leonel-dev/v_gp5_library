@@ -47,6 +47,7 @@ describe("migrate", () => {
       "0006_user_roles_and_plan_changes.sql",
       "0007_email_lowercase.sql",
       "0008_pedal_parameters.sql",
+      "0009_pedal_image_mime_type.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -574,6 +575,21 @@ describe("migrate", () => {
       WHERE table_name = 'pedal_catalog' AND column_name = 'parameters'
     `;
     expect(col.column_default).toBe("'[]'::jsonb");
+  });
+
+  test("pedal_catalog.reference_image_mime_type is nullable text and 0009 re-runs (serve_pedal_catalog_reference_image)", async () => {
+    const db = getDb();
+    const sql = await readFile(
+      path.join(import.meta.dir, "migrations", "0009_pedal_image_mime_type.sql"),
+      "utf8",
+    );
+    await db.unsafe(sql);
+
+    const [col] = await db<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      SELECT data_type, is_nullable, column_default FROM information_schema.columns
+      WHERE table_name = 'pedal_catalog' AND column_name = 'reference_image_mime_type'
+    `;
+    expect(col).toEqual({ data_type: "text", is_nullable: "YES", column_default: null });
   });
 
   test("a failing migration file is not recorded as applied (R5)", async () => {

@@ -6,6 +6,7 @@ import { getDb } from "../db/client";
 import { LocalFsStorageAdapter } from "../storage/local-fs-adapter";
 import {
   createPedal,
+  getPedalImage,
   listPedals,
   PedalError,
   type CreatePedalInput,
@@ -350,6 +351,87 @@ describe("pedal-service", () => {
 
       await rm(aPedal.dir, { recursive: true, force: true });
       await rm(bPedal.dir, { recursive: true, force: true });
+    });
+  });
+
+  describe("getPedalImage + hasImage (serve_pedal_catalog_reference_image)", () => {
+    test("stores the upload MIME type and serves the bytes with it; hasImage is true", async () => {
+      const { userId } = await makeUser("pedal-img");
+      const image: UploadedFile = {
+        filename: "ref.webp",
+        mimeType: "image/webp",
+        bytes: new Uint8Array([82, 73, 70, 70, 9]),
+      };
+
+      const created = await createPedal(userId, { name: "Webp Pedal", image: [image] }, storage);
+      expect(created.hasImage).toBe(true);
+
+      const listed = (await listPedals()).find((p) => p.id === created.id);
+      expect(listed!.hasImage).toBe(true);
+
+      const served = await getPedalImage(created.id, storage);
+      expect(served.mimeType).toBe("image/webp");
+      expect(served.bytes).toEqual(image.bytes);
+    });
+
+    test("accepts jpeg/png/webp/gif (case-insensitive, stored lowercase) and rejects other types with no row or bytes", async () => {
+      const { userId } = await makeUser("pedal-mime");
+      const db = getDb();
+
+      for (const mimeType of ["image/jpeg", "image/png", "image/webp", "image/gif", "IMAGE/PNG"]) {
+        const image: UploadedFile = { filename: "ref", mimeType, bytes: new Uint8Array([1]) };
+        const created = await createPedal(userId, { name: "Ok", image: [image] }, storage);
+        const served = await getPedalImage(created.id, storage);
+        expect(served.mimeType).toBe(mimeType.toLowerCase());
+      }
+
+      const beforeFiles = await readdir(path.join(dir, "pedals"));
+      const before = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+      for (const mimeType of ["text/html", "image/svg+xml", "application/octet-stream", ""]) {
+        const image: UploadedFile = { filename: "ref", mimeType, bytes: new Uint8Array([60]) };
+        const err = await createPedal(userId, { name: "Bad", image: [image] }, storage).catch(
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(PedalError);
+        expect((err as PedalError).status).toBe(400);
+      }
+      const after = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+      expect(after[0]!.c).toBe(before[0]!.c);
+      expect(await readdir(path.join(dir, "pedals"))).toEqual(beforeFiles);
+    });
+
+    test("a legacy row with an image key but no stored MIME type serves application/octet-stream", async () => {
+      const db = getDb();
+      const key = `pedals/${crypto.randomUUID()}`;
+      await storage.put(key, new Uint8Array([7, 8]));
+      const [legacy] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name, reference_image_key)
+        VALUES (${`legacy-img-${crypto.randomUUID()}`}, ${key}) RETURNING id
+      `;
+
+      const served = await getPedalImage(legacy.id, storage);
+      expect(served.mimeType).toBe("application/octet-stream");
+      expect(served.bytes).toEqual(new Uint8Array([7, 8]));
+    });
+
+    test("404 for a malformed id, an unknown id, a soft-deleted pedal and a pedal without image", async () => {
+      const { userId } = await makeUser("pedal-img-404");
+      const db = getDb();
+
+      const deleted = await createPedal(userId, { name: "Gone", image: [imageFile()] }, storage);
+      await db`UPDATE pedal_catalog SET deleted_at = NOW() WHERE id = ${deleted.id}`;
+
+      const [noImage] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name) VALUES (${`no-img-${crypto.randomUUID()}`}) RETURNING id
+      `;
+      const listedNoImage = (await listPedals()).find((p) => p.id === noImage.id);
+      expect(listedNoImage!.hasImage).toBe(false);
+
+      for (const id of ["not-a-uuid", crypto.randomUUID(), deleted.id, noImage.id]) {
+        const err = await getPedalImage(id, storage).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(PedalError);
+        expect((err as PedalError).status).toBe(404);
+      }
     });
   });
 });
