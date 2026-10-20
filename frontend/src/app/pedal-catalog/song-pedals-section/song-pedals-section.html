@@ -255,7 +255,8 @@
       data-testid="song-pedals-panel"
     >
       <!-- Catalog list (R3 b, R4 a-f). -->
-      <fieldset class="block" data-testid="catalog-fieldset">
+      <!-- min-w-0 drops the UA fieldset min-inline-size: min-content so long names truncate (F40). -->
+      <fieldset class="block min-w-0" data-testid="catalog-fieldset">
         <legend class="sr-only">{{ t('songPedals.catalog_legend') }}</legend>
         @switch (catalogState()) {
           @case ('loading') {
@@ -279,19 +280,19 @@
               </p>
             } @else {
               <div
-                class="max-h-64 overflow-y-auto rounded-md bg-white ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
+                class="max-h-[min(16rem,50dvh)] min-w-0 overflow-y-auto overscroll-contain rounded-md bg-white ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
                 data-testid="catalog-list"
               >
                 @for (c of catalog(); track c.id; let i = $index) {
                   <label
-                    class="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50 has-[:checked]:bg-indigo-50 dark:text-slate-100 dark:hover:bg-slate-700 dark:has-[:checked]:bg-indigo-950/40"
+                    class="flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50 has-[:checked]:bg-indigo-50 dark:text-slate-100 dark:hover:bg-slate-700 dark:has-[:checked]:bg-indigo-950/40"
                     data-testid="catalog-option"
                     [attr.data-catalog-id]="c.id"
                   >
                     <input
                       type="radio"
                       name="catalog-pedal"
-                      class="size-4 accent-indigo-600"
+                      class="size-4 shrink-0 accent-indigo-600"
                       [value]="c.id"
                       [checked]="selectedPedalId() === c.id"
                       [attr.aria-checked]="selectedPedalId() === c.id"

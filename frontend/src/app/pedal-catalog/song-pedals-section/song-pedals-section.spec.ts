@@ -1229,3 +1229,34 @@ describe('F36 R14 — visual direction layout contract', () => {
     expect(status.getAttribute('role')).toBe('status');
   });
 });
+describe('F40 — catalog list overflow guard at narrow widths', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  test('fieldset, list and options can shrink; long names truncate; list height is viewport-bounded', async () => {
+    const { httpMock, fixture } = setup('s1');
+    const longName = 'Very long boutique overdrive pedal name '.repeat(5).trim();
+    await loadSection(fixture, httpMock, {
+      catalog: [catalogPedal({ id: 'p1', name: longName }), catalogPedal({ id: 'p2', name: 'B' })],
+    });
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '[data-testid="open-attach-panel"]',
+    )!.click();
+    await settle(fixture);
+    const root = fixture.nativeElement as HTMLElement;
+    // jsdom has no layout: assert the classes that keep the panel inside the viewport.
+    const fieldset = root.querySelector<HTMLElement>('[data-testid="catalog-fieldset"]')!;
+    expect(fieldset.classList.contains('min-w-0')).toBe(true);
+    const list = root.querySelector<HTMLElement>('[data-testid="catalog-list"]')!;
+    expect(list.classList.contains('min-w-0')).toBe(true);
+    expect(list.classList.contains('overflow-y-auto')).toBe(true);
+    expect(list.classList.contains('max-h-[min(16rem,50dvh)]')).toBe(true);
+    expect(list.classList.contains('max-h-64')).toBe(false);
+    const option = list.querySelector<HTMLElement>('[data-testid="catalog-option"]')!;
+    expect(option.classList.contains('min-w-0')).toBe(true);
+    expect(option.querySelector<HTMLInputElement>('input[type="radio"]')!.classList.contains('shrink-0')).toBe(true);
+    const name = option.querySelector<HTMLElement>('[data-testid="catalog-option-name"]')!;
+    expect(name.textContent?.trim()).toBe(longName);
+    expect(name.classList.contains('min-w-0')).toBe(true);
+    expect(name.classList.contains('truncate')).toBe(true);
+  });
+});
