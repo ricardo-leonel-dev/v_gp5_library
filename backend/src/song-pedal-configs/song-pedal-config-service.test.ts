@@ -27,7 +27,7 @@ async function seedSong(userId: string, name = "Test"): Promise<{ songId: string
 async function seedPedal(name = "Test Pedal"): Promise<{ pedalId: string }> {
   const db = getDb();
   const [pedal] = await db<{ id: string }[]>`
-    INSERT INTO pedal_catalog (name, reference_image_key) VALUES (${name}, NULL) RETURNING id
+    INSERT INTO pedal_catalog (name, brand, reference_image_key) VALUES (${name}, 'Test Brand', NULL) RETURNING id
   `;
   return { pedalId: pedal.id };
 }
@@ -60,8 +60,8 @@ async function directInsertConfig(
 async function seedTypedPedal(parameters: unknown): Promise<{ pedalId: string }> {
   const db = getDb();
   const [pedal] = await db<{ id: string }[]>`
-    INSERT INTO pedal_catalog (name, reference_image_key, parameters)
-    VALUES (${`Typed-${crypto.randomUUID()}`}, NULL, ${JSON.stringify(parameters)}::jsonb)
+    INSERT INTO pedal_catalog (name, brand, reference_image_key, parameters)
+    VALUES (${`Typed-${crypto.randomUUID()}`}, 'Test Brand', NULL, ${JSON.stringify(parameters)}::jsonb)
     RETURNING id
   `;
   return { pedalId: pedal.id };

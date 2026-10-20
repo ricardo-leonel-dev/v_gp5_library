@@ -40,6 +40,7 @@ async function seedPedal(
   const input: CreatePedalInput = {
     name: "Test Pedal",
     image: [imageFile()],
+    brand: "Test Brand",
     ...override,
   };
   const result = await createPedal(userId, input, storage);
@@ -163,6 +164,7 @@ describe("pedal-service", () => {
         userId,
         {
           name: "Big Muff",
+          brand: "Big Brand",
           image: [image],
         },
         storage,
@@ -183,6 +185,105 @@ describe("pedal-service", () => {
 
       const bytes = await storage.get(row.reference_image_key);
       expect(bytes).toEqual(image.bytes);
+    });
+
+    describe("createPedal brand validation (pedal_catalog_metadata R3)", () => {
+      const cases: Array<{
+        label: string;
+        brand: string | null | undefined;
+        expectStatus?: number;
+        expectError?: string;
+      }> = [
+        { label: "a: absent", brand: undefined, expectStatus: 400, expectError: "brand is required" },
+        { label: "b: empty string", brand: "", expectStatus: 400, expectError: "brand is required" },
+        { label: "c: whitespace-only", brand: "   ", expectStatus: 400, expectError: "brand is required" },
+        { label: "d: null (sent twice or as a file)", brand: null, expectStatus: 400, expectError: "brand is required" },
+        { label: "e: 256 characters", brand: "x".repeat(256), expectStatus: 400, expectError: "brand must be at most 255 characters" },
+        { label: "f: trimmed on insert", brand: "  Boss  " },
+        { label: "g: 255 non-ASCII characters", brand: "é".repeat(255) },
+      ];
+
+      for (const { label, brand, expectStatus, expectError } of cases) {
+        test(label, async () => {
+          const { userId } = await makeUser(`r3-${label.replace(/[^a-z0-9]/gi, "")}`);
+          const db = getDb();
+          const beforeCount = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+          const beforeFiles = await readdir(dir);
+
+          const result = createPedal(
+            userId,
+            {
+              name: "R3 Pedal",
+              image: [imageFile()],
+              brand,
+            },
+            storage,
+          );
+          if (expectStatus !== undefined) {
+            const err = await result.catch((e: unknown) => e);
+            expect(err).toBeInstanceOf(PedalError);
+            expect((err as PedalError).status).toBe(expectStatus);
+            expect((err as PedalError).message).toBe(expectError);
+            const afterCount = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+            expect(afterCount[0]!.c).toBe(beforeCount[0]!.c);
+            expect(await readdir(dir)).toEqual(beforeFiles);
+          } else {
+            const dto = await result;
+            expect(dto.brand).toBe(brand === "  Boss  " ? "Boss" : brand);
+            expect(dto.brand.length).toBeLessThanOrEqual(255);
+          }
+        });
+      }
+    });
+
+    describe("createPedal description (pedal_catalog_metadata R4)", () => {
+      const cases: Array<{
+        label: string;
+        description: string | null | undefined;
+        expectStatus?: number;
+        expectError?: string;
+        expectedDescription: string | null;
+      }> = [
+        { label: "a: absent", description: undefined, expectedDescription: null },
+        { label: "b1: empty string", description: "", expectedDescription: null },
+        { label: "b2: whitespace-only", description: "   ", expectedDescription: null },
+        { label: "c: trimmed on insert", description: "  Classic overdrive  ", expectedDescription: "Classic overdrive" },
+        { label: "d: 2000 characters", description: "y".repeat(2000), expectedDescription: "y".repeat(2000) },
+        { label: "e: 2001 characters", description: "y".repeat(2001), expectStatus: 400, expectError: "description must be at most 2000 characters", expectedDescription: null },
+        { label: "f: null (sent twice or as a file)", description: null, expectStatus: 400, expectError: "description must be a single text field", expectedDescription: null },
+      ];
+
+      for (const { label, description, expectStatus, expectError, expectedDescription } of cases) {
+        test(label, async () => {
+          const { userId } = await makeUser(`r4-${label.replace(/[^a-z0-9]/gi, "")}`);
+          const db = getDb();
+          const beforeCount = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+          const beforeFiles = await readdir(dir);
+
+          const result = createPedal(
+            userId,
+            {
+              name: "R4 Pedal",
+              image: [imageFile()],
+              brand: "R4 Brand",
+              description,
+            },
+            storage,
+          );
+          if (expectStatus !== undefined) {
+            const err = await result.catch((e: unknown) => e);
+            expect(err).toBeInstanceOf(PedalError);
+            expect((err as PedalError).status).toBe(expectStatus);
+            expect((err as PedalError).message).toBe(expectError);
+            const afterCount = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM pedal_catalog`;
+            expect(afterCount[0]!.c).toBe(beforeCount[0]!.c);
+            expect(await readdir(dir)).toEqual(beforeFiles);
+          } else {
+            const dto = await result;
+            expect(dto.description).toBe(expectedDescription);
+          }
+        });
+      }
     });
   });
 
@@ -208,6 +309,7 @@ describe("pedal-service", () => {
         userId,
         {
           name: "R1a Pedal",
+          brand: "R1a Brand",
           image: [imageFile()],
           parameters: JSON.stringify(defs),
         },
@@ -222,7 +324,7 @@ describe("pedal-service", () => {
       const { userId } = await makeUser("r1c");
       const result = await createPedal(
         userId,
-        { name: "R1c Pedal", image: [imageFile()] },
+        { name: "R1c Pedal", brand: "R1c Brand", image: [imageFile()] },
         storage,
       );
       expect(result.parameters).toEqual([]);
@@ -234,7 +336,7 @@ describe("pedal-service", () => {
       const { userId } = await makeUser("r1d");
       const result = await createPedal(
         userId,
-        { name: "R1d Pedal", image: [imageFile()], parameters: "[]" },
+        { name: "R1d Pedal", brand: "R1d Brand", image: [imageFile()], parameters: "[]" },
         storage,
       );
       expect(result.parameters).toEqual([]);
@@ -246,6 +348,7 @@ describe("pedal-service", () => {
         userId,
         {
           name: "R1e Pedal",
+          brand: "R1e Brand",
           image: [imageFile()],
           parameters: JSON.stringify([{ key: "level", label: "Level", type: "knob" }]),
         },
@@ -266,18 +369,19 @@ describe("pedal-service", () => {
       const beforeFiles = await readdir(dir);
 
       const cases: Array<{ input: CreatePedalInput; label: string }> = [
-        { input: { name: "Bad", image: [imageFile()], parameters: null }, label: "parameters=null" },
+        { input: { name: "Bad", brand: "Bad Brand", image: [imageFile()], parameters: null }, label: "parameters=null" },
         {
-          input: { name: "Bad", image: [imageFile()], parameters: "{" },
+          input: { name: "Bad", brand: "Bad Brand", image: [imageFile()], parameters: "{" },
           label: "invalid JSON",
         },
         {
-          input: { name: "Bad", image: [imageFile()], parameters: JSON.stringify({ a: 1 }) },
+          input: { name: "Bad", brand: "Bad Brand", image: [imageFile()], parameters: JSON.stringify({ a: 1 }) },
           label: "value is not an array",
         },
         {
           input: {
             name: "Bad",
+            brand: "Bad Brand",
             image: [imageFile()],
             parameters: JSON.stringify([{ key: "k", label: "K", type: "knob", min: 10 }]),
           },
@@ -286,6 +390,7 @@ describe("pedal-service", () => {
         {
           input: {
             name: "Bad",
+            brand: "Bad Brand",
             image: [imageFile()],
             parameters: JSON.stringify([{ key: "k", label: "K", type: "selector", options: [] }]),
           },
@@ -309,7 +414,7 @@ describe("pedal-service", () => {
     test("R3-c: a legacy pedal row (parameters = '[]') returns parameters:[] from listPedals", async () => {
       const db = getDb();
       const [legacy] = await db<{ id: string }[]>`
-        INSERT INTO pedal_catalog (name) VALUES (${`legacy-${crypto.randomUUID()}`}) RETURNING id
+        INSERT INTO pedal_catalog (name, brand) VALUES (${`legacy-${crypto.randomUUID()}`}, 'Test Brand') RETURNING id
       `;
 
       const listed = await listPedals();
@@ -363,7 +468,7 @@ describe("pedal-service", () => {
         bytes: new Uint8Array([82, 73, 70, 70, 9]),
       };
 
-      const created = await createPedal(userId, { name: "Webp Pedal", image: [image] }, storage);
+      const created = await createPedal(userId, { name: "Webp Pedal", brand: "Webp Brand", image: [image] }, storage);
       expect(created.hasImage).toBe(true);
 
       const listed = (await listPedals()).find((p) => p.id === created.id);
@@ -380,7 +485,7 @@ describe("pedal-service", () => {
 
       for (const mimeType of ["image/jpeg", "image/png", "image/webp", "image/gif", "IMAGE/PNG"]) {
         const image: UploadedFile = { filename: "ref", mimeType, bytes: new Uint8Array([1]) };
-        const created = await createPedal(userId, { name: "Ok", image: [image] }, storage);
+        const created = await createPedal(userId, { name: "Ok", brand: "Ok Brand", image: [image] }, storage);
         const served = await getPedalImage(created.id, storage);
         expect(served.mimeType).toBe(mimeType.toLowerCase());
       }
@@ -405,8 +510,8 @@ describe("pedal-service", () => {
       const key = `pedals/${crypto.randomUUID()}`;
       await storage.put(key, new Uint8Array([7, 8]));
       const [legacy] = await db<{ id: string }[]>`
-        INSERT INTO pedal_catalog (name, reference_image_key)
-        VALUES (${`legacy-img-${crypto.randomUUID()}`}, ${key}) RETURNING id
+        INSERT INTO pedal_catalog (name, brand, reference_image_key)
+        VALUES (${`legacy-img-${crypto.randomUUID()}`}, 'Test Brand', ${key}) RETURNING id
       `;
 
       const served = await getPedalImage(legacy.id, storage);
@@ -418,11 +523,11 @@ describe("pedal-service", () => {
       const { userId } = await makeUser("pedal-img-404");
       const db = getDb();
 
-      const deleted = await createPedal(userId, { name: "Gone", image: [imageFile()] }, storage);
+      const deleted = await createPedal(userId, { name: "Gone", brand: "Gone Brand", image: [imageFile()] }, storage);
       await db`UPDATE pedal_catalog SET deleted_at = NOW() WHERE id = ${deleted.id}`;
 
       const [noImage] = await db<{ id: string }[]>`
-        INSERT INTO pedal_catalog (name) VALUES (${`no-img-${crypto.randomUUID()}`}) RETURNING id
+        INSERT INTO pedal_catalog (name, brand) VALUES (${`no-img-${crypto.randomUUID()}`}, 'Test Brand') RETURNING id
       `;
       const listedNoImage = (await listPedals()).find((p) => p.id === noImage.id);
       expect(listedNoImage!.hasImage).toBe(false);
@@ -432,6 +537,126 @@ describe("pedal-service", () => {
         expect(err).toBeInstanceOf(PedalError);
         expect((err as PedalError).status).toBe(404);
       }
+    });
+  });
+
+  describe("new pedals are editable with empty extras (pedal_catalog_metadata R5)", () => {
+    test("a pedal created via createPedal has isEditable: true and extras: {} (R5-a)", async () => {
+      const { userId } = await makeUser("r5a");
+      const dto = await createPedal(
+        userId,
+        { name: "R5a Pedal", image: [imageFile()], brand: "R5a Brand" },
+        storage,
+      );
+      expect(dto.isEditable).toBe(true);
+      expect(dto.extras).toEqual({});
+    });
+  });
+
+  describe("pedal DTO exposes brand/description/extras/isEditable/canEdit (pedal_catalog_metadata R6)", () => {
+    test("createPedal DTO exposes the five new fields and no snake_case (R6-a, R6-d)", async () => {
+      const { userId } = await makeUser("r6a");
+      const dto = await createPedal(
+        userId,
+        {
+          name: "R6a Pedal",
+          image: [imageFile()],
+          brand: "R6a Brand",
+          description: "R6a description",
+        },
+        storage,
+      );
+      expect(dto.brand).toBe("R6a Brand");
+      expect(dto.description).toBe("R6a description");
+      expect(dto.extras).toEqual({});
+      expect(dto.isEditable).toBe(true);
+      expect(dto.canEdit).toBe(true);
+      expect(dto).not.toHaveProperty("is_editable");
+      expect(dto).not.toHaveProperty("can_edit");
+      expect(dto).not.toHaveProperty("reference_image_key");
+    });
+
+    test("listPedals returns a backfilled legacy row with brand Valeton, description null, extras {}, isEditable true (R6-c)", async () => {
+      const db = getDb();
+      const [legacy] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name, brand, reference_image_key)
+        VALUES (${`legacy-r6-${crypto.randomUUID()}`}, 'Valeton', NULL) RETURNING id
+      `;
+      const found = (await listPedals()).find((p) => p.id === legacy!.id);
+      expect(found).toBeDefined();
+      expect(found!.brand).toBe("Valeton");
+      expect(found!.description).toBeNull();
+      expect(found!.extras).toEqual({});
+      expect(found!.isEditable).toBe(true);
+      expect(found!.canEdit).toBe(true);
+    });
+
+    test("neither endpoint exposes snake_case brand/description/extras/isEditable/canEdit keys (R6-d)", async () => {
+      const { userId } = await makeUser("r6d");
+      const dto = await createPedal(
+        userId,
+        { name: "R6d Pedal", image: [imageFile()], brand: "R6d Brand" },
+        storage,
+      );
+      const keys = Object.keys(dto);
+      expect(keys).not.toContain("is_editable");
+      expect(keys).not.toContain("can_edit");
+      expect(keys).not.toContain("reference_image_key");
+      expect(keys).toContain("isEditable");
+      expect(keys).toContain("canEdit");
+      expect(keys).toContain("brand");
+      expect(keys).toContain("description");
+      expect(keys).toContain("extras");
+    });
+  });
+
+  describe("canEdit (pedal_catalog_metadata R7)", () => {
+    async function seedSongAndConfigRow(
+      userId: string,
+      pedalId: string,
+      opts: { softDeleteSong?: boolean; softDeleteConfig?: boolean } = {},
+    ): Promise<void> {
+      const db = getDb();
+      const [song] = await db<{ id: string }[]>`
+        INSERT INTO songs (user_id, name) VALUES (${userId}, 'CanEdit Song') RETURNING id
+      `;
+      if (opts.softDeleteSong) await db`UPDATE songs SET deleted_at = NOW() WHERE id = ${song!.id}`;
+      const [config] = await db<{ id: string }[]>`
+        INSERT INTO song_pedal_configs (song_id, user_id, pedal_catalog_id, label)
+        VALUES (${song!.id}, ${userId}, ${pedalId}, 'cfg') RETURNING id
+      `;
+      if (opts.softDeleteConfig) await db`UPDATE song_pedal_configs SET deleted_at = NOW() WHERE id = ${config!.id}`;
+    }
+
+    test.each([
+      { label: "a: editable, no config", expectCanEdit: true },
+      { label: "b: editable, live config on caller's song", expectCanEdit: false, softDeleteSong: false },
+      { label: "c: editable, live config on another user's song", expectCanEdit: false, otherUserConfig: true },
+      { label: "d: editable, only soft-deleted configs", expectCanEdit: true, softDeleteConfig: true },
+      { label: "e: editable, live config on soft-deleted song", expectCanEdit: true, softDeleteSong: true },
+      { label: "f: not editable, no configs", expectCanEdit: false, lockEditable: true, noConfig: true },
+      { label: "g: not editable, attached", expectCanEdit: false, lockEditable: true },
+    ])("$label -> canEdit $expectCanEdit", async ({ expectCanEdit, softDeleteSong, softDeleteConfig, otherUserConfig, lockEditable, noConfig }) => {
+      const { userId } = await makeUser(`r7-${Math.random()}`);
+      const db = getDb();
+      const name = `r7-pedal-${crypto.randomUUID()}`;
+      const [pedal] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name, brand, reference_image_key)
+        VALUES (${name}, 'Test Brand', NULL) RETURNING id
+      `;
+      if (lockEditable) {
+        await db`UPDATE pedal_catalog SET is_editable = false WHERE id = ${pedal!.id}`;
+      }
+
+      const skipConfig = expectCanEdit === true && !softDeleteSong && !softDeleteConfig && !otherUserConfig && !lockEditable || noConfig === true;
+      if (!skipConfig) {
+        const liveUserId = otherUserConfig ? (await makeUser("r7-other")).userId : userId;
+        await seedSongAndConfigRow(liveUserId, pedal!.id, { softDeleteSong, softDeleteConfig });
+      }
+
+      const found = (await listPedals()).find((p) => p.id === pedal!.id);
+      expect(found).toBeDefined();
+      expect(found!.canEdit).toBe(expectCanEdit);
     });
   });
 });

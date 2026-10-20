@@ -114,6 +114,7 @@ describe("POST /pedals end-to-end via app.request (R1)", () => {
 
     const fd = new FormData();
     fd.append("name", "Boss DS-1");
+    fd.append("brand", "Boss");
     fd.append(
       "image",
       new File([new Uint8Array([10, 20, 30, 40])], "ds1.png", { type: "image/png" }),
@@ -158,6 +159,7 @@ describe("GET /pedals shared catalog across users (R6)", () => {
 
     const fd = new FormData();
     fd.append("name", "Shared Pedal");
+    fd.append("brand", "Shared Brand");
     fd.append("image", new File([new Uint8Array([5, 5, 5])], "shared.png", { type: "image/png" }));
     const createRes = await app.request("/pedals", {
       method: "POST",
@@ -202,6 +204,7 @@ describe("GET /pedals/:id/image (serve_pedal_catalog_reference_image)", () => {
 
     const fd = new FormData();
     fd.append("name", "Image Pedal");
+    fd.append("brand", "Image Brand");
     fd.append("image", new File([imageBytes], "ref.jpg", { type: "image/jpeg" }));
     const createRes = await app.request("/pedals", {
       method: "POST",
@@ -241,6 +244,7 @@ describe("POST /pedals rejects non-raster image types (serve_pedal_catalog_refer
     for (const [filename, type] of [["x.html", "text/html"], ["x.svg", "image/svg+xml"]]) {
       const fd = new FormData();
       fd.append("name", "Bad Image Pedal");
+      fd.append("brand", "Bad Brand");
       fd.append("image", new File([new Uint8Array([60, 115])], filename!, { type }));
       const res = await app.request("/pedals", {
         method: "POST",
@@ -283,7 +287,7 @@ async function seedSongAndPedal(userId: string): Promise<{ songId: string; pedal
     INSERT INTO songs (user_id, name) VALUES (${userId}, 'E2E Song') RETURNING id
   `;
   const [pedal] = await db<{ id: string }[]>`
-    INSERT INTO pedal_catalog (name, reference_image_key) VALUES ('E2E Pedal', NULL) RETURNING id
+    INSERT INTO pedal_catalog (name, brand, reference_image_key) VALUES ('E2E Pedal', 'Test Brand', NULL) RETURNING id
   `;
   return { songId: song.id, pedalId: pedal.id };
 }
@@ -1510,6 +1514,7 @@ describe("POST /pedals typed parameters end-to-end (F22 R1, R3)", () => {
 
     const fd = new FormData();
     fd.append("name", "Boss DS-1");
+    fd.append("brand", "Boss");
     fd.append(
       "image",
       new File([new Uint8Array([10, 20, 30, 40])], "ds1.png", { type: "image/png" }),
@@ -1545,6 +1550,7 @@ describe("POST /pedals typed parameters end-to-end (F22 R1, R3)", () => {
 
     const fd = new FormData();
     fd.append("name", "Twice");
+    fd.append("brand", "Twice Brand");
     fd.append(
       "image",
       new File([new Uint8Array([10])], "t.png", { type: "image/png" }),
@@ -1577,6 +1583,7 @@ describe("POST /pedals typed parameters end-to-end (F22 R1, R3)", () => {
 
     const fd = new FormData();
     fd.append("name", name);
+    fd.append("brand", "Param Brand");
     fd.append(
       "image",
       new File([new Uint8Array([10])], "t.png", { type: "image/png" }),
@@ -1601,6 +1608,98 @@ describe("POST /pedals typed parameters end-to-end (F22 R1, R3)", () => {
   });
 });
 
+describe("POST /pedals stores brand and description and GET /pedals returns the new fields (pedal_catalog_metadata R6)", () => {
+  async function seedUser(): Promise<{ userId: string; token: string }> {
+    const db = getDb();
+    const email = `pedal-meta-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user!.id, "free");
+    return { userId: user!.id, token };
+  }
+
+  test("multipart with brand, description and ignored extras/is_editable returns 201 with the new fields (R3-a, R5-b, R6-a, R6-b, R6-d)", async () => {
+    const { token } = await seedUser();
+
+    const fd = new FormData();
+    fd.append("name", "Meta Pedal");
+    fd.append("brand", "Meta Brand");
+    fd.append("description", "Meta description text");
+    fd.append("is_editable", "false");
+    fd.append("isEditable", "false");
+    fd.append("extras", JSON.stringify({ a: 1 }));
+    fd.append(
+      "image",
+      new File([new Uint8Array([10, 20, 30])], "meta.png", { type: "image/png" }),
+    );
+
+    const res = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as {
+      id: string;
+      name: string;
+      brand: string;
+      description: string | null;
+      extras: Record<string, unknown>;
+      isEditable: boolean;
+      canEdit: boolean;
+    };
+    expect(created.brand).toBe("Meta Brand");
+    expect(created.description).toBe("Meta description text");
+    expect(created.extras).toEqual({});
+    expect(created.isEditable).toBe(true);
+    expect(created.canEdit).toBe(true);
+    expect(created).not.toHaveProperty("is_editable");
+    expect(created).not.toHaveProperty("can_edit");
+
+    const listRes = await app.request("/pedals", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as Array<{
+      id: string;
+      brand: string;
+      description: string | null;
+      extras: Record<string, unknown>;
+      isEditable: boolean;
+      canEdit: boolean;
+    }>;
+    const found = listed.find((p) => p.id === created.id);
+    expect(found).toBeDefined();
+    expect(found!.brand).toBe("Meta Brand");
+    expect(found!.description).toBe("Meta description text");
+    expect(found!.extras).toEqual({});
+    expect(found!.isEditable).toBe(true);
+    expect(found!.canEdit).toBe(true);
+    expect(found).not.toHaveProperty("is_editable");
+    expect(found).not.toHaveProperty("can_edit");
+  });
+
+  test("request without brand -> 400 { error: 'brand is required' } (R3-a)", async () => {
+    const { token } = await seedUser();
+
+    const fd = new FormData();
+    fd.append("name", "No Brand Pedal");
+    fd.append(
+      "image",
+      new File([new Uint8Array([10, 20])], "nb.png", { type: "image/png" }),
+    );
+
+    const res = await app.request("/pedals", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "brand is required" });
+  });
+});
+
 describe("POST /songs/:id/pedals against a typed pedal end-to-end (F22 R5)", () => {
   async function seedTypedPedalOwnerAndSong(): Promise<{
     token: string;
@@ -1617,9 +1716,10 @@ describe("POST /songs/:id/pedals against a typed pedal end-to-end (F22 R5)", () 
       INSERT INTO songs (user_id, name) VALUES (${user.id}, 'Typed Song') RETURNING id
     `;
     const [pedal] = await db<{ id: string }[]>`
-      INSERT INTO pedal_catalog (name, reference_image_key, parameters)
+      INSERT INTO pedal_catalog (name, brand, reference_image_key, parameters)
       VALUES (
         'Typed Pedal',
+        'Test Brand',
         NULL,
         ${JSON.stringify([
           { key: "level", label: "Level", type: "knob", min: 0, max: 10 },

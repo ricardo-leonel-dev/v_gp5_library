@@ -23,6 +23,8 @@ export interface UploadedFile {
 
 export interface CreatePedalInput {
   name?: string;
+  brand?: string | null;
+  description?: string | null;
   image: UploadedFile[];
   parameters?: string | null;
 }
@@ -30,6 +32,11 @@ export interface CreatePedalInput {
 export interface PedalDto {
   id: string;
   name: string;
+  brand: string;
+  description: string | null;
+  extras: Record<string, unknown>;
+  isEditable: boolean;
+  canEdit: boolean;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -44,13 +51,25 @@ export interface PedalImageDto {
 
 const fallbackImageMimeType = "application/octet-stream";
 
+const maxBrandLength = 255;
+const maxDescriptionLength = 2000;
+
 // Shared catalog images are served to every user with this Content-Type, so only raster types
 // are accepted; SVG and HTML can carry script.
 const allowedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
+function charLength(value: string): number {
+  return [...value].length;
+}
+
 function toPedalDto(row: {
   id: string;
   name: string;
+  brand: string;
+  description: string | null;
+  extras: unknown;
+  is_editable: boolean;
+  can_edit: boolean;
   created_by: string | null;
   created_at: string | Date;
   updated_at: string | Date;
@@ -60,12 +79,34 @@ function toPedalDto(row: {
   return {
     id: row.id,
     name: row.name,
+    brand: row.brand,
+    description: row.description,
+    extras: parseStoredExtras(row.extras),
+    isEditable: row.is_editable,
+    canEdit: row.can_edit,
     createdBy: row.created_by,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     parameters: parseStoredParameters(row.parameters),
     hasImage: row.has_image,
   };
+}
+
+function parseStoredExtras(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return {};
 }
 
 export async function createPedal(
@@ -76,6 +117,29 @@ export async function createPedal(
   if (!input.name || input.name.trim() === "") {
     throw new PedalError("name is required", 400);
   }
+
+  if (input.brand === null || input.brand === undefined || input.brand.trim() === "") {
+    throw new PedalError("brand is required", 400);
+  }
+  const trimmedBrand = input.brand.trim();
+  if (charLength(trimmedBrand) > maxBrandLength) {
+    throw new PedalError(`brand must be at most ${maxBrandLength} characters`, 400);
+  }
+
+  let trimmedDescription: string | null = null;
+  if (input.description === null) {
+    throw new PedalError("description must be a single text field", 400);
+  }
+  if (input.description !== undefined) {
+    const trimmed = input.description.trim();
+    if (trimmed !== "") {
+      if (charLength(trimmed) > maxDescriptionLength) {
+        throw new PedalError(`description must be at most ${maxDescriptionLength} characters`, 400);
+      }
+      trimmedDescription = trimmed;
+    }
+  }
+
   if (input.image.length !== 1) {
     throw new PedalError("exactly one image file is required", 400);
   }
@@ -110,10 +174,12 @@ export async function createPedal(
 
   const db: SQL = getDb();
   const [row] = await db<Parameters<typeof toPedalDto>[0][]>`INSERT INTO pedal_catalog
-      (id, name, reference_image_key, reference_image_mime_type, created_by, parameters)
-    VALUES (${pedalId}, ${input.name}, ${storageKey}, ${imageMimeType}, ${userId},
+      (id, name, brand, description, reference_image_key, reference_image_mime_type, created_by, parameters)
+    VALUES (${pedalId}, ${input.name}, ${trimmedBrand}, ${trimmedDescription}, ${storageKey}, ${imageMimeType}, ${userId},
       ${JSON.stringify(defs)}::jsonb)
-    RETURNING id, name, created_by, created_at, updated_at, parameters,
+    RETURNING id, name, brand, description, extras, is_editable,
+      (is_editable AND NOT pedal_is_attached(id)) AS can_edit,
+      created_by, created_at, updated_at, parameters,
       reference_image_key IS NOT NULL AS has_image`;
 
   return toPedalDto(row as Parameters<typeof toPedalDto>[0]);
@@ -121,7 +187,9 @@ export async function createPedal(
 
 export async function listPedals(): Promise<PedalDto[]> {
   const db: SQL = getDb();
-  const rows = await db<Parameters<typeof toPedalDto>[0][]>`SELECT id, name, created_by, created_at, updated_at, parameters,
+  const rows = await db<Parameters<typeof toPedalDto>[0][]>`SELECT id, name, brand, description, extras, is_editable,
+      (is_editable AND NOT pedal_is_attached(id)) AS can_edit,
+      created_by, created_at, updated_at, parameters,
       reference_image_key IS NOT NULL AS has_image
     FROM pedal_catalog
     WHERE deleted_at IS NULL
