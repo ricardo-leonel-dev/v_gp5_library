@@ -1,0 +1,492 @@
+<section
+  *transloco="let t"
+  aria-labelledby="song-pedals-heading"
+  data-testid="song-pedals-section"
+>
+  <div class="flex items-center justify-between gap-3">
+    <h2
+      id="song-pedals-heading"
+      class="text-sm font-medium text-slate-700 dark:text-slate-300"
+    >
+      {{ t('songPedals.heading') }}
+    </h2>
+    <button
+      type="button"
+      #openPanelBtn
+      class="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+      data-testid="open-attach-panel"
+      [attr.aria-expanded]="ariaExpandedAttach()"
+      aria-controls="song-pedals-attach-panel"
+      (click)="togglePanel()"
+    >
+      {{ t('songPedals.attach_open') }}
+    </button>
+  </div>
+
+  <!-- Attached list (R1, R2) -->
+  @switch (listState()) {
+    @case ('loading') {
+      <div
+        class="mt-2 space-y-2"
+        aria-busy="true"
+        data-testid="song-pedals-loading"
+      >
+        <div class="h-12 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-800"></div>
+        <div class="h-12 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-800"></div>
+        <div class="h-12 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-800"></div>
+      </div>
+    }
+    @case ('loaded') {
+      @if (songPedals().length === 0) {
+        <p
+          class="mt-2 rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400"
+          data-testid="song-pedals-empty"
+        >
+          {{ t('songPedals.empty') }}
+        </p>
+      } @else {
+        <ul
+          class="mt-2 divide-y divide-slate-200 rounded-lg bg-white ring-1 ring-inset ring-slate-200 dark:divide-slate-700 dark:bg-slate-800 dark:ring-slate-700"
+          data-testid="song-pedals-list"
+        >
+          @for (p of songPedals(); track p.id) {
+            <li
+              class="flex min-w-0 items-center gap-3 px-3 py-2.5"
+              [class.bg-red-50]="isRowConfirming(p.id)"
+              [class.dark:bg-red-950/30]="isRowConfirming(p.id)"
+              [attr.data-song-pedal-id]="p.id"
+              data-testid="song-pedal-row"
+            >
+              <span
+                class="flex size-8 shrink-0 items-center justify-center rounded-md bg-slate-700 shadow-[inset_0_-2px_0_rgba(0,0,0,0.25)] dark:bg-slate-600"
+                aria-hidden="true"
+                data-testid="song-pedal-footswitch"
+              >
+                <svg viewBox="0 0 12 12" class="size-4 text-slate-200">
+                  <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-opacity="0.6"></circle>
+                  <circle cx="6" cy="6" r="2.5" fill="currentColor" fill-opacity="0.8"></circle>
+                </svg>
+              </span>
+              <div class="min-w-0 flex-1">
+                <p
+                  class="min-w-0 truncate text-sm font-medium text-slate-900 dark:text-slate-100"
+                  [title]="p.label"
+                  data-testid="song-pedal-label"
+                >{{ p.label }}</p>
+                @if (catalogState() === 'loaded') {
+                  @let name = pedalName(p);
+                  <p
+                    class="min-w-0 truncate text-xs text-slate-500 dark:text-slate-400"
+                    [class.italic]="name === null"
+                    data-testid="song-pedal-name"
+                  >
+                    {{ name ?? t('songPedals.pedal_unavailable') }}
+                  </p>
+                }
+              </div>
+              @if (!isRowConfirming(p.id)) {
+                <button
+                  type="button"
+                  #detachBtn
+                  class="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 hover:text-red-700 dark:text-slate-300 dark:ring-slate-600 dark:hover:bg-slate-700 dark:hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  [attr.aria-label]="t('songPedals.detach_aria', { label: p.label })"
+                  [attr.data-song-pedal-id]="p.id"
+                  [disabled]="detachingId() !== null"
+                  data-testid="song-pedal-detach"
+                  (click)="askDetach(p.id)"
+                >
+                  {{ t('songPedals.detach') }}
+                </button>
+              } @else {
+                <div
+                  class="flex flex-1 flex-wrap items-center justify-end gap-2"
+                  (keydown)="onDetachKeydown($any($event), p.id)"
+                  data-testid="song-pedal-confirm"
+                >
+                  <p
+                    class="min-w-0 flex-1 text-sm text-slate-700 dark:text-slate-200"
+                    data-testid="song-pedal-confirm-text"
+                  >
+                    {{ t('songPedals.detach_confirm', { label: p.label }) }}
+                  </p>
+                  <button
+                    type="button"
+                    #keepBtn
+                    class="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                    [attr.data-song-pedal-id]="p.id"
+                    [disabled]="isRowDetaching(p.id)"
+                    data-testid="song-pedal-keep"
+                    (click)="cancelDetach(p.id)"
+                  >
+                    {{ t('songPedals.detach_keep') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+                    [attr.data-song-pedal-id]="p.id"
+                    [disabled]="isRowDetaching(p.id)"
+                    data-testid="song-pedal-confirm-detach"
+                    (click)="confirmDetach(p.id)"
+                  >
+                    {{ isRowDetaching(p.id) ? t('songPedals.detaching') : t('songPedals.detach_confirm_yes') }}
+                  </button>
+                </div>
+              }
+            </li>
+          }
+        </ul>
+      }
+    }
+    @case ('unreachable') {
+      <div
+        class="mt-2 flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+        role="alert"
+        data-testid="song-pedals-error"
+      >
+        <span>{{ t('songPedals.errors.unreachable') }}</span>
+        <button
+          type="button"
+          class="shrink-0 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+          data-testid="song-pedals-retry"
+          (click)="retryList()"
+        >
+          {{ t('songPedals.retry') }}
+        </button>
+      </div>
+    }
+    @case ('song_not_found') {
+      <div
+        class="mt-2 flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+        role="alert"
+        data-testid="song-pedals-error"
+      >
+        <span>{{ t('songPedals.errors.song_not_found') }}</span>
+        <button
+          type="button"
+          class="shrink-0 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+          data-testid="song-pedals-retry"
+          (click)="retryList()"
+        >
+          {{ t('songPedals.retry') }}
+        </button>
+      </div>
+    }
+    @case ('session_expired') {
+      <p
+        class="mt-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+        data-testid="song-pedals-session-expired"
+        role="status"
+      >
+        {{ t('songPedals.errors.session_expired') }}
+        <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songPedals.login_again') }}</a>
+      </p>
+    }
+    @default {
+      <div
+        class="mt-2 flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+        role="alert"
+        data-testid="song-pedals-error"
+      >
+        <span>{{ t('songPedals.errors.load_failed') }}</span>
+        <button
+          type="button"
+          class="shrink-0 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+          data-testid="song-pedals-retry"
+          (click)="retryList()"
+        >
+          {{ t('songPedals.retry') }}
+        </button>
+      </div>
+    }
+  }
+
+  <!-- Detach error from the section (R10 e — cleared by later success). -->
+  @if (detachError(); as err) {
+    @switch (err) {
+      @case ('session_expired') {
+        <p
+          class="mt-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+          role="status"
+          data-testid="song-pedals-detach-alert"
+        >
+          {{ t('songPedals.errors.session_expired') }}
+          <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songPedals.login_again') }}</a>
+        </p>
+      }
+      @case ('unreachable') {
+        <p
+          class="mt-2 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+          role="alert"
+          data-testid="song-pedals-detach-alert"
+        >
+          {{ t('songPedals.errors.unreachable') }}
+        </p>
+      }
+      @default {
+        @switch (err) {
+          @case ('already_detached') {
+            <p
+              class="mt-2 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="song-pedals-detach-alert"
+            >
+              {{ t('songPedals.errors.already_detached') }}
+            </p>
+          }
+          @case ('detach_failed') {
+            <p
+              class="mt-2 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="song-pedals-detach-alert"
+            >
+              {{ t('songPedals.errors.detach_failed') }}
+            </p>
+          }
+        }
+      }
+    }
+  }
+
+  <!-- Attach panel (R3, R4, R5, R6, R7). -->
+  @if (panelOpen()) {
+    <div
+      id="song-pedals-attach-panel"
+      class="mt-3 rounded-lg bg-slate-50 p-4 ring-1 ring-inset ring-slate-200 dark:bg-slate-900 dark:ring-slate-700"
+      data-testid="song-pedals-panel"
+    >
+      <!-- Catalog list (R3 b, R4 a-f). -->
+      <!-- min-w-0 drops the UA fieldset min-inline-size: min-content so long names truncate (F40). -->
+      <fieldset class="block min-w-0" data-testid="catalog-fieldset">
+        <legend class="sr-only">{{ t('songPedals.catalog_legend') }}</legend>
+        @switch (catalogState()) {
+          @case ('loading') {
+            <div
+              class="space-y-2 rounded-md bg-white p-3 ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
+              aria-busy="true"
+              data-testid="catalog-loading"
+            >
+              <div class="h-8 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-700"></div>
+              <div class="h-8 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-700"></div>
+              <div class="h-8 animate-pulse rounded bg-slate-200 motion-reduce:animate-none dark:bg-slate-700"></div>
+            </div>
+          }
+          @case ('loaded') {
+            @if (catalog().length === 0) {
+              <p
+                class="rounded-md border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400"
+                data-testid="catalog-empty"
+              >
+                {{ t('songPedals.catalog_empty') }}
+              </p>
+            } @else {
+              <div
+                class="max-h-[min(16rem,50dvh)] min-w-0 overflow-y-auto overscroll-contain rounded-md bg-white ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
+                data-testid="catalog-list"
+              >
+                @for (c of catalog(); track c.id; let i = $index) {
+                  <label
+                    class="flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50 has-[:checked]:bg-indigo-50 dark:text-slate-100 dark:hover:bg-slate-700 dark:has-[:checked]:bg-indigo-950/40"
+                    data-testid="catalog-option"
+                    [attr.data-catalog-id]="c.id"
+                  >
+                    <input
+                      type="radio"
+                      name="catalog-pedal"
+                      class="size-4 shrink-0 accent-indigo-600"
+                      [value]="c.id"
+                      [checked]="selectedPedalId() === c.id"
+                      [attr.aria-checked]="selectedPedalId() === c.id"
+                      [attr.data-testid]="'catalog-radio-' + c.id"
+                      [disabled]="attaching()"
+                      (change)="onPedalSelected(c.id)"
+                    />
+                    <span class="min-w-0 truncate" data-testid="catalog-option-name">{{ c.name }}</span>
+                  </label>
+                }
+              </div>
+            }
+          }
+          @case ('unreachable') {
+            <div
+              class="flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="catalog-error"
+            >
+              <span>{{ t('songPedals.errors.unreachable') }}</span>
+              <button
+                type="button"
+                class="shrink-0 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+                data-testid="catalog-retry"
+                (click)="retryCatalog()"
+              >
+                {{ t('songPedals.retry') }}
+              </button>
+            </div>
+          }
+          @case ('session_expired') {
+            <p
+              class="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+              role="status"
+              data-testid="catalog-error"
+            >
+              {{ t('songPedals.errors.session_expired') }}
+              <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songPedals.login_again') }}</a>
+            </p>
+          }
+          @default {
+            <div
+              class="flex flex-col items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 sm:flex-row sm:items-center sm:justify-between dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="catalog-error"
+            >
+              <span>{{ t('songPedals.errors.catalog_failed') }}</span>
+              <button
+                type="button"
+                class="shrink-0 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 dark:bg-transparent dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-950/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+                data-testid="catalog-retry"
+                (click)="retryCatalog()"
+              >
+                {{ t('songPedals.retry') }}
+              </button>
+            </div>
+          }
+        }
+      </fieldset>
+
+      <!-- Label field (R5). -->
+      <div class="mt-4">
+        <label
+          for="song-pedals-label"
+          class="block text-xs font-medium text-slate-600 dark:text-slate-400"
+          data-testid="song-pedals-label-field-label"
+        >
+          {{ t('songPedals.label_field') }}
+        </label>
+        <div class="mt-1 flex items-start gap-2">
+          <input
+            id="song-pedals-label"
+            type="text"
+            class="mt-1 block w-full rounded-md bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset placeholder:text-slate-400 focus:outline-2 focus:outline-indigo-600 aria-[invalid=true]:ring-red-500 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-100 {{ labelError() ? 'ring-red-500' : 'ring-slate-300 dark:ring-slate-600' }}"
+            [value]="label()"
+            [attr.aria-invalid]="labelError() !== null ? 'true' : null"
+            [attr.aria-describedby]="labelError() !== null ? 'song-pedals-label-error' : 'song-pedals-label-counter'"
+            [disabled]="catalogIsEmpty() || catalogState() !== 'loaded' || attaching()"
+            [placeholder]="t('songPedals.label_placeholder')"
+            data-testid="song-pedals-label"
+            (input)="onLabelInput($any($event.target).value)"
+            (blur)="onLabelBlur()"
+          />
+          <span
+            id="song-pedals-label-counter"
+            class="mt-2 text-xs tabular-nums text-slate-400"
+            data-testid="song-pedals-label-counter"
+          >
+            {{ t('songPedals.label_counter', { count: labelCounterCount() }) }}
+          </span>
+        </div>
+        @if (labelError(); as err) {
+          <p
+            id="song-pedals-label-error"
+            class="mt-1 text-xs text-red-600 dark:text-red-400"
+            data-testid="song-pedals-label-error"
+            role="alert"
+          >
+            {{ t('songPedals.errors.' + err) }}
+          </p>
+        }
+      </div>
+
+      <!-- Panel alert (R7 b-f). -->
+      @if (attachError(); as err) {
+        @switch (err) {
+          @case ('session_expired') {
+            <p
+              class="mt-3 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+              role="status"
+              data-testid="song-pedals-attach-alert"
+            >
+              {{ t('songPedals.errors.session_expired') }}
+              <a routerLink="/login" class="ml-2 font-medium underline">{{ t('songPedals.login_again') }}</a>
+            </p>
+          }
+          @case ('song_not_found') {
+            <p
+              class="mt-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="song-pedals-attach-alert"
+            >
+              {{ t('songPedals.errors.song_not_found') }}
+            </p>
+          }
+          @case ('pedal_gone') {
+            <p
+              class="mt-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="song-pedals-attach-alert"
+            >
+              {{ t('songPedals.errors.pedal_gone') }}
+            </p>
+          }
+          @default {
+            <p
+              class="mt-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+              role="alert"
+              data-testid="song-pedals-attach-alert"
+            >
+              @switch (err) {
+                @case ('unreachable') {
+                  {{ t('songPedals.errors.unreachable') }}
+                }
+                @case ('attach_failed') {
+                  {{ t('songPedals.errors.attach_failed') }}
+                }
+              }
+            </p>
+          }
+        }
+      }
+
+      <!-- Footer: hint + buttons. -->
+      <div class="mt-4 flex flex-wrap justify-end gap-2" data-testid="song-pedals-panel-footer">
+        @if (showPedalHint()) {
+          <span
+            class="mr-auto text-xs text-slate-500 dark:text-slate-400"
+            data-testid="song-pedals-pedal-hint"
+          >
+            {{ t('songPedals.pedal_hint') }}
+          </span>
+        }
+        <button
+          type="button"
+          class="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+          data-testid="song-pedals-cancel"
+          [disabled]="attaching()"
+          (click)="cancelPanel()"
+        >
+          {{ t('songPedals.cancel') }}
+        </button>
+        <button
+          type="button"
+          class="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+          data-testid="song-pedals-attach"
+          [disabled]="attachDisabled()"
+          (click)="attach()"
+        >
+          {{ t(attachLabel()) }}
+        </button>
+      </div>
+    </div>
+  }
+
+  <!-- Live region for status announcements (R6 c, R9 c). -->
+  <p
+    class="sr-only"
+    role="status"
+    aria-live="polite"
+    data-testid="song-pedals-status"
+  >
+    @if (announcement(); as a) {
+      {{ t('songPedals.' + a) }}
+    }
+  </p>
+</section>

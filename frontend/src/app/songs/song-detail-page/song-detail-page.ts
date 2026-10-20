@@ -40,6 +40,7 @@ import { BlockDetail } from '../../pedals/block-detail/block-detail';
 import type { PresetSlot } from '../../midi/preset';
 import { decodePrstFile } from '../../midi/gp5-prst-file';
 import { WriteToPedalDialog, type LocalDraftPreset } from '../write-to-pedal-dialog/write-to-pedal-dialog';
+import { SongPedalsSection } from '../../pedal-catalog/song-pedals-section/song-pedals-section';
 import { LeaveDraftDialog } from '../leave-draft-dialog/leave-draft-dialog';
 import { downloadBytes } from '../download-bytes';
 import {
@@ -88,6 +89,7 @@ interface DuplicateError {
     BlockDetail,
     WriteToPedalDialog,
     LeaveDraftDialog,
+    SongPedalsSection,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './song-detail-page.html',
