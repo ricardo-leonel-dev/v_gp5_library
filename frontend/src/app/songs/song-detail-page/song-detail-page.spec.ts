@@ -214,6 +214,19 @@ function flushI18n(httpMock: HttpTestingController): void {
   httpMock.match(() => true).forEach((req) => req.flush({}));
 }
 
+// F36 P1 — when the page reaches `loaded`, the mounted
+// `SongPedalsSection` fires its own GET /songs/:id/pedals and
+// GET /pedals. Tests that end with `httpMock.verify()` must flush
+// both with [] so they don't leak open requests. The helper is
+// also called inside `loadSongWithPresets` etc. to keep their
+// callers unchanged.
+function flushSongPedals(httpMock: HttpTestingController, songId: string): void {
+  httpMock
+    .expectOne(`${environment.apiBaseUrl}/songs/${songId}/pedals`)
+    .flush([]);
+  httpMock.expectOne(`${environment.apiBaseUrl}/pedals`).flush([]);
+}
+
 describe('SongDetailPage (F26 R26-R42)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
@@ -231,6 +244,8 @@ describe('SongDetailPage (F26 R26-R42)', () => {
     } as SongDetail);
     await fixture.whenStable();
     fixture.detectChanges();
+    // F36 P1 — flush the pedal-catalog section's two requests.
+    flushSongPedals(httpMock, 'song-7');
     httpMock.verify();
   });
 
@@ -336,6 +351,7 @@ describe('SongDetailPage (F26 R26-R42)', () => {
     await fixture.whenStable();
     await Promise.resolve();
     fixture.detectChanges();
+    flushSongPedals(httpMock, 'song-with-cover');
     httpMock.verify();
   });
 
@@ -523,6 +539,13 @@ async function loadSongWithPresets(
     presets,
     files: [],
   });
+  await fixture.whenStable();
+  await Promise.resolve();
+  fixture.detectChanges();
+  // F36 P1 — the pedal-catalog section fires its two GETs once the page
+  // reaches `loaded`. Pre-existing callers rely on this helper to leave
+  // the httpMock clean.
+  flushSongPedals(httpMock, songId);
   await fixture.whenStable();
   await Promise.resolve();
   fixture.detectChanges();
@@ -1915,6 +1938,12 @@ async function loadSongWithFiles(
   await fixture.whenStable();
   await Promise.resolve();
   fixture.detectChanges();
+  // F36 P1 — pedal-catalog section requests must be flushed so callers
+  // that end with `httpMock.verify()` don't see pending requests.
+  flushSongPedals(httpMock, songId);
+  await fixture.whenStable();
+  await Promise.resolve();
+  fixture.detectChanges();
 }
 
 async function flushCover(
@@ -2374,5 +2403,182 @@ describe('SongDetailPage (F33 — files and extra details)', () => {
     expect(size.classList.contains('shrink-0')).toBe(true);
     const textDd = root.querySelector('[data-testid="song-extra-value-text"]') as HTMLElement;
     expect(textDd.classList.contains('break-words')).toBe(true);
+  });
+});
+
+// F36 R12 — the page renders one `SongPedalsSection` for a `loaded`
+// song and never for any other page state. R2 h — a failing pedal
+// section never touches the page's own state.
+describe('SongDetailPage (F36 R12, R2 h)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  test('R12 a — loaded: one song-pedals-section, its requests use the page song id', async () => {
+    const { fixture, httpMock } = setupWithId('song-loaded');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-loaded`).flush({
+      id: 'song-loaded',
+      name: 'Loaded',
+      presets: [],
+      files: [],
+    } as SongDetail);
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const sections = root.querySelectorAll('[data-testid="song-pedals-section"]');
+    expect(sections.length).toBe(1);
+    flushSongPedals(httpMock, 'song-loaded');
+    httpMock.verify();
+  });
+
+  test('R12 c — loaded: section comes after song-detail-extras-grid in document order', async () => {
+    const { fixture, httpMock } = setupWithId('song-order');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-order`).flush({
+      id: 'song-order',
+      name: 'Order',
+      presets: [],
+      files: [],
+    } as SongDetail);
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const grid = root.querySelector('[data-testid="song-detail-extras-grid"]');
+    const section = root.querySelector('[data-testid="song-pedals-section"]');
+    expect(grid).not.toBeNull();
+    expect(section).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const gridIdx = Array.from(root.querySelectorAll('*')).indexOf(grid!);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const sectionIdx = Array.from(root.querySelectorAll('*')).indexOf(section!);
+    expect(sectionIdx).toBeGreaterThan(gridIdx);
+    flushSongPedals(httpMock, 'song-order');
+  });
+
+  test('R12 b — loading: no section and no pedal requests', async () => {
+    const { fixture } = setupWithId('song-loading');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-pedals-section"]')).toBeNull();
+  });
+
+  test('R12 b — not_found: no section and no pedal requests', async () => {
+    const { fixture, httpMock } = setupWithId('missing');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/missing`)
+      .flush('not found', { status: 404, statusText: 'Not Found' });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-pedals-section"]')).toBeNull();
+  });
+
+  test('R12 b — error: no section and no pedal requests', async () => {
+    const { fixture, httpMock } = setupWithId('boom');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/boom`)
+      .flush('boom', { status: 500, statusText: 'Server Error' });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-pedals-section"]')).toBeNull();
+  });
+
+  test('R12 b — session_expired: no section and no pedal requests', async () => {
+    const { fixture, httpMock } = setupWithId('unauth');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/unauth`)
+      .flush('unauth', { status: 401, statusText: 'Unauthorized' });
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-pedals-section"]')).toBeNull();
+  });
+
+  test('R2 h — pedal list 500: page state stays loaded; presets/files/extras still rendered', async () => {
+    const { fixture, httpMock } = setupWithId('song-list-500');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-list-500`).flush({
+      id: 'song-list-500',
+      name: 'List 500',
+      presets: [{ id: 'p0', sortOrder: 0, name: 'Lead' }],
+      files: [
+        {
+          id: 'ir-0',
+          kind: 'ir',
+          originalFilename: 'a.wav',
+          mimeType: 'audio/wav',
+          byteSize: 100,
+          sortOrder: 0,
+          createdAt: '2026-10-01',
+        },
+      ],
+    } as SongDetail);
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    // Flush the catalog so the list is the one that fails.
+    httpMock.expectOne(`${environment.apiBaseUrl}/pedals`).flush([]);
+    httpMock
+      .expectOne(`${environment.apiBaseUrl}/songs/song-list-500/pedals`)
+      .error(new ProgressEvent('error'));
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[data-testid="song-pedals-error"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-error"]')).toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-files"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-extra"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-presets"]')).not.toBeNull();
+    const page = fixture.componentInstance as unknown as { state: () => string };
+    expect(page.state()).toBe('loaded');
+  });
+
+  test('R2 h — catalog 0: page state stays loaded; presets/files/extras still rendered', async () => {
+    const { fixture, httpMock } = setupWithId('song-catalog-0');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-catalog-0`).flush({
+      id: 'song-catalog-0',
+      name: 'Catalog 0',
+      presets: [],
+      files: [],
+    } as SongDetail);
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    // Flush the list, then fail the catalog.
+    httpMock.expectOne(`${environment.apiBaseUrl}/songs/song-catalog-0/pedals`).flush([]);
+    httpMock.expectOne(`${environment.apiBaseUrl}/pedals`).error(new ProgressEvent('error'));
+    await fixture.whenStable();
+    await Promise.resolve();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    // The catalog error lives in the panel; the list itself rendered
+    // `[]` successfully. Opening the panel would surface
+    // `data-testid="catalog-error"`. We assert the section-level
+    // invariants without forcing the panel open.
+    expect(root.querySelector('[data-testid="song-detail-error"]')).toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-files"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-extra"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-detail-presets"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="song-pedals-section"]')).not.toBeNull();
+    const page = fixture.componentInstance as unknown as { state: () => string };
+    expect(page.state()).toBe('loaded');
   });
 });

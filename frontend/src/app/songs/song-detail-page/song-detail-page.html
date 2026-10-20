@@ -518,6 +518,12 @@
             }
           </section>
         </div>
+
+        <!-- F36 R12 — pedal catalog section mounted in the loaded view,
+             after the files/extra-details grid. The section owns its own
+             requests (`GET /songs/:id/pedals` and `GET /pedals`); the
+             page never sends them, so they don't affect P1. -->
+        <app-song-pedals-section class="mt-8 block" [songId]="s.id" />
       }
     }
     @case ('not_found') {
