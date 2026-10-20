@@ -28,6 +28,8 @@ export async function parseCreatePedalMultipart(
 ): Promise<CreatePedalInput> {
   return {
     name: toStringField(body.name),
+    brand: toSingleStringOrRawField(body.brand),
+    description: toSingleStringOrRawField(body.description),
     image: await toUploadedFiles(body.image),
     parameters: toSingleStringOrRawField(body.parameters),
   };

@@ -48,6 +48,7 @@ describe("migrate", () => {
       "0007_email_lowercase.sql",
       "0008_pedal_parameters.sql",
       "0009_pedal_image_mime_type.sql",
+      "0010_pedal_catalog_metadata.sql",
     ]);
 
     await migrate(); // must not throw, must not duplicate rows
@@ -555,7 +556,7 @@ describe("migrate", () => {
     expect(col.column_default).toBe("'[]'::jsonb");
 
     const [inserted] = await db<{ parameters: unknown }[]>`
-      INSERT INTO pedal_catalog (name) VALUES (${`default-params-${crypto.randomUUID()}`})
+      INSERT INTO pedal_catalog (name, brand) VALUES (${`default-params-${crypto.randomUUID()}`}, 'Test Brand')
       RETURNING parameters
     `;
     expect(inserted.parameters).toEqual([]);
@@ -590,6 +591,142 @@ describe("migrate", () => {
       WHERE table_name = 'pedal_catalog' AND column_name = 'reference_image_mime_type'
     `;
     expect(col).toEqual({ data_type: "text", is_nullable: "YES", column_default: null });
+  });
+
+  test("pedal_catalog brand/description/extras/is_editable columns (pedal_catalog_metadata R1)", async () => {
+    const db = getDb();
+    const cols = await db<
+      {
+        column_name: string;
+        data_type: string;
+        character_maximum_length: number | null;
+        is_nullable: string;
+        column_default: string | null;
+      }[]
+    >`
+      SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_name = 'pedal_catalog'
+        AND column_name IN ('brand', 'description', 'extras', 'is_editable')
+      ORDER BY column_name
+    `;
+    const byCol = Object.fromEntries(cols.map((c) => [c.column_name, c]));
+    expect(byCol.brand).toEqual({
+      column_name: "brand",
+      data_type: "character varying",
+      character_maximum_length: 255,
+      is_nullable: "NO",
+      column_default: null,
+    });
+    expect(byCol.description).toEqual({
+      column_name: "description",
+      data_type: "character varying",
+      character_maximum_length: 2000,
+      is_nullable: "YES",
+      column_default: null,
+    });
+    expect(byCol.extras).toEqual({
+      column_name: "extras",
+      data_type: "jsonb",
+      character_maximum_length: null,
+      is_nullable: "NO",
+      column_default: "'{}'::jsonb",
+    });
+    expect(byCol.is_editable).toEqual({
+      column_name: "is_editable",
+      data_type: "boolean",
+      character_maximum_length: null,
+      is_nullable: "NO",
+      column_default: "true",
+    });
+
+    const name = `r1-default-${crypto.randomUUID()}`;
+    const [raw] = await db<
+      { name: string; description: unknown; extras: unknown; is_editable: boolean }[]
+    >`
+      INSERT INTO pedal_catalog (name, brand) VALUES (${name}, 'X')
+      RETURNING name, description, extras, is_editable
+    `;
+    expect(raw.name).toBe(name);
+    expect(raw.description).toBeNull();
+    expect(raw.extras).toEqual({});
+    expect(raw.is_editable).toBe(true);
+
+    const bad1 = await captureError(
+      db`INSERT INTO pedal_catalog (name, brand, extras) VALUES (${`bad-${crypto.randomUUID()}`}, 'X', '[]'::jsonb)`,
+    );
+    expect(sqlState(bad1)).toBe("23514");
+    const bad2 = await captureError(
+      db`INSERT INTO pedal_catalog (name, brand, extras) VALUES (${`bad-${crypto.randomUUID()}`}, 'X', '"x"'::jsonb)`,
+    );
+    expect(sqlState(bad2)).toBe("23514");
+
+    const noBrand = await captureError(
+      db`INSERT INTO pedal_catalog (name) VALUES (${`no-brand-${crypto.randomUUID()}`})`,
+    );
+    expect(sqlState(noBrand)).toBe("23502");
+  });
+
+  test("0010 backfills brand 'Valeton' on legacy rows and re-runs (pedal_catalog_metadata R2)", async () => {
+    const db = getDb();
+    const sql = await readFile(
+      path.join(import.meta.dir, "migrations", "0010_pedal_catalog_metadata.sql"),
+      "utf8",
+    );
+
+    const liveName = `legacy-live-${crypto.randomUUID()}`;
+    const deletedName = `legacy-deleted-${crypto.randomUUID()}`;
+    const bossName = `boss-${crypto.randomUUID()}`;
+
+    await db`ALTER TABLE pedal_catalog DROP CONSTRAINT IF EXISTS pedal_catalog_extras_is_object`;
+    await db`ALTER TABLE pedal_catalog ALTER COLUMN brand DROP NOT NULL`;
+    await db`ALTER TABLE pedal_catalog ALTER COLUMN extras DROP NOT NULL`;
+    await db`ALTER TABLE pedal_catalog ALTER COLUMN extras DROP DEFAULT`;
+
+    try {
+      const [live] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name, brand, description, extras, is_editable)
+        VALUES (${liveName}, NULL, 'legacy', '{}'::jsonb, true)
+        RETURNING id
+      `;
+      const [deleted] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name, brand, description, extras, is_editable, deleted_at)
+        VALUES (${deletedName}, NULL, NULL, '{}'::jsonb, true, NOW())
+        RETURNING id
+      `;
+      const [boss] = await db<{ id: string }[]>`
+        INSERT INTO pedal_catalog (name, brand, description, extras, is_editable)
+        VALUES (${bossName}, 'Boss', NULL, '{}'::jsonb, true)
+        RETURNING id
+      `;
+
+      await db.unsafe(sql);
+
+      const [liveRow] = await db<
+        { brand: string; description: unknown; extras: unknown; is_editable: boolean }[]
+      >`SELECT brand, description, extras, is_editable FROM pedal_catalog WHERE id = ${live!.id}`;
+      expect(liveRow!.brand).toBe("Valeton");
+      expect(liveRow!.description).toBe("legacy");
+      expect(liveRow!.extras).toEqual({});
+      expect(liveRow!.is_editable).toBe(true);
+
+      const [deletedRow] = await db<
+        { brand: string; description: unknown; extras: unknown; is_editable: boolean }[]
+      >`SELECT brand, description, extras, is_editable FROM pedal_catalog WHERE id = ${deleted!.id}`;
+      expect(deletedRow!.brand).toBe("Valeton");
+      expect(deletedRow!.description).toBeNull();
+      expect(deletedRow!.extras).toEqual({});
+      expect(deletedRow!.is_editable).toBe(true);
+
+      await db.unsafe(sql);
+
+      const [bossRow] = await db<{ brand: string }[]>`
+        SELECT brand FROM pedal_catalog WHERE id = ${boss!.id}
+      `;
+      expect(bossRow!.brand).toBe("Boss");
+    } finally {
+      await db.unsafe(sql);
+    }
   });
 
   test("a failing migration file is not recorded as applied (R5)", async () => {
