@@ -2,8 +2,10 @@ import { getDb } from "../db/client";
 import type { SQL } from "bun";
 import { isUuid } from "../songs/song-service";
 import {
+  findMissingParameterKeys,
   parseStoredParameters,
   validateConfigAgainstParameters,
+  type ParameterDefinition,
 } from "../pedals/pedal-parameters";
 
 export class SongPedalConfigError extends Error {
@@ -15,6 +17,10 @@ export class SongPedalConfigError extends Error {
 export interface CreateSongPedalConfigInput {
   pedalCatalogId?: string;
   label?: string;
+  config?: unknown;
+}
+
+export interface UpdateSongPedalConfigInput {
   config?: unknown;
 }
 
@@ -65,6 +71,38 @@ function toSongPedalConfigDto(row: {
   };
 }
 
+function requireConfigObject(config: unknown): Record<string, unknown> {
+  if (config === null || typeof config !== "object" || Array.isArray(config)) {
+    throw new SongPedalConfigError("config must be a JSON object", 400);
+  }
+  return config as Record<string, unknown>;
+}
+
+/**
+ * `sent` carries the caller's keys and gets the per-key value checks; `result` is what the row would
+ * hold once they are merged into it and must hold every key the pedal defines.
+ */
+function assertConfigFitsPedal(
+  sent: Record<string, unknown>,
+  result: Record<string, unknown>,
+  defs: ParameterDefinition[],
+): void {
+  if (defs.length === 0) return;
+
+  const validation = validateConfigAgainstParameters(sent, defs);
+  if (!validation.ok) {
+    throw new SongPedalConfigError(validation.error, 400);
+  }
+
+  const missing = findMissingParameterKeys(result, defs);
+  if (missing.length > 0) {
+    throw new SongPedalConfigError(
+      `config is missing parameters: ${missing.map((key) => `"${key}"`).join(", ")}`,
+      400,
+    );
+  }
+}
+
 export async function createSongPedalConfig(
   userId: string,
   songId: string,
@@ -100,21 +138,9 @@ export async function createSongPedalConfig(
   }
   const pedalParameters = parseStoredParameters(pedalRows[0]!.parameters);
 
-  let config: Record<string, unknown>;
-  if (input.config === undefined) {
-    config = {};
-  } else if (input.config !== null && typeof input.config === "object" && !Array.isArray(input.config)) {
-    config = input.config as Record<string, unknown>;
-  } else {
-    throw new SongPedalConfigError("config must be a JSON object", 400);
-  }
+  const config = input.config === undefined ? {} : requireConfigObject(input.config);
 
-  if (pedalParameters.length > 0) {
-    const validation = validateConfigAgainstParameters(config, pedalParameters);
-    if (!validation.ok) {
-      throw new SongPedalConfigError(validation.error, 400);
-    }
-  }
+  assertConfigFitsPedal(config, config, pedalParameters);
 
   const [row] = await db<Parameters<typeof toSongPedalConfigDto>[0][]>`INSERT INTO song_pedal_configs (id, song_id, user_id, pedal_catalog_id, label, config)
     VALUES (${crypto.randomUUID()}, ${songId}, ${userId}, ${input.pedalCatalogId}, ${input.label}, ${JSON.stringify(config)}::jsonb)
@@ -175,4 +201,53 @@ export async function deleteSongPedalConfig(
   if (updated.length === 0) {
     throw new SongPedalConfigError("song pedal config not found", 404);
   }
+}
+
+export async function updateSongPedalConfig(
+  userId: string,
+  songId: string,
+  configId: string,
+  input: UpdateSongPedalConfigInput,
+): Promise<SongPedalConfigDto> {
+  if (!isUuid(songId) || !isUuid(configId)) {
+    throw new SongPedalConfigError("song pedal config not found", 404);
+  }
+
+  const db: SQL = getDb();
+
+  // No `pc.is_editable` / `pc.can_edit` in this query: the catalog pedal's lock never blocks an update.
+  const rows = await db<{ config: unknown; parameters: unknown }[]>`
+    SELECT spc.config, pc.parameters
+    FROM song_pedal_configs spc
+    JOIN songs s ON s.id = spc.song_id
+    JOIN pedal_catalog pc ON pc.id = spc.pedal_catalog_id
+    WHERE spc.id = ${configId} AND spc.song_id = ${songId}
+      AND spc.user_id = ${userId} AND spc.deleted_at IS NULL
+      AND s.user_id = ${userId} AND s.deleted_at IS NULL
+  `;
+  if (rows.length === 0) {
+    throw new SongPedalConfigError("song pedal config not found", 404);
+  }
+  const row = rows[0]!;
+
+  const sent = requireConfigObject(input.config);
+  const merged = { ...parseConfig(row.config), ...sent };
+  assertConfigFitsPedal(sent, merged, parseStoredParameters(row.parameters));
+
+  // jsonb `||` merges the sent keys in atomically, so concurrent patches on different keys both land.
+  // `::text::jsonb` (not `::jsonb`) is required because Bun.sql binds a JS string as a jsonb *string*,
+  // and `config #>> '{}'` unwraps rows written the same way before merging into them.
+  const updated = await db<Parameters<typeof toSongPedalConfigDto>[0][]>`
+    UPDATE song_pedal_configs
+    SET config = (CASE WHEN jsonb_typeof(config) = 'string' THEN (config #>> '{}')::jsonb ELSE config END)
+                    || ${JSON.stringify(sent)}::text::jsonb,
+        updated_at = NOW()
+    WHERE id = ${configId} AND song_id = ${songId} AND user_id = ${userId} AND deleted_at IS NULL
+    RETURNING id, song_id, pedal_catalog_id, label, config, created_at, updated_at
+  `;
+  if (updated.length === 0) {
+    throw new SongPedalConfigError("song pedal config not found", 404);
+  }
+
+  return toSongPedalConfigDto(updated[0] as Parameters<typeof toSongPedalConfigDto>[0]);
 }
