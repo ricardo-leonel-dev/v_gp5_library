@@ -279,6 +279,18 @@ describe("/songs/:id/pedals auth (R9)", () => {
     );
     expect(res.status).toBe(401);
   });
+
+  test("PATCH without bearer -> 401 (R4 a)", async () => {
+    const res = await app.request(
+      `/songs/${crypto.randomUUID()}/pedals/${crypto.randomUUID()}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: { gain: 1 } }),
+      },
+    );
+    expect(res.status).toBe(401);
+  });
 });
 
 async function seedSongAndPedal(userId: string): Promise<{ songId: string; pedalId: string }> {
@@ -1767,6 +1779,104 @@ describe("POST /songs/:id/pedals against a typed pedal end-to-end (F22 R5)", () 
 
     const [{ c: c1 }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
     expect(c1).toBe(c0 + 1);
+  });
+});
+
+describe("PATCH /songs/:id/pedals/:configId (update_a_song_pedal_s_parameter_values)", () => {
+  async function seedTypedOwnerSongAndConfig(): Promise<{
+    token: string;
+    songId: string;
+    pedalId: string;
+    configId: string;
+  }> {
+    const db = getDb();
+    const email = `spc-patch-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, 'x') RETURNING id
+    `;
+    const token = await issueToken(user.id, "free");
+    const [song] = await db<{ id: string }[]>`
+      INSERT INTO songs (user_id, name) VALUES (${user.id}, 'Patch Song') RETURNING id
+    `;
+    const [pedal] = await db<{ id: string }[]>`
+      INSERT INTO pedal_catalog (name, brand, reference_image_key, parameters)
+      VALUES (
+        'Typed Pedal',
+        'Test Brand',
+        NULL,
+        ${JSON.stringify([
+          { key: "level", label: "Level", type: "knob", min: 0, max: 10 },
+          { key: "boost", label: "Boost", type: "switch" },
+        ])}::jsonb
+      )
+      RETURNING id
+    `;
+    const [config] = await db<{ id: string }[]>`
+      INSERT INTO song_pedal_configs (song_id, user_id, pedal_catalog_id, label, config)
+      VALUES (
+        ${song.id},
+        ${user.id},
+        ${pedal.id},
+        'Lead',
+        ${JSON.stringify({ level: 5, boost: true })}::jsonb
+      )
+      RETURNING id
+    `;
+    return { token, songId: song.id, pedalId: pedal.id, configId: config.id };
+  }
+
+  test("a + f: patching one key merges it, and GET /songs/:id/pedals shows the merged config", async () => {
+    const { token, songId, configId } = await seedTypedOwnerSongAndConfig();
+    const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    const patched = await app.request(`/songs/${songId}/pedals/${configId}`, {
+      method: "PATCH",
+      headers: auth,
+      body: JSON.stringify({ config: { level: 3 } }),
+    });
+
+    expect(patched.status).toBe(200);
+    const body = (await patched.json()) as { label: string; config: Record<string, unknown> };
+    expect(body.config).toEqual({ level: 3, boost: true });
+    expect(body.label).toBe("Lead");
+
+    const listed = await app.request(`/songs/${songId}/pedals`, { headers: auth });
+    expect(listed.status).toBe(200);
+    const configs = (await listed.json()) as Array<{ id: string; config: Record<string, unknown> }>;
+    expect(configs.find((c) => c.id === configId)?.config).toEqual({ level: 3, boost: true });
+  });
+
+  test("a + b: a body that is not valid JSON, or not a JSON object -> 400 (R3 a, b)", async () => {
+    const { token, songId, configId } = await seedTypedOwnerSongAndConfig();
+    const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    for (const rawBody of ["{not json", "[]", '"x"', "null", "3"]) {
+      const res = await app.request(`/songs/${songId}/pedals/${configId}`, {
+        method: "PATCH",
+        headers: auth,
+        body: rawBody,
+      });
+      expect(`${rawBody} -> ${res.status}`).toBe(`${rawBody} -> 400`);
+      expect(await res.json()).toEqual({ error: "invalid JSON body" });
+    }
+  });
+
+  test("b: POSTing a config that omits a defined parameter -> 400, no row inserted (R6 b)", async () => {
+    const { token, songId, pedalId } = await seedTypedOwnerSongAndConfig();
+    const db = getDb();
+    const [{ c: c0 }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+
+    const res = await app.request(`/songs/${songId}/pedals`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ pedal_catalog_id: pedalId, label: "Partial", config: { level: 5 } }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'config is missing parameters: "boost"' });
+
+    const [{ c: c1 }] = await db<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM song_pedal_configs`;
+    expect(c1).toBe(c0);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  findMissingParameterKeys,
   parseParameterDefinitions,
   validateConfigAgainstParameters,
   type ParameterDefinition,
@@ -207,5 +208,21 @@ describe("validateConfigAgainstParameters (R5)", () => {
   test("case j: one valid + one invalid entry -> 400, nothing stored", () => {
     const result = validateConfigAgainstParameters({ gain: 5, unknown: 1 }, defs);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("findMissingParameterKeys", () => {
+  const defs: ParameterDefinition[] = [
+    { key: "gain", label: "Gain", type: "knob", min: 0, max: 10 },
+    { key: "boost", label: "Boost", type: "switch" },
+    { key: "mode", label: "Mode", type: "selector", options: ["A", "B"] },
+  ];
+
+  test("only the keys absent from the config, in definition order (R6)", () => {
+    expect(findMissingParameterKeys({ gain: 5, boost: true, mode: "A" }, defs)).toEqual([]);
+    expect(findMissingParameterKeys({ gain: 5 }, defs)).toEqual(["boost", "mode"]);
+    expect(findMissingParameterKeys({ mode: "B" }, defs)).toEqual(["gain", "boost"]);
+    expect(findMissingParameterKeys({}, defs)).toEqual(["gain", "boost", "mode"]);
+    expect(findMissingParameterKeys({}, [])).toEqual([]);
   });
 });

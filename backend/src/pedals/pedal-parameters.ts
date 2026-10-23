@@ -115,6 +115,14 @@ export function parseParameterDefinitions(raw: unknown): ParseResult<ParameterDe
   return { ok: true, value: out };
 }
 
+/** Keys defined in `defs` that are absent from `config`, in definition order. */
+export function findMissingParameterKeys(
+  config: Record<string, unknown>,
+  defs: ParameterDefinition[],
+): string[] {
+  return defs.filter((d) => !Object.hasOwn(config, d.key)).map((d) => d.key);
+}
+
 export function validateConfigAgainstParameters(
   config: Record<string, unknown>,
   defs: ParameterDefinition[],

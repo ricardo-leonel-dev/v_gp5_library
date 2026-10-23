@@ -27,6 +27,7 @@ import {
   createSongPedalConfig,
   listSongPedalConfigs,
   deleteSongPedalConfig,
+  updateSongPedalConfig,
   SongPedalConfigError,
 } from "./song-pedal-configs/song-pedal-config-service";
 
@@ -256,6 +257,30 @@ protectedRouter.delete("/songs/:id/pedals/:configId", async (c) => {
   try {
     await deleteSongPedalConfig(c.get("userId"), c.req.param("id"), c.req.param("configId"));
     return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof SongPedalConfigError) return c.json({ error: err.message }, err.status);
+    throw err;
+  }
+});
+
+protectedRouter.patch("/songs/:id/pedals/:configId", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  try {
+    const config = await updateSongPedalConfig(
+      c.get("userId"),
+      c.req.param("id"),
+      c.req.param("configId"),
+      { config: (body as { config?: unknown }).config },
+    );
+    return c.json(config, 200);
   } catch (err) {
     if (err instanceof SongPedalConfigError) return c.json({ error: err.message }, err.status);
     throw err;
