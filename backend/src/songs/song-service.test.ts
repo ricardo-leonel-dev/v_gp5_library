@@ -588,6 +588,58 @@ describe("song-service", () => {
       const bList = await listSongs(userBId);
       expect(bList.map((s) => s.name)).toEqual(["B1"]);
     });
+
+    test("a song with a cover reports hasCover true, a song without one reports false (F28)", async () => {
+      const { userId } = await makeUser("cover-list");
+      const withCover = await seedSong(userId, {
+        name: "Covered",
+        cover: [file("cover.jpg", [1, 2, 3])],
+      });
+      const withoutCover = await seedSong(userId, { name: "Uncovered" });
+
+      const list = await listSongs(userId);
+      const covered = list.find((s) => s.id === withCover.songId)!;
+      const uncovered = list.find((s) => s.id === withoutCover.songId)!;
+
+      expect(covered.hasCover).toBe(true);
+      expect(uncovered.hasCover).toBe(false);
+    });
+
+    test("a soft-deleted cover row reports hasCover false (F28)", async () => {
+      const { userId } = await makeUser("cover-deleted");
+      const { songId } = await seedSong(userId, {
+        name: "Soft deleted cover",
+        cover: [file("cover.jpg", [4, 5, 6])],
+      });
+
+      const db = getDb();
+      await db`UPDATE song_files SET deleted_at = NOW() WHERE song_id = ${songId} AND kind = 'cover'`;
+
+      const list = await listSongs(userId);
+      expect(list.find((s) => s.id === songId)!.hasCover).toBe(false);
+    });
+
+    test("another user's cover does not mark this user's song as covered (F28)", async () => {
+      const { userId: owner } = await makeUser("cover-owner");
+      const { userId: other } = await makeUser("cover-other");
+      const ownerSong = await seedSong(owner, { name: "Owner song" });
+      await seedSong(other, { name: "Other song", cover: [file("cover.jpg", [7, 8, 9])] });
+
+      const ownerList = await listSongs(owner);
+      expect(ownerList.map((s) => s.id)).toEqual([ownerSong.songId]);
+      expect(ownerList.find((s) => s.id === ownerSong.songId)!.hasCover).toBe(false);
+    });
+
+    test("getSongById returns no hasCover key (F28)", async () => {
+      const { userId } = await makeUser("cover-single");
+      const { songId } = await seedSong(userId, {
+        name: "Single song",
+        cover: [file("cover.jpg", [10, 11, 12])],
+      });
+
+      const song = await getSongById(userId, songId);
+      expect("hasCover" in song).toBe(false);
+    });
   });
 
   describe("getSongById", () => {

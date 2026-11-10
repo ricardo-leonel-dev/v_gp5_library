@@ -68,6 +68,13 @@ export interface SongWithFilesDto extends SongDto {
   files: SongFileDto[];
 }
 
+// F28: list items carry a cover indicator so the client only requests
+// covers that exist. It mirrors the row GET /songs/:id/files/cover serves:
+// kind = 'cover', sort_order = 0, not soft-deleted.
+export interface SongListItemDto extends SongDto {
+  hasCover: boolean;
+}
+
 export { UUID_RE, isUuid } from "../db/uuid";
 
 export const MAX_EXTRA_CONFIG_BYTES = 32768; // 32 KiB — R3
@@ -371,7 +378,7 @@ export async function createSong(
   return { ...toSongDto(result.songRow as SongRow, presets), files };
 }
 
-export async function listSongs(userId: string): Promise<SongDto[]> {
+export async function listSongs(userId: string): Promise<SongListItemDto[]> {
   const db: SQL = getDb();
   const rows = await db<SongRow[]>`SELECT id, name, artist, extra_config, created_at, updated_at
     FROM songs
@@ -393,7 +400,18 @@ export async function listSongs(userId: string): Promise<SongDto[]> {
     presetsBySong.set(row.song_id, list);
   }
 
-  return rows.map((r) => toSongDto(r, presetsBySong.get(r.id) ?? []));
+  const coverRows = await db<{ song_id: string }[]>`
+    SELECT sf.song_id
+    FROM song_files sf JOIN songs s ON s.id = sf.song_id
+    WHERE s.user_id = ${userId} AND s.deleted_at IS NULL
+      AND sf.kind = 'cover' AND sf.sort_order = 0 AND sf.deleted_at IS NULL`;
+
+  const coverSongIds = new Set(coverRows.map((r) => r.song_id));
+
+  return rows.map((r) => ({
+    ...toSongDto(r, presetsBySong.get(r.id) ?? []),
+    hasCover: coverSongIds.has(r.id),
+  }));
 }
 
 export async function getSongById(

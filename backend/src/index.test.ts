@@ -88,6 +88,53 @@ describe("GET /songs/:id/files/:kind auth (R10)", () => {
   });
 });
 
+describe("GET /songs hasCover (F28)", () => {
+  test("list items flag cover presence and agree with GET /songs/:id/files/cover", async () => {
+    const db = getDb();
+    const email = `cover-list-e2e-${crypto.randomUUID()}@example.com`;
+    const [user] = await db<{ id: string }[]>`
+      INSERT INTO users (email, password_hash, plan) VALUES (${email}, 'x', 'premium') RETURNING id
+    `;
+    const token = await issueToken(user.id, "premium");
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const coveredFd = new FormData();
+    coveredFd.append("name", "Covered song");
+    coveredFd.append("preset", presetPart());
+    coveredFd.append("cover", new File([new Uint8Array([1, 2, 3])], "cover.jpg", { type: "image/jpeg" }));
+    const coveredRes = await app.request("/songs", {
+      method: "POST",
+      headers: auth,
+      body: coveredFd,
+    });
+    expect(coveredRes.status).toBe(201);
+    const coveredSong = (await coveredRes.json()) as { id: string };
+
+    const plainFd = new FormData();
+    plainFd.append("name", "Plain song");
+    plainFd.append("preset", presetPart());
+    const plainRes = await app.request("/songs", {
+      method: "POST",
+      headers: auth,
+      body: plainFd,
+    });
+    expect(plainRes.status).toBe(201);
+    const plainSong = (await plainRes.json()) as { id: string };
+
+    const listRes = await app.request("/songs", { headers: auth });
+    expect(listRes.status).toBe(200);
+    const items = (await listRes.json()) as Array<{ id: string; hasCover: boolean }>;
+    expect(items.every((s) => typeof s.hasCover === "boolean")).toBe(true);
+    expect(items.find((s) => s.id === coveredSong.id)!.hasCover).toBe(true);
+    expect(items.find((s) => s.id === plainSong.id)!.hasCover).toBe(false);
+
+    const coveredFile = await app.request(`/songs/${coveredSong.id}/files/cover`, { headers: auth });
+    expect(coveredFile.status).toBe(200);
+    const plainFile = await app.request(`/songs/${plainSong.id}/files/cover`, { headers: auth });
+    expect(plainFile.status).toBe(404);
+  });
+});
+
 describe("/pedals auth (R5)", () => {
   test("POST /pedals without bearer -> 401", async () => {
     const fd = new FormData();
